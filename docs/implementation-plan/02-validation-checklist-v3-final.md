@@ -1,0 +1,137 @@
+# Validation Checklist v3 (FINAL): TensorZero + FastMCP
+
+> **Changes vs v2**: Added F5.5b for McpError (timeout), adjusted F5.7 for
+> description None, added F0.6 to verify pytest config, added F3.8
+> for optional parallel execution.
+
+Each item is binary (✅ passes / ❌ does not pass). Complete all items in
+a phase before moving on to the next.
+
+---
+
+## Phase 0: Infrastructure
+
+- [ ] **P0.1** — T0 Gateway starts with Docker Compose (`docker compose up`)
+- [ ] **P0.2** — Basic inference without tools works against T0 (`t0.inference(function_name=..., input={...})`)
+- [ ] **P0.3** — Test FastMCP server is instantiated with at least 2 tools using `@mcp.tool`
+- [ ] **P0.4** — FastMCP `Client(mcp_instance)` in-memory connects and `list_tools()` returns the tools
+- [ ] **P0.5** — `call_tool()` in-memory executes a tool and returns `CallToolResult` with `.data`
+- [ ] **P0.6** — pytest configured with `asyncio_mode = "auto"` in `pyproject.toml`
+
+### Success criterion
+You can run inference against T0 AND execute FastMCP tools independently.
+Both systems work separately.
+
+---
+
+## Phase 1: Tools Adapter (FastMCP → T0)
+
+- [ ] **F1.1** — `list_tools()` returns objects with valid `.name`, `.description`, `.inputSchema`
+- [ ] **F1.2** — The adapter converts `list[mcp.types.Tool]` → `list[dict]` with keys `name`, `description`, `parameters`
+- [ ] **F1.3** — T0 accepts the converted `additional_tools` without error (successful inference with tools available)
+- [ ] **F1.4** — The LLM "sees" the tools: with `tool_choice="required"`, it always returns a `ToolCall`
+- [ ] **F1.5** — Tools with Pydantic models as parameters generate schemas accepted by T0
+- [ ] **F1.6** — Tools with `description=None` are converted with `""` without error in T0
+
+### Success criterion
+T0 receives the FastMCP tools and the LLM can invoke them.
+
+---
+
+## Phase 2: Results Adapter (FastMCP → T0)
+
+- [ ] **F2.1** — `call_tool(name, arguments)` executes correctly with the `arguments` from T0's ToolCall
+- [ ] **F2.2** — `serialize_tool_result()` converts `.data: str` → `str` without modification
+- [ ] **F2.3** — `serialize_tool_result()` converts `.data: dict` → valid `json.dumps()`
+- [ ] **F2.4** — `serialize_tool_result()` converts `.data: None` → fallback to `.content[*].text`
+- [ ] **F2.5** — `serialize_tool_result()` handles complex types (datetime, UUID) via `default=str`
+- [ ] **F2.6** — `serialize_tool_result()` handles `.is_error=True` (result with `raise_on_error=False`)
+- [ ] **F2.7** — The constructed `ToolResult` is accepted by T0 in the next inference turn
+- [ ] **F2.8** — The LLM produces a coherent response that incorporates the tool result
+
+### Success criterion
+A complete flow: T0 requests tool → FastMCP executes → result returns to T0 →
+LLM responds to the user.
+
+---
+
+## Phase 3: Agent Loop
+
+- [ ] **F3.1** — Single-turn: user → LLM → 1 tool call → 1 result → final response
+- [ ] **F3.2** — Multi-turn: user → LLM → tool → result → LLM → tool → result → final response
+- [ ] **F3.3** — `episode_id` is captured from the first response and propagated to all subsequent turns
+- [ ] **F3.4** — The loop terminates correctly when the LLM responds with only `Text` (no tool calls)
+- [ ] **F3.5** — Parallel tool calls: N tool calls in one response → N results in a SINGLE `Message(role="user")`
+- [ ] **F3.6** — The message history is built correctly (user → assistant → user(tools) → ...)
+- [ ] **F3.7** — Continuous conversation: after a final response, the user can submit another query
+- [ ] **F3.8** — (Optional) Parallel tool execution with `asyncio.gather` does not break the flow
+
+### Success criterion
+A conversational agent that can use tools across multiple turns,
+maintaining the episode context.
+
+---
+
+## Phase 4: Multi-Server
+
+- [ ] **F4.1** — Option A (mount): `main.mount(server_a, namespace="a")` + `main.mount(server_b, namespace="b")` works
+- [ ] **F4.2** — The combined tools have a namespace prefix (`a_tool1`, `b_tool2`)
+- [ ] **F4.3** — T0 receives all combined tools and the LLM can invoke any of them
+- [ ] **F4.4** — ToolCalls use the namespaced name and FastMCP routes them to the correct server
+- [ ] **F4.5** — Option B (Client config dict): `Client({"mcpServers": {...}})` discovers tools from N servers
+- [ ] **F4.6** — There are no name collisions between tools from different servers
+
+### Success criterion
+The agent can use tools from multiple sources in the same conversation.
+
+### Note
+FastMCP natively resolves namespacing and routing. Phase 4 is primarily
+validation that the native behavior works end-to-end with T0.
+
+---
+
+## Phase 5: Robustness and Error Handling
+
+- [ ] **F5.1** — `ToolError` from FastMCP is caught and sent as a ToolResult with an error message to the LLM
+- [ ] **F5.2** — `McpError` from mcp (timeout, protocol) is caught and sent as a ToolResult with error to the LLM
+- [ ] **F5.3** — `block.arguments is None` (invalid JSON from the LLM) is detected and reported as an error to the LLM
+- [ ] **F5.4** — Timeout in `call_tool(..., timeout=N)` generates `McpError` that is caught correctly
+- [ ] **F5.5** — The LLM can retry a tool after receiving an error
+- [ ] **F5.6** — `ValidationError` from FastMCP (invalid schema parameters) is handled without a crash
+- [ ] **F5.7** — Maximum turn limit for the loop (prevents infinite loop if the LLM always requests tools)
+- [ ] **F5.8** — Tools with empty or `None` `description` do not cause an error in T0
+
+### Success criterion
+The agent does not crash under adverse conditions and communicates errors to the LLM
+so it can recover.
+
+---
+
+## Phase 6: Observability and Feedback
+
+- [ ] **F6.1** — `inference_id` and `episode_id` are captured from each T0 response
+- [ ] **F6.2** — Boolean feedback can be sent to the `episode_id` (metric defined in tensorzero.toml)
+- [ ] **F6.3** — Float feedback can be sent to the `inference_id`
+- [ ] **F6.4** — A `comment` can be sent as feedback on an inference
+- [ ] **F6.5** — A `demonstration` can be sent as feedback (ideal output)
+- [ ] **F6.6** — Dynamic tools are recorded in ClickHouse (`dynamic_tools` column)
+- [ ] **F6.7** — The agent loop log shows: tool calls, results, errors, timestamps
+
+### Success criterion
+You can trace a complete conversation in ClickHouse and send feedback
+for future optimization.
+
+---
+
+## Progress summary
+
+| Phase | Items | Completed | Status |
+|---|---|---|---|
+| 0 — Infrastructure | 6 | _ / 6 | ⬜ |
+| 1 — Tools Adapter | 6 | _ / 6 | ⬜ |
+| 2 — Results Adapter | 8 | _ / 8 | ⬜ |
+| 3 — Agent Loop | 8 | _ / 8 | ⬜ |
+| 4 — Multi-Server | 6 | _ / 6 | ⬜ |
+| 5 — Robustness | 8 | _ / 8 | ⬜ |
+| 6 — Observability | 7 | _ / 7 | ⬜ |
+| **Total** | **49** | **_ / 49** | ⬜ |

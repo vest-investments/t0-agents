@@ -38,12 +38,13 @@ Thumbs.db
 # Environment
 .env
 .env.*
+!.env.example
 
 # Claude Code
 .claude/
 
-# Design docs (internal)
-01-*.md
-02-*.md
-03-*.md
-04-*.md
+# Loose design-doc drafts at repo root only (organized docs live under docs/).
+/01-*.md
+/02-*.md
+/03-*.md
+/04-*.md
