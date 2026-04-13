@@ -12,6 +12,7 @@ The Pythonic agentic framework for [TensorZero](https://www.tensorzero.com/).
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/) (package manager)
+- Docker + Docker Compose (only for the TensorZero gateway used by integration tests / examples)
 
 ## Getting started
 
@@ -23,18 +24,40 @@ cd t0-agents
 # Install dependencies (uv creates the venv automatically)
 uv sync
 
-# Run checks
-uv run pytest
+# Run offline checks (no gateway needed)
+uv run pytest -m "not integration"
 uv run ruff check src/
 uv run mypy src/
+```
+
+### Running the integration tests / examples
+
+The integration suite and examples talk to a real TensorZero gateway backed by ClickHouse.
+
+```bash
+# 1. Provide a Groq API key (or change the provider in config/tensorzero.toml)
+cp .env.example .env
+$EDITOR .env  # set GROQ_API_KEY=gsk_...
+
+# 2. Boot the gateway + ClickHouse
+docker compose up -d
+
+# 3. Run the integration-marked tests
+uv run pytest -m integration
+
+# 4. When you're done
+docker compose down
 ```
 
 ## Project structure
 
 ```
-src/t0_agents/
-├── core/           # Shared types and exceptions
-└── mcp/            # TensorZero <-> FastMCP bridge
-tests/
-examples/
+src/t0_agents/        # Library: TensorZero <-> FastMCP bridge
+├── core/             # Shared types and exceptions
+└── mcp/              # Adapter + agent loop
+tests/                # Offline + integration tests
+examples/             # End-to-end usage samples
+config/               # tensorzero.toml mounted into the gateway container
+docs/                 # Implementation plan + per-phase guides and logs
+docker-compose.yml    # Local gateway + ClickHouse
 ```
