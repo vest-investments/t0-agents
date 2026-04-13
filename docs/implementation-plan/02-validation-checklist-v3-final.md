@@ -57,14 +57,14 @@ LLM responds to the user.
 
 ## Phase 3: Agent Loop
 
-- [ ] **F3.1** — Single-turn: user → LLM → 1 tool call → 1 result → final response
-- [ ] **F3.2** — Multi-turn: user → LLM → tool → result → LLM → tool → result → final response
-- [ ] **F3.3** — `episode_id` is captured from the first response and propagated to all subsequent turns
-- [ ] **F3.4** — The loop terminates correctly when the LLM responds with only `Text` (no tool calls)
-- [ ] **F3.5** — Parallel tool calls: N tool calls in one response → N results in a SINGLE `Message(role="user")`
-- [ ] **F3.6** — The message history is built correctly (user → assistant → user(tools) → ...)
-- [ ] **F3.7** — Continuous conversation: after a final response, the user can submit another query
-- [ ] **F3.8** — (Optional) Parallel tool execution with `asyncio.gather` does not break the flow
+- [x] **F3.1** — Single-turn: user → LLM → 1 tool call → 1 result → final response
+- [x] **F3.2** — Multi-turn: user → LLM → tool → result → LLM → tool → result → final response
+- [x] **F3.3** — `episode_id` is captured from the first response and propagated to all subsequent turns
+- [x] **F3.4** — The loop terminates correctly when the LLM responds with only `Text` (no tool calls)
+- [x] **F3.5** — Parallel tool calls: N tool calls in one response → N results in a SINGLE `Message(role="user")`
+- [x] **F3.6** — The message history is built correctly (user → assistant → user(tools) → ...)
+- [x] **F3.7** — Continuous conversation: after a final response, the user can submit another query
+- [x] **F3.8** — (Optional) Parallel tool execution with `asyncio.gather` does not break the flow
 
 ### Success criterion
 A conversational agent that can use tools across multiple turns,
@@ -130,7 +130,7 @@ for future optimization.
 | 0 — Infrastructure | 6 | _ / 6 | ⬜ |
 | 1 — Tools Adapter | 6 | _ / 6 | ⬜ |
 | 2 — Results Adapter | 8 | 8 / 8 | ✅ |
-| 3 — Agent Loop | 8 | _ / 8 | ⬜ |
+| 3 — Agent Loop | 8 | 8 / 8 | ✅ |
 | 4 — Multi-Server | 6 | _ / 6 | ⬜ |
 | 5 — Robustness | 8 | _ / 8 | ⬜ |
 | 6 — Observability | 7 | _ / 7 | ⬜ |
