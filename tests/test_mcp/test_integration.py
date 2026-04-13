@@ -6,7 +6,7 @@ from collections.abc import Awaitable
 from typing import Any, cast
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 from tensorzero.types import ChatInferenceResponse
 
@@ -404,3 +404,140 @@ async def test_run_agent_parallel_tools_flag_works(mcp_client: Client[Any]) -> N
         f"final answer should mention the sum 10: {result.response!r}"
     )
     assert result.turns >= 2
+
+
+# --- Phase 4: multi-server composition -------------------------------------
+
+
+def _build_composed_server() -> FastMCP[None]:
+    """Compose two in-memory FastMCP servers under namespaces ``a`` and ``b``.
+
+    Private helper local to the integration module (matching the one in
+    ``tests/test_mcp/test_multi_server.py``) so Phase 4 integration fixtures
+    don't leak into shared test utilities. The tool surface is intentionally
+    minimal — one arithmetic tool per server — because these tests only need
+    to prove that T0 + the agent loop handle the namespaced names end-to-end.
+    """
+    server_a: FastMCP[None] = FastMCP("ServerA")
+
+    @server_a.tool
+    def add(a: int, b: int) -> int:
+        """Add two numbers (from server A)."""
+        return a + b
+
+    server_b: FastMCP[None] = FastMCP("ServerB")
+
+    @server_b.tool
+    def subtract(a: int, b: int) -> int:
+        """Subtract two numbers (from server B)."""
+        return a - b
+
+    main: FastMCP[None] = FastMCP("MultiMain")
+    main.mount(server_a, namespace="a")
+    main.mount(server_b, namespace="b")
+    return main
+
+
+async def test_run_agent_mounted_servers_forced_add() -> None:
+    """F4.3 + F4.4 deterministic #1: force-call ``a_add`` via tool_choice.
+
+    Proves end-to-end that (a) T0 accepts the composed namespaced
+    ``additional_tools`` (F4.3), and (b) the LLM emits a ``ToolCall`` with the
+    **namespaced name** which flows through ``Client.call_tool`` and FastMCP's
+    Namespace transform to reach server A's underlying ``add`` tool (F4.4).
+
+    We use a directed tool_choice (the Phase 1 precedent for Groq
+    determinism) rather than natural selection. The natural-selection
+    variant lives in ``test_run_agent_mounted_servers_natural_selection``.
+    """
+    main = _build_composed_server()
+    mcp_client: Client[Any] = Client(main)
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Please use the a_add tool to compute 2 + 3.",
+                "agent",
+                dryrun=True,
+            )
+
+    assert "5" in result.response, (
+        f"final answer should mention the sum 5 from a_add: {result.response!r}"
+    )
+    assert result.turns >= 2, (
+        f"expected at least 2 turns (tool + final), got {result.turns}"
+    )
+
+
+async def test_run_agent_mounted_servers_forced_subtract() -> None:
+    """F4.3 + F4.4 deterministic #2: route through the ``b_`` namespace.
+
+    Mirror of ``test_run_agent_mounted_servers_forced_add`` but hits server
+    B's ``subtract`` via the ``b_subtract`` namespaced name. Together the two
+    tests pin routing on **both** namespaces.
+    """
+    main = _build_composed_server()
+    mcp_client: Client[Any] = Client(main)
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Please use the b_subtract tool to compute 7 - 4.",
+                "agent",
+                dryrun=True,
+            )
+
+    assert "3" in result.response, (
+        f"final answer should mention the difference 3 from b_subtract: "
+        f"{result.response!r}"
+    )
+    assert result.turns >= 2
+
+
+async def test_run_agent_mounted_servers_natural_selection() -> None:
+    """F4.3 + F4.4 realistic: a single prompt that names both namespaces,
+    let the LLM choose and chain the calls.
+
+    Matches M4.4's spirit ("The LLM can invoke tools from both servers in the
+    same conversation") more literally than the forced-choice flows. The
+    prompt is worded to explicitly name ``a_add`` and ``b_subtract`` so the
+    model has a clear path — Groq's ``gpt-oss-20b`` can still flake on
+    chaining, so if the model only picks one tool we still consider
+    routing validated by the two forced-choice tests above. This test
+    therefore asserts a **loose** invariant: either the final answer
+    mentions both computed values (5 and 3), or the run produced enough
+    turns for at least one namespaced tool to have executed (`result.turns >= 2`).
+    """
+    main = _build_composed_server()
+    mcp_client: Client[Any] = Client(main)
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                (
+                    "First use the a_add tool to compute 2 + 3, then use the "
+                    "b_subtract tool to compute 7 - 4. Report both results."
+                ),
+                "agent",
+                dryrun=True,
+                max_turns=6,
+            )
+
+    # At least one namespaced tool was invoked (turn >= 2 proves a tool turn
+    # happened and a follow-up produced the final text).
+    assert result.turns >= 2, (
+        f"expected natural selection to invoke at least one namespaced tool "
+        f"(turns>=2), got {result.turns}; response={result.response!r}"
+    )
+    # The strong form: both numbers show up. If the LLM flaked on chaining,
+    # this assertion fails loud so we can document the deviation (Phase 1
+    # precedent for Groq flakiness).
+    assert "5" in result.response and "3" in result.response, (
+        "natural-selection path did not surface both tools' results — "
+        "F4.4 is still pinned by the two forced-choice tests above, but "
+        "please capture this in the implementation log: "
+        f"turns={result.turns}, response={result.response!r}"
+    )
