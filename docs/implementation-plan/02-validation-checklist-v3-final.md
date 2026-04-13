@@ -40,14 +40,14 @@ T0 receives the FastMCP tools and the LLM can invoke them.
 
 ## Phase 2: Results Adapter (FastMCP → T0)
 
-- [ ] **F2.1** — `call_tool(name, arguments)` executes correctly with the `arguments` from T0's ToolCall
-- [ ] **F2.2** — `serialize_tool_result()` converts `.data: str` → `str` without modification
-- [ ] **F2.3** — `serialize_tool_result()` converts `.data: dict` → valid `json.dumps()`
-- [ ] **F2.4** — `serialize_tool_result()` converts `.data: None` → fallback to `.content[*].text`
-- [ ] **F2.5** — `serialize_tool_result()` handles complex types (datetime, UUID) via `default=str`
-- [ ] **F2.6** — `serialize_tool_result()` handles `.is_error=True` (result with `raise_on_error=False`)
-- [ ] **F2.7** — The constructed `ToolResult` is accepted by T0 in the next inference turn
-- [ ] **F2.8** — The LLM produces a coherent response that incorporates the tool result
+- [x] **F2.1** — `call_tool(name, arguments)` executes correctly with the `arguments` from T0's ToolCall
+- [x] **F2.2** — `serialize_tool_result()` converts `.data: str` → `str` without modification
+- [x] **F2.3** — `serialize_tool_result()` converts `.data: dict` → valid `json.dumps()`
+- [x] **F2.4** — `serialize_tool_result()` converts `.data: None` → fallback to `.content[*].text`
+- [x] **F2.5** — `serialize_tool_result()` handles complex types (datetime, UUID) via `default=str`
+- [x] **F2.6** — `serialize_tool_result()` handles `.is_error=True` (result with `raise_on_error=False`)
+- [x] **F2.7** — The constructed `ToolResult` is accepted by T0 in the next inference turn
+- [x] **F2.8** — The LLM produces a coherent response that incorporates the tool result
 
 ### Success criterion
 A complete flow: T0 requests tool → FastMCP executes → result returns to T0 →
@@ -129,7 +129,7 @@ for future optimization.
 |---|---|---|---|
 | 0 — Infrastructure | 6 | _ / 6 | ⬜ |
 | 1 — Tools Adapter | 6 | _ / 6 | ⬜ |
-| 2 — Results Adapter | 8 | _ / 8 | ⬜ |
+| 2 — Results Adapter | 8 | 8 / 8 | ✅ |
 | 3 — Agent Loop | 8 | _ / 8 | ⬜ |
 | 4 — Multi-Server | 6 | _ / 6 | ⬜ |
 | 5 — Robustness | 8 | _ / 8 | ⬜ |
