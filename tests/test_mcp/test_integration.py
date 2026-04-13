@@ -10,6 +10,7 @@ from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 from tensorzero.types import ChatInferenceResponse
 
+from t0_agents import run_agent
 from t0_agents.mcp import build_tool_result, convert_tools
 from tests.server import mcp
 
@@ -278,3 +279,128 @@ async def test_search_pydantic_roundtrip(mcp_client: Client[Any]) -> None:
             "second turn returned empty content — T0 or the LLM rejected the "
             f"ToolResult. first_turn content: {first_turn.content!r}"
         )
+
+
+# --- Phase 3: agent loop end-to-end ----------------------------------------
+
+
+async def test_run_agent_single_turn_add(mcp_client: Client[Any]) -> None:
+    """F3.1 + F3.2 + F3.3 + F3.4: run_agent end-to-end with the ``add`` tool.
+
+    F3.1 (single-turn user→LLM→tool→result→final) is exercised here. Since the
+    add tool requires one execution cycle, the loop naturally runs ``>= 2``
+    turns (one to call ``add``, one to deliver the final answer), which also
+    satisfies F3.2 (multi-turn). F3.3 (episode_id propagation) is anchored by
+    asserting the result has a non-empty episode_id; F3.4 (loop terminates on
+    text-only response) is implicit in the loop completing.
+
+    ``dryrun=True`` keeps ClickHouse clean (Phase 1/2 convention).
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Please use the add tool to compute 2 + 3.",
+                "agent",
+                dryrun=True,
+            )
+
+    assert "5" in result.response, (
+        f"final answer should mention the sum 5: {result.response!r}"
+    )
+    assert result.episode_id, "episode_id was not captured from the response"
+    assert result.inference_ids, "inference_ids should not be empty"
+    assert result.turns >= 2, (
+        f"expected at least 2 turns (tool + final), got {result.turns}"
+    )
+    # F3.3: each turn captures one inference_id, in order.
+    assert len(result.inference_ids) == result.turns
+
+
+async def test_run_agent_no_tools_terminates_immediately(
+    mcp_client: Client[Any],
+) -> None:
+    """F3.4: when the LLM has no tool calls, the loop terminates after 1 turn.
+
+    A pure greeting prompt should never trigger a tool call (none of our test
+    tools — add, greet(name), search, echo_no_docs — match a bare "say hi"
+    request). The loop should return on the first inference's text-only
+    response.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Reply with the single word: pong",
+                "agent",
+                dryrun=True,
+            )
+
+    assert result.turns == 1, f"expected exactly 1 turn, got {result.turns}"
+    assert result.response, "expected non-empty text response"
+
+
+async def test_run_agent_continuous_conversation(mcp_client: Client[Any]) -> None:
+    """F3.7: after a final response the user can submit another query.
+
+    Two ``run_agent`` calls back-to-back, the second carrying ``episode_id``
+    from the first. T0 ties them as one episode (visible in ClickHouse as a
+    shared episode_id even with dryrun=True the response.episode_id remains
+    consistent). The LLM does not see the prior conversation's messages — that
+    is a design choice (run_agent is single-conversation; episode_id is
+    analytics-only at this layer) — but the API must still accept the
+    second call without error.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            first = await run_agent(
+                t0,
+                mcp_client,
+                "Reply with the single word: hello",
+                "agent",
+                dryrun=True,
+            )
+            second = await run_agent(
+                t0,
+                mcp_client,
+                "Reply with the single word: world",
+                "agent",
+                episode_id=first.episode_id,
+                dryrun=True,
+            )
+
+    assert first.episode_id, "first call should have an episode_id"
+    assert second.episode_id == first.episode_id, (
+        "T0 should keep the episode_id when we forward it in the second call: "
+        f"first={first.episode_id!r}, second={second.episode_id!r}"
+    )
+    assert second.response, "second call must produce a response"
+
+
+async def test_run_agent_parallel_tools_flag_works(mcp_client: Client[Any]) -> None:
+    """F3.8: ``parallel_tools=True`` does not break the flow.
+
+    Groq's ``gpt-oss-20b`` does not generally emit multiple tool calls in a
+    single response (Groq is not on T0's parallel_tool_calls allowlist), so
+    this test exercises the parallel path with a single-tool flow. A passing
+    run proves that ``execute_tool_calls_parallel`` integrates correctly with
+    ``run_agent`` even when there is only one tool to run — the optional
+    parallel mode does not regress the sequential happy path.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Please use the add tool to compute 4 + 6.",
+                "agent",
+                dryrun=True,
+                parallel_tools=True,
+            )
+
+    assert "10" in result.response, (
+        f"final answer should mention the sum 10: {result.response!r}"
+    )
+    assert result.turns >= 2
