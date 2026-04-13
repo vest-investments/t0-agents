@@ -1,0 +1,21 @@
+# TensorZero Gateway configuration for the basic agent example.
+# See: https://www.tensorzero.com/docs/gateway/configuration
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+[models.gpt_4o_mini]
+routing = ["gpt_4o_mini"]
+
+[models.gpt_4o_mini.providers.openai]
+type = "openai"
+model_name = "gpt-4o-mini"
+
+[functions.basic_agent]
+type = "chat"
+system_schema = "../../schemas/basic_agent/system.json"
+
+[[functions.basic_agent.variants]]
+name = "default"
+type = "chat_completion"
+model = "gpt_4o_mini"
