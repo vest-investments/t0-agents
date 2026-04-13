@@ -92,14 +92,14 @@ validation that the native behavior works end-to-end with T0.
 
 ## Phase 5: Robustness and Error Handling
 
-- [ ] **F5.1** — `ToolError` from FastMCP is caught and sent as a ToolResult with an error message to the LLM
-- [ ] **F5.2** — `McpError` from mcp (timeout, protocol) is caught and sent as a ToolResult with error to the LLM
-- [ ] **F5.3** — `block.arguments is None` (invalid JSON from the LLM) is detected and reported as an error to the LLM
-- [ ] **F5.4** — Timeout in `call_tool(..., timeout=N)` generates `McpError` that is caught correctly
-- [ ] **F5.5** — The LLM can retry a tool after receiving an error
-- [ ] **F5.6** — `ValidationError` from FastMCP (invalid schema parameters) is handled without a crash
-- [ ] **F5.7** — Maximum turn limit for the loop (prevents infinite loop if the LLM always requests tools)
-- [ ] **F5.8** — Tools with empty or `None` `description` do not cause an error in T0
+- [x] **F5.1** — `ToolError` from FastMCP is caught and sent as a ToolResult with an error message to the LLM — pinned by `TestRobustness::test_f5_1_tool_error_caught` (unit) + `test_f5_1_run_agent_survives_failing_tool` (integration, via the `fail_always` fixture in `tests/server.py`)
+- [x] **F5.2** — `McpError` from mcp (timeout, protocol) is caught and sent as a ToolResult with error to the LLM — pinned by `TestRobustness::test_f5_2_mcp_error_caught` (unit, non-timeout code `-32603`)
+- [x] **F5.3** — `block.arguments is None` (invalid JSON from the LLM) is detected and reported as an error to the LLM — pinned by `TestRobustness::test_f5_3_invalid_json_detected` (unit)
+- [x] **F5.4** — Timeout in `call_tool(..., timeout=N)` generates `McpError` that is caught correctly — pinned by `TestRobustness::test_f5_4_timeout_surfaces_as_mcperror` (unit, code `-32000`) + `test_f5_4_tool_timeout_does_not_crash_run_agent` (integration, via the `slow_tool` fixture + `tool_timeout=0.5`)
+- [x] **F5.5** — The LLM can retry a tool after receiving an error — pinned by `TestRobustness::test_f5_5_loop_continues_after_error_and_llm_retries` (unit: strict 3-turn fail→retry→text scenario) + `test_f5_5_run_agent_allows_llm_retry` (integration, loose per interview decision)
+- [x] **F5.6** — `ValidationError` from FastMCP (invalid schema parameters) is handled without a crash — pinned by `TestRobustness::test_f5_6_validation_error_surfaces_through_tool_error` (unit: FastMCP pre-converts pydantic `ValidationError` to `ToolError` before the client, so our existing F5.1 catch handles it)
+- [x] **F5.7** — Maximum turn limit for the loop (prevents infinite loop if the LLM always requests tools) — pinned by `TestRobustness::test_f5_7_max_turns_raises_with_correct_limit` (unit) + `test_f5_7_max_turns_raises_against_live_gateway` (integration, `max_turns=1` forces the raise)
+- [x] **F5.8** — Tools with empty or `None` `description` do not cause an error in T0 — pinned by `TestConvertTools::test_convert_tools_none_description_on_synthesized_tool` + `::test_convert_tools_empty_description_stays_empty` (unit, adapter-level) + `TestRobustness::test_f5_8_none_description_round_trip` (unit, end-to-end through `run_agent`) + `test_f5_8_none_description_tool_is_usable_end_to_end` (integration, live call on `echo_no_docs`)
 
 ### Success criterion
 The agent does not crash under adverse conditions and communicates errors to the LLM
@@ -132,6 +132,6 @@ for future optimization.
 | 2 — Results Adapter | 8 | 8 / 8 | ✅ |
 | 3 — Agent Loop | 8 | 8 / 8 | ✅ |
 | 4 — Multi-Server | 6 | 6 / 6 | ✅ |
-| 5 — Robustness | 8 | _ / 8 | ⬜ |
+| 5 — Robustness | 8 | 8 / 8 | ✅ |
 | 6 — Observability | 7 | _ / 7 | ⬜ |
 | **Total** | **49** | **_ / 49** | ⬜ |
