@@ -47,12 +47,15 @@ Public API: `from t0_agents import run_agent`
 
 ## Test Infrastructure
 
-- `tests/server.py` — Shared FastMCP test server with `add(a, b)` and `greet(name)` tools
-- `tests/conftest.py` — `mcp_client` fixture (typed `Client[Any]`) connected to the shared test server
+- `tests/server.py` — Shared FastMCP test server. Tools: `add(a, b)`, `greet(name)`, `search(params: SearchParams)` (Pydantic-model parameter, for F1.5), `echo_no_docs(value)` (no docstring, anchors the `description=None` case for F1.6)
+- `tests/conftest.py` — `mcp_client` fixture (typed `Client[Any]`) returns a disconnected `Client(mcp)`; tests enter the context themselves with `async with mcp_client:`
 - `tests/test_infrastructure.py` — Phase 0 validations (P0.2/3/4/5). The P0.2 inference test is marked `@pytest.mark.integration`
+- `tests/test_mcp/test_adapter.py` — Phase 1 unit tests for the adapter (F1.1/F1.2/F1.6)
+- `tests/test_mcp/test_integration.py` — Phase 1 integration tests (F1.3/F1.4/F1.5); module-level `pytestmark = pytest.mark.integration`
 - Integration tests marked with `@pytest.mark.integration` require `docker compose up` to be running
 
 ## Design Documentation
 
 - `docs/implementation-plan/` — Versioned design docs: integration contract (`01-`), validation checklist (`02-`), meta-plan (`03-`), implementation reference patterns (`04-`). Consult these when implementing adapter or loop functions.
 - `docs/phase-0/` — Per-phase guides and the implementation log (`phase-0-implementation-log.md`) that records decisions and divergences from the plan.
+- `docs/phase-1/` — FastMCP and TensorZero side guides for the tools adapter, plus `phase-1-implementation-log.md` with the completed status of F1.1–F1.6 and a snippet for manually validating the adapter against a user's own MCP server.
