@@ -187,7 +187,9 @@ async def test_add_tool_roundtrip_final_text(mcp_client: Client[Any]) -> None:
             "second turn produced no Text blocks — the LLM did not respond "
             f"after the tool result. content={second_turn.content!r}"
         )
-        final_text = " ".join(b.text for b in text_blocks)
+        # Text.text is Optional[str] (template form); filter explicitly so
+        # mypy strict sees a concrete str and the join stays well-defined.
+        final_text = " ".join(b.text for b in text_blocks if b.text)
         assert "5" in final_text, (
             f"final answer does not mention the sum 5: {final_text!r}"
         )

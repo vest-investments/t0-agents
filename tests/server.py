@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastmcp import FastMCP
 from pydantic import BaseModel
 
@@ -28,7 +30,7 @@ class SearchParams(BaseModel):
 
 
 @mcp.tool
-def search(params: SearchParams) -> list[dict]:
+def search(params: SearchParams) -> list[dict[str, Any]]:
     """Search using a structured Pydantic parameter model."""
     return [{"query": params.query, "limit": params.limit}]
 
