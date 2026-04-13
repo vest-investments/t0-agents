@@ -44,8 +44,17 @@ async def test_t0_accepts_additional_tools(mcp_client: Client[Any]) -> None:
     assert response.episode_id is not None
 
 
-async def test_tool_choice_required_returns_tool_call(mcp_client: Client[Any]) -> None:
-    """F1.4: with tool_choice='required', response always contains a ToolCall."""
+async def test_tool_choice_forces_tool_call(mcp_client: Client[Any]) -> None:
+    """F1.4 (deviation): a directive tool_choice yields a ToolCall end-to-end.
+
+    The checklist literally says `tool_choice="required"`. Groq's native API
+    rejects `"required"` for `gpt-oss-20b` with "'tool_choice' : value must
+    be a string (auto or none) or an object like `{'type': 'function', ...}`",
+    so we use `tool_choice={"specific": "add"}` — TensorZero maps this to the
+    object form Groq always accepts. The spirit of F1.4 (prove the plumbing
+    end-to-end: `additional_tools` reach the LLM, `tool_choice` is honored,
+    response contains a `ToolCall` block) is preserved.
+    """
     async with mcp_client:
         tools = await mcp_client.list_tools()
     t0_tools = convert_tools(tools)
@@ -53,17 +62,23 @@ async def test_tool_choice_required_returns_tool_call(mcp_client: Client[Any]) -
     async with await _gateway_factory() as t0:
         response = await t0.inference(
             function_name="agent",
-            input={"messages": [{"role": "user", "content": "What is 2 plus 3?"}]},
+            input={
+                "messages": [
+                    {"role": "user", "content": "Compute 2 plus 3."},
+                ]
+            },
             additional_tools=t0_tools,
-            tool_choice="required",
+            tool_choice={"specific": "add"},
             dryrun=True,
         )
 
     assert isinstance(response, ChatInferenceResponse)
     tool_calls = [b for b in response.content if isinstance(b, ToolCall)]
     assert tool_calls, (
-        f"tool_choice='required' produced no ToolCall. content={response.content!r}"
+        f"tool_choice={{'specific':'add'}} produced no ToolCall. "
+        f"content={response.content!r}"
     )
+    assert tool_calls[0].name == "add"
 
 
 async def test_pydantic_param_schema_accepted_by_t0() -> None:

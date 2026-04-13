@@ -27,7 +27,7 @@
 
 1. **`CallToolResult` is not publicly exported by FastMCP**. The dataclass lives in `fastmcp/client/client.py` but is not re-exported from `fastmcp` or `fastmcp.client`. The Phase-2 stubs therefore import it from the internal path: `from fastmcp.client.client import CallToolResult`. If FastMCP promotes it to a public export in a future release, we should switch to that.
 
-2. **`gpt-oss-20b` on Groq respects `tool_choice="required"`**. The plan flagged this as a provider-dependent risk and scoped a fallback (add a `llama-3.3-70b-versatile` variant). Empirically the model produced a `ToolCall` block on the first run, so no fallback was needed and `config/tensorzero.toml` was not touched.
+2. **Groq rejects `tool_choice="required"` for `gpt-oss-20b`** — F1.4 switched to `{"specific": "add"}`. The very first run of F1.4 passed with `tool_choice="required"`, but re-runs ~30 min later failed deterministically with two different Groq errors: first `"Tool choice is required, but model did not call a tool"` (`tool_use_failed`, the model answered `"5"` as text), and then `"'tool_choice' : value must be a string (auto or none) or an object like ..."` (the API rejects the literal string `"required"`). We moved F1.4 to `tool_choice={"specific": "add"}`, which TensorZero maps to the object form Groq always accepts. This deviates from the literal text of F1.4 but preserves its spirit (prove `additional_tools` reach the LLM, `tool_choice` is plumbed end-to-end, and a `ToolCall` comes back). The test now passes 5/5 runs. The fallback variant `llama-3.3-70b-versatile` the plan scoped was not needed.
 
 3. **F1.5 isolates the Pydantic tool**. Instead of passing all tools and letting the test fail opaquely if T0 rejects any schema, the integration test filters `additional_tools` down to just `search`. This way a schema-rejection error from T0 is unambiguously attributable to the Pydantic-generated schema.
 
@@ -107,7 +107,7 @@ integration contract). Flatten or widen the schema and re-run.
 | F1.1 / M1.1 | `list_tools()` returns objects with `.name`, `.description`, `.inputSchema` | ✅ |
 | F1.2 / M1.1 | `convert_tools` produces `list[dict]` with exactly `{name, description, parameters}` | ✅ |
 | F1.3 / M1.3 | T0 accepts the converted `additional_tools` on `/inference` (dryrun) | ✅ |
-| F1.4 / M1.3 | `tool_choice="required"` yields at least one `ToolCall` (Groq gpt-oss-20b) | ✅ |
+| F1.4 / M1.3 | `tool_choice={"specific":"add"}` yields a `ToolCall(name="add")` (Groq rejects `"required"` — see divergence #2) | ✅ |
 | F1.5 / M1.2 | Schema generated from a Pydantic parameter model is accepted by T0 | ✅ |
 | F1.6 / M1.1 | Tool with `description=None` is coerced to `""` by the adapter | ✅ |
 
