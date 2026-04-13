@@ -19,9 +19,8 @@ Phase 3 gates covered here:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
@@ -38,6 +37,7 @@ from t0_agents.mcp import (
     has_tool_calls,
     run_agent,
 )
+from tests._fake_t0 import FakeChatResponse, FakeT0
 
 # --- Fixture builders -------------------------------------------------------
 
@@ -102,46 +102,6 @@ def _mcp_tool(name: str = "add") -> MCPTool:
 def _mcp_error(message: str = "boom", code: int = -32000) -> McpError:
     """Build an McpError. -32000 is the default tool-timeout code per FastMCP."""
     return McpError(ErrorData(code=code, message=message))
-
-
-@dataclass
-class FakeChatResponse:
-    """Duck-typed stand-in for ``tensorzero.types.ChatInferenceResponse``.
-
-    Only carries the three attributes ``run_agent`` reads (``content``,
-    ``episode_id``, ``inference_id``); everything else on the real dataclass
-    (``usage``, ``raw_usage``, etc.) is unused.
-    """
-
-    content: list[Any]
-    episode_id: UUID = field(default_factory=uuid4)
-    inference_id: UUID = field(default_factory=uuid4)
-
-
-class FakeT0:
-    """Records every ``inference()`` call and returns canned responses in order."""
-
-    def __init__(self, responses: list[FakeChatResponse]) -> None:
-        self._queue = list(responses)
-        self.calls: list[dict[str, Any]] = []
-
-    async def inference(self, **kwargs: Any) -> FakeChatResponse:
-        # Snapshot mutable args at call time. Real T0 serializes the request
-        # immediately; without snapshotting, ``run_agent`` mutating ``messages``
-        # later in the loop would retroactively change what tests see in
-        # ``self.calls[N]``.
-        captured: dict[str, Any] = dict(kwargs)
-        if isinstance(captured.get("input"), dict):
-            captured["input"] = dict(captured["input"])
-            if isinstance(captured["input"].get("messages"), list):
-                captured["input"]["messages"] = [
-                    dict(m) if isinstance(m, dict) else m
-                    for m in captured["input"]["messages"]
-                ]
-        self.calls.append(captured)
-        if not self._queue:
-            raise AssertionError("FakeT0 ran out of canned responses")
-        return self._queue.pop(0)
 
 
 class FakeMCPClient:
