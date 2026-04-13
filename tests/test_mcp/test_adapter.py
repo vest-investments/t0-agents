@@ -10,6 +10,7 @@ from uuid import UUID
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from mcp.types import ContentBlock, TextContent
+from mcp.types import Tool as MCPTool
 from tensorzero import ToolCall
 
 from t0_agents.mcp import build_tool_result, convert_tools, serialize_tool_result
@@ -70,6 +71,41 @@ class TestConvertTools:
         t0_tools = convert_tools(tools)
         echo_t0 = next(t for t in t0_tools if t["name"] == "echo_no_docs")
         assert echo_t0["description"] == ""
+
+    def test_convert_tools_none_description_on_synthesized_tool(self) -> None:
+        """F5.8 (unit): description=None on a synthesized ``MCPTool`` coerces
+        to ``""`` without depending on live FastMCP behavior.
+
+        Complements ``test_convert_tools_handles_none_description`` above by
+        pinning the adapter's ``or ""`` coercion directly — future FastMCP
+        versions could change how they surface missing docstrings, but the
+        adapter contract (never send ``None`` to T0) stays.
+        """
+        tool = MCPTool(
+            name="no_desc",
+            description=None,
+            inputSchema={"type": "object", "properties": {}},
+        )
+        t0_tools = convert_tools([tool])
+        assert len(t0_tools) == 1
+        assert t0_tools[0]["description"] == ""
+
+    def test_convert_tools_empty_description_stays_empty(self) -> None:
+        """F5.8 (unit): description="" stays "" after conversion.
+
+        The Phase 5 unified guide (§12) proposes using
+        ``"No description available."`` as a fallback for empty descriptions.
+        The integration contract §4.1 and our adapter both use ``""`` instead.
+        This test locks that decision so a future refactor cannot silently
+        inject a placeholder string the LLM would see.
+        """
+        tool = MCPTool(
+            name="blank_desc",
+            description="",
+            inputSchema={"type": "object", "properties": {}},
+        )
+        t0_tools = convert_tools([tool])
+        assert t0_tools[0]["description"] == ""
 
 
 def _text(value: str) -> TextContent:
