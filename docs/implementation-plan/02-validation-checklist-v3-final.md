@@ -74,12 +74,12 @@ maintaining the episode context.
 
 ## Phase 4: Multi-Server
 
-- [ ] **F4.1** — Option A (mount): `main.mount(server_a, namespace="a")` + `main.mount(server_b, namespace="b")` works
-- [ ] **F4.2** — The combined tools have a namespace prefix (`a_tool1`, `b_tool2`)
-- [ ] **F4.3** — T0 receives all combined tools and the LLM can invoke any of them
-- [ ] **F4.4** — ToolCalls use the namespaced name and FastMCP routes them to the correct server
-- [ ] **F4.5** — Option B (Client config dict): `Client({"mcpServers": {...}})` discovers tools from N servers
-- [ ] **F4.6** — There are no name collisions between tools from different servers
+- [x] **F4.1** — Option A (mount): `main.mount(server_a, namespace="a")` + `main.mount(server_b, namespace="b")` works — `TestMountedNamespacing::test_list_tools_returns_prefixed_names`
+- [x] **F4.2** — The combined tools have a namespace prefix (`a_tool1`, `b_tool2`) — same test + `test_convert_tools_passes_namespaced_names_through`
+- [x] **F4.3** — T0 receives all combined tools and the LLM can invoke any of them — `test_run_agent_mounted_servers_forced_add` / `_forced_subtract` / `_natural_selection`
+- [x] **F4.4** — ToolCalls use the namespaced name and FastMCP routes them to the correct server — integration tests above + `TestRunAgentOverComposedServer` unit tests + `test_call_tool_routes_to_correct_server_via_prefix`
+- [x] **F4.5** — Option B (Client config dict): `Client({"mcpServers": {...}})` discovers tools from N servers — **validated manually** via the snippet in `docs/phase-4/phase-4-implementation-log.md` (interview decision, Phase 1–3 precedent)
+- [x] **F4.6** — There are no name collisions between tools from different servers — `test_call_tool_routes_to_correct_server_via_prefix` (pins `a_greet` vs `b_greet`) + `test_run_agent_surfaces_colliding_greet_from_correct_namespace`
 
 ### Success criterion
 The agent can use tools from multiple sources in the same conversation.
@@ -131,7 +131,7 @@ for future optimization.
 | 1 — Tools Adapter | 6 | _ / 6 | ⬜ |
 | 2 — Results Adapter | 8 | 8 / 8 | ✅ |
 | 3 — Agent Loop | 8 | 8 / 8 | ✅ |
-| 4 — Multi-Server | 6 | _ / 6 | ⬜ |
+| 4 — Multi-Server | 6 | 6 / 6 | ✅ |
 | 5 — Robustness | 8 | _ / 8 | ⬜ |
 | 6 — Observability | 7 | _ / 7 | ⬜ |
 | **Total** | **49** | **_ / 49** | ⬜ |
