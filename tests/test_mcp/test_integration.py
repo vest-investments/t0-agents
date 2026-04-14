@@ -1,4 +1,4 @@
-"""Integration tests — require T0 Gateway running."""
+"""Integration tests -- require T0 Gateway running."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from fastmcp import Client, FastMCP
+from fastmcp.client.elicitation import ElicitResult
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
@@ -826,6 +827,93 @@ async def test_none_description_tool_is_usable_end_to_end(
     # T0 accepted the empty-description tool AND the LLM invoked it.
     assert result.turns >= 2
     assert result.response
+
+
+# --- Elicitation integration (Phase 1) --------------------------------------
+
+
+async def test_run_agent_elicitation_approve() -> None:
+    """P1.15 -- Elicitation-enabled tool through the full agent loop (approve).
+
+    A Client with an auto-approve handler is passed to ``run_agent``.
+    The LLM is directed to call ``approve_action``; the handler accepts
+    the elicitation; the tool returns "Approved: ..."; the LLM produces
+    a final text response.
+
+    Accepts broad outcomes because LLM behavior is nondeterministic.
+    """
+
+    async def handler(
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> ElicitResult[Any]:
+        return ElicitResult(action="accept", content={})
+
+    client = Client(mcp, elicitation_handler=handler)
+    async with client:
+        async with await _gateway_factory() as t0:
+            try:
+                result = await run_agent(
+                    t0,
+                    client,
+                    "Please use the approve_action tool to approve deploying to production.",
+                    "agent",
+                    dryrun=True,
+                    tool_timeout=60.0,
+                )
+            except MaxTurnsExceededError:
+                return  # loop ran; elicitation did not crash it
+            except TensorZeroError as e:
+                if "not in request.tools" in str(e):
+                    pytest.skip(f"Groq malformed tool name: {e}")
+                raise
+
+    assert result.turns >= 2, (
+        f"expected >= 2 turns (tool + final), got {result.turns}"
+    )
+    assert result.response, "expected non-empty final response"
+
+
+async def test_run_agent_elicitation_decline() -> None:
+    """P1.16 -- Elicitation decline through the full agent loop.
+
+    Same setup as P1.15, but the handler declines. The tool returns
+    "Rejected: ..." and the LLM should produce a final text response.
+    """
+
+    async def handler(
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> ElicitResult[Any]:
+        return ElicitResult(action="decline")
+
+    client = Client(mcp, elicitation_handler=handler)
+    async with client:
+        async with await _gateway_factory() as t0:
+            try:
+                result = await run_agent(
+                    t0,
+                    client,
+                    "Please use the approve_action tool to approve deploying to production.",
+                    "agent",
+                    dryrun=True,
+                    tool_timeout=60.0,
+                )
+            except MaxTurnsExceededError:
+                return  # loop ran; elicitation did not crash it
+            except TensorZeroError as e:
+                if "not in request.tools" in str(e):
+                    pytest.skip(f"Groq malformed tool name: {e}")
+                raise
+
+    assert result.turns >= 2, (
+        f"expected >= 2 turns (tool + final), got {result.turns}"
+    )
+    assert result.response, "expected non-empty final response"
 
 
 # --- Observability and feedback ----------------------------------------------
