@@ -301,6 +301,38 @@ Running the example with `docker compose up` + `uv run python examples/07_elicit
 
 ---
 
+## Phase 5: Elicitation Harness (Future — blocked on agent abstraction layer)
+
+**Goal:** Make LLMs reliably call elicitation-enabled tools instead of trying to handle approval themselves via text.
+
+**Blocked on:** The planned agent creation sub-module (higher-level abstraction over `run_agent`). The harness engineering below should be integrated into that abstraction so developers get it for free.
+
+### Problem observed in Phase 3
+
+When the agent loop encounters tools with approval elicitation (e.g., `delete_task`), the LLM often avoids calling the tool and instead generates text asking the user for confirmation. The LLM doesn't know that the tool has a built-in approval mechanism — it treats the destructive action as something it should mediate itself.
+
+This was worked around in the Phase 3 example by making the user prompt more directive ("Delete task T-103" vs "Delete task T-103 (it's done)"), but this is fragile and pushes complexity onto the library consumer.
+
+### Possible approaches
+
+- [ ] **P5.1** System prompt injection: When the tool list contains elicitation-enabled tools, automatically inject guidance into the system prompt (e.g., "Tools that require human approval handle it themselves. Call them directly without asking the user for confirmation first."). This requires the agent abstraction layer to have control over the system prompt.
+
+- [ ] **P5.2** Tool description enrichment: Append a note to the tool's description at conversion time (in `convert_tools`) indicating that the tool handles approval internally. The LLM sees this in the tool schema and adjusts behavior. This could be done without the agent abstraction layer but requires detecting which tools use elicitation (not trivially detectable from the tool schema alone).
+
+- [ ] **P5.3** Documentation/guidance for consumers: If neither P5.1 nor P5.2 is implemented, document the problem and recommend system prompt patterns that consumers can add themselves.
+
+### Design constraints
+
+- The current `run_agent` API is intentionally thin — it doesn't manage system prompts (that's TensorZero's job via `tensorzero.toml`). Injecting prompts would require either changing `run_agent`'s contract or doing it at a higher abstraction level.
+- Detecting which tools use elicitation from the client side isn't straightforward — the MCP tool schema doesn't advertise elicitation usage. It would require either server-side metadata or runtime heuristics.
+- The agent abstraction sub-module is the natural place for this: it will own agent creation, configuration, and can manage system prompts as part of agent setup.
+
+### Exit Criteria
+
+An agent created with the abstraction layer can call elicitation-enabled tools on the first attempt without needing specially crafted user prompts.
+
+---
+
 ## Dependency Tree
 
 ```
@@ -338,6 +370,12 @@ Phase 4: Optional Enhancements                         [depends: P1, P3]
 |-- P4.2: Reference handlers (if warranted)
 |-- P4.3: Exports and types
 +-- P4.4: Document server-side patterns
+     |
+     v
+Phase 5: Elicitation Harness                            [blocked: agent abstraction layer]
+|-- P5.1: System prompt injection (needs agent abstraction)
+|-- P5.2: Tool description enrichment (alternative)
++-- P5.3: Consumer documentation (fallback)
 ```
 
 ### Critical Path
