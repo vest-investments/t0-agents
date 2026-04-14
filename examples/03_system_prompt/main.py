@@ -3,30 +3,13 @@ prompt that guides the LLM's tool-use behavior.
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment.
-    2. Copy the system prompt into the project's config directory::
+    2. Start the gateway::
 
-           mkdir -p config/functions/agent/baseline
-           cp examples/02_system_prompt/config/functions/agent/baseline/system.txt \
-              config/functions/agent/baseline/system.txt
-
-       Then add ``system_template`` to the variant in ``config/tensorzero.toml``::
-
-           [functions.agent.variants.gpt_oss_20]
-           type = "chat_completion"
-           model = "gpt_oss_20"
-           system_template = "functions/agent/baseline/system.txt"
-
-       Restart the gateway: ``docker compose down && docker compose up -d``
+           docker compose -f examples/03_system_prompt/docker-compose.yml up -d
 
     3. Run::
 
-           uv run python examples/02_system_prompt/main.py
-
-The system prompt in config/functions/agent/baseline/system.txt instructs the
-model to prefer tool calls over clarification questions, keep reasoning brief,
-and give up after repeated failures.  This addresses observed failure modes
-O3 (ambiguity -> clarify instead of call) and O5 (tool selection skipped)
-from the Phase 7 harness engineering notes.
+           uv run python examples/03_system_prompt/main.py
 """
 
 from __future__ import annotations
@@ -43,7 +26,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import run_agent
 
-# The directory name starts with a digit (02_...) so it can't be a normal
+# The directory name starts with a digit (03_...) so it can't be a normal
 # Python import.  Add the example dir to sys.path so ``server`` is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

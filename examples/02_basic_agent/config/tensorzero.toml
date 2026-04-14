@@ -1,21 +1,19 @@
-# TensorZero Gateway configuration for the basic agent example.
-# See: https://www.tensorzero.com/docs/gateway/configuration
+# TensorZero gateway configuration for the basic agent example.
+# Docs: https://www.tensorzero.com/docs/gateway/configuration
 
 [gateway]
 bind_address = "0.0.0.0:3000"
 
-[models.gpt_4o_mini]
-routing = ["gpt_4o_mini"]
+[models.groq_model]
+routing = ["groq"]
 
-[models.gpt_4o_mini.providers.openai]
-type = "openai"
-model_name = "gpt-4o-mini"
+[models.groq_model.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
 
-[functions.basic_agent]
+[functions.agent]
 type = "chat"
-system_schema = "../../schemas/basic_agent/system.json"
 
-[[functions.basic_agent.variants]]
-name = "default"
+[functions.agent.variants.default]
 type = "chat_completion"
-model = "gpt_4o_mini"
+model = "groq_model"

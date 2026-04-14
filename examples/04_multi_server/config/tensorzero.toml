@@ -1,0 +1,38 @@
+# TensorZero configuration for the multi-server composition example.
+#
+# Minimal config: one Groq model, one chat function, no system prompt.
+#
+# See: https://www.tensorzero.com/docs/gateway/configuration
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+# --- Model -------------------------------------------------------------------
+
+[models.gpt_oss_20]
+routing = ["groq"]
+
+[models.gpt_oss_20.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+# --- Function -----------------------------------------------------------------
+
+[functions.agent]
+type = "chat"
+
+[functions.agent.variants.baseline]
+type = "chat_completion"
+model = "gpt_oss_20"
+
+# --- Metrics (for feedback) ---------------------------------------------------
+
+[metrics.task_success]
+type = "boolean"
+level = "episode"
+optimize = "max"
+
+[metrics.quality_score]
+type = "float"
+level = "inference"
+optimize = "max"
