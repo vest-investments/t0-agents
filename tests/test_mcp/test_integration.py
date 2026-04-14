@@ -833,3 +833,183 @@ async def test_f5_8_none_description_tool_is_usable_end_to_end(
     # T0 accepted the empty-description tool AND the LLM invoked it.
     assert result.turns >= 2
     assert result.response
+
+
+# --- Phase 6: observability and feedback ------------------------------------
+
+
+async def test_f6_1_ids_present_in_agent_result(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.1: inference_id and episode_id are captured from the live gateway."""
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0,
+                mcp_client,
+                "Please use the add tool to compute 2 + 3.",
+                "agent",
+                dryrun=True,
+                max_turns=4,
+            )
+
+    assert result.episode_id, "episode_id was not captured"
+    assert result.inference_ids, "inference_ids should not be empty"
+    assert len(result.inference_ids) == result.turns
+
+
+async def test_f6_2_boolean_feedback_accepted_by_gateway(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.2: Boolean feedback on episode_id is accepted by the live gateway.
+
+    Inference uses dryrun=False so the episode_id exists in ClickHouse (the
+    feedback endpoint validates the target ID). Feedback uses dryrun=True so
+    we validate the request without persisting feedback rows.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0, mcp_client,
+                "Please use the add tool to compute 1 + 1.",
+                "agent", dryrun=False, max_turns=4,
+            )
+            feedback_resp = await t0.feedback(
+                metric_name="task_success",
+                episode_id=result.episode_id,
+                value=True,
+                dryrun=True,
+            )
+
+    assert feedback_resp.feedback_id is not None
+
+
+async def test_f6_3_float_feedback_accepted_by_gateway(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.3: Float feedback on inference_id is accepted by the live gateway.
+
+    Inference uses dryrun=False so the inference_id exists in ClickHouse.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0, mcp_client,
+                "Please use the add tool to compute 3 + 4.",
+                "agent", dryrun=False, max_turns=4,
+            )
+            feedback_resp = await t0.feedback(
+                metric_name="quality_score",
+                inference_id=result.inference_ids[0],
+                value=8.5,
+                dryrun=True,
+            )
+
+    assert feedback_resp.feedback_id is not None
+
+
+async def test_f6_4_comment_feedback_accepted_by_gateway(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.4: Comment feedback (built-in metric) is accepted by the gateway.
+
+    Inference uses dryrun=False so the inference_id exists in ClickHouse.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0, mcp_client,
+                "Please use the add tool to compute 5 + 5.",
+                "agent", dryrun=False, max_turns=4,
+            )
+            feedback_resp = await t0.feedback(
+                metric_name="comment",
+                inference_id=result.inference_ids[-1],
+                value="Good tool selection.",
+                dryrun=True,
+            )
+
+    assert feedback_resp.feedback_id is not None
+
+
+async def test_f6_5_demonstration_feedback_accepted_by_gateway(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.5: Demonstration feedback (inference_id only) accepted by gateway.
+
+    Inference uses dryrun=False so the inference_id exists in ClickHouse.
+    """
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0, mcp_client,
+                "Please use the add tool to compute 6 + 7.",
+                "agent", dryrun=False, max_turns=4,
+            )
+            feedback_resp = await t0.feedback(
+                metric_name="demonstration",
+                inference_id=result.inference_ids[-1],
+                value="The sum of 6 and 7 is 13.",
+                dryrun=True,
+            )
+
+    assert feedback_resp.feedback_id is not None
+
+
+async def test_f6_6_dynamic_tools_recorded_in_clickhouse(
+    mcp_client: Client[Any],
+) -> None:
+    """F6.6: dynamic_tools column in ChatInference is populated after inference.
+
+    This test uses dryrun=False so the inference row persists in ClickHouse,
+    then queries the ClickHouse HTTP API directly to verify the dynamic_tools
+    column contains the tool definitions from the test MCP server.
+    """
+    import httpx
+
+    async with mcp_client:
+        async with await _gateway_factory() as t0:
+            result = await run_agent(
+                t0, mcp_client,
+                "Please use the add tool to compute 9 + 1.",
+                "agent",
+                dryrun=False,
+                max_turns=4,
+            )
+
+    assert result.inference_ids, "Need at least one inference_id"
+    inference_id = result.inference_ids[0]
+
+    # Query ClickHouse directly for the dynamic_tools column.
+    query = (
+        f"SELECT dynamic_tools FROM ChatInference "
+        f"WHERE id = '{inference_id}' FORMAT JSON"
+    )
+    async with httpx.AsyncClient() as http:
+        resp = await http.get(
+            "http://localhost:8123",
+            params={
+                "query": query,
+                "user": "chuser",
+                "password": "chpassword",
+                "database": "tensorzero",
+            },
+        )
+
+    assert resp.status_code == 200, f"ClickHouse query failed: {resp.text}"
+    data = resp.json()
+    rows = data.get("data", [])
+    assert len(rows) == 1, f"Expected 1 row, got {len(rows)}: {data}"
+
+    dynamic_tools = rows[0]["dynamic_tools"]
+    assert len(dynamic_tools) > 0, "dynamic_tools should be non-empty"
+    # Each entry is a JSON string; verify at least one tool name we know
+    tool_names_found = []
+    import json as _json
+    for entry in dynamic_tools:
+        tool_def = _json.loads(entry) if isinstance(entry, str) else entry
+        if "name" in tool_def:
+            tool_names_found.append(tool_def["name"])
+    assert "add" in tool_names_found, (
+        f"Expected 'add' in dynamic_tools names, got: {tool_names_found}"
+    )
