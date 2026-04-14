@@ -17,3 +17,14 @@ type = "chat"
 [functions.agent.variants.gpt_oss_20]
 type = "chat_completion"
 model = "gpt_oss_20"
+
+# Phase 6: metrics for feedback (F6.2, F6.3)
+[metrics.task_success]
+type = "boolean"
+level = "episode"
+optimize = "max"
+
+[metrics.quality_score]
+type = "float"
+level = "inference"
+optimize = "max"

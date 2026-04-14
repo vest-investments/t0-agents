@@ -15,6 +15,7 @@ Both ``execute_tool_calls`` (sequential, M3.1) and ``execute_tool_calls_parallel
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, cast
 
 from fastmcp import Client
@@ -26,6 +27,8 @@ from tensorzero.types import ChatInferenceResponse
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.core.types import AgentResult
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
+
+logger = logging.getLogger(__name__)
 
 
 def has_tool_calls(content_blocks: list[Any]) -> bool:
@@ -71,40 +74,48 @@ async def _execute_single_tool_call(
     """
     name = block.name or block.raw_name
     if block.name is None:
+        logger.error("Tool %r: name not in schema", block.raw_name)
         return ToolResult(
             name=name,
             result=f"ERROR: tool name {block.raw_name!r} is not in the schema",
             id=block.id,
         )
     if block.arguments is None:
+        logger.error("Tool %r: invalid JSON arguments: %s", name, block.raw_arguments)
         return ToolResult(
             name=name,
             result=f"ERROR: invalid JSON arguments from LLM: {block.raw_arguments}",
             id=block.id,
         )
+    logger.debug("Executing tool %r with args: %s", name, block.arguments)
     try:
         mcp_result = await mcp_client.call_tool(
             block.name, block.arguments, timeout=timeout
         )
     except ToolError as e:
+        logger.error("Tool %r failed (ToolError): %s", name, e)
         return ToolResult(
             name=name,
             result=f"ERROR: tool execution failed: {e}",
             id=block.id,
         )
     except McpError as e:
+        logger.error("Tool %r failed (McpError): %s", name, e)
         return ToolResult(
             name=name,
             result=f"ERROR: MCP protocol error (possibly timeout): {e}",
             id=block.id,
         )
     except Exception as e:
+        logger.error("Tool %r failed (%s): %s", name, type(e).__name__, e)
         return ToolResult(
             name=name,
             result=f"ERROR: unexpected {type(e).__name__}: {e}",
             id=block.id,
         )
-    return build_tool_result(block, mcp_result)
+    t0_result = build_tool_result(block, mcp_result)
+    logger.debug("Tool %r returned: %.200s", name, t0_result.result)
+    return t0_result
 
 
 async def execute_tool_calls(
@@ -204,6 +215,11 @@ async def run_agent(
     inference_ids: list[str] = []
     executor = execute_tool_calls_parallel if parallel_tools else execute_tool_calls
 
+    logger.info(
+        "Agent loop started: function=%s, max_turns=%d, tools=%d",
+        function_name, max_turns, len(t0_tools),
+    )
+
     for turn in range(max_turns):
         raw = await t0.inference(
             function_name=function_name,
@@ -222,10 +238,19 @@ async def run_agent(
         inference_ids.append(str(response.inference_id))
         messages.append(Message(role="assistant", content=response.content))
 
+        logger.info(
+            "Turn %d: inference_id=%s, episode_id=%s",
+            turn + 1, response.inference_id, episode_id,
+        )
+
         if not has_tool_calls(response.content):
             text = "\n".join(
                 b.text for b in response.content
                 if isinstance(b, Text) and b.text
+            )
+            logger.info(
+                "Agent loop completed: turns=%d, episode_id=%s",
+                turn + 1, episode_id,
             )
             return AgentResult(
                 response=text,
@@ -234,8 +259,16 @@ async def run_agent(
                 turns=turn + 1,
             )
 
+        num_tool_calls = sum(
+            1 for b in response.content if isinstance(b, ToolCall)
+        )
+        logger.debug("Turn %d: dispatching %d tool call(s)", turn + 1, num_tool_calls)
+
         tool_results = await executor(mcp_client, response.content, tool_timeout)
         # F3.5 — N tool results MUST go into a single user message, not N.
         messages.append(Message(role="user", content=tool_results))
 
+    logger.warning(
+        "Agent loop exceeded max_turns=%d, episode_id=%s", max_turns, episode_id,
+    )
     raise MaxTurnsExceededError(max_turns)
