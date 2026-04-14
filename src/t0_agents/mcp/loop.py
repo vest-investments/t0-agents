@@ -16,19 +16,37 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast
+import re
+import time
+from typing import Any, Literal, cast
 
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from mcp import McpError
-from tensorzero import AsyncTensorZeroGateway, Message, Text, ToolCall, ToolResult
-from tensorzero.types import ChatInferenceResponse
+from tensorzero import (
+    AsyncTensorZeroGateway,
+    Message,
+    Text,
+    Thought,
+    ToolCall,
+    ToolChoice,
+    ToolResult,
+)
+from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.core.types import AgentResult
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
 
 logger = logging.getLogger(__name__)
+
+# Patterns in TensorZeroError.text that indicate a recoverable inference
+# failure.  When a match is found the loop injects a corrective user message
+# and retries instead of propagating the exception.  Extend this list to
+# handle similar artifacts from other models / providers.
+RECOVERABLE_INFERENCE_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"not in request\.tools"),
+]
 
 
 def has_tool_calls(content_blocks: list[Any]) -> bool:
@@ -88,33 +106,42 @@ async def _execute_single_tool_call(
             id=block.id,
         )
     logger.debug("Executing tool %r with args: %s", name, block.arguments)
+    start = time.monotonic()
     try:
         mcp_result = await mcp_client.call_tool(
             block.name, block.arguments, timeout=timeout
         )
     except ToolError as e:
+        elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (ToolError): %s", name, e)
+        logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
         return ToolResult(
             name=name,
             result=f"ERROR: tool execution failed: {e}",
             id=block.id,
         )
     except McpError as e:
+        elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (McpError): %s", name, e)
+        logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
         return ToolResult(
             name=name,
             result=f"ERROR: MCP protocol error (possibly timeout): {e}",
             id=block.id,
         )
     except Exception as e:
+        elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (%s): %s", name, type(e).__name__, e)
+        logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
         return ToolResult(
             name=name,
             result=f"ERROR: unexpected {type(e).__name__}: {e}",
             id=block.id,
         )
+    elapsed_ms = (time.monotonic() - start) * 1000
     t0_result = build_tool_result(block, mcp_result)
     logger.debug("Tool %r returned: %.200s", name, t0_result.result)
+    logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
     return t0_result
 
 
@@ -168,6 +195,7 @@ async def run_agent(
     tool_timeout: float = 30.0,
     parallel_tools: bool = False,
     dryrun: bool = False,
+    tool_choice: ToolChoice | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -200,10 +228,21 @@ async def run_agent(
             call so integration tests don't pollute ClickHouse. Defaults to
             ``False`` for production usage.
 
+            **Note:** when ``dryrun=True``, inference IDs are generated but
+            never stored in ClickHouse. Any subsequent ``t0.feedback()`` call
+            targeting those IDs will fail with HTTP 400 (``"Episode ID: ...
+            does not exist"``). Callers that send feedback after the loop must
+            use ``dryrun=False`` for the inference pass.
+        tool_choice: Optional tool-choice directive forwarded to every
+            ``t0.inference()`` call. Accepts ``"auto"``, ``"required"``,
+            ``"off"``, or ``{"specific": "<tool_name>"}`` to force a particular
+            tool. ``None`` (the default) lets the model decide freely.
+
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
-        captured ``episode_id``, the per-turn ``inference_ids``, and the number
-        of turns actually used.
+        captured ``episode_id``, the per-turn ``inference_ids``, the number
+        of turns actually used, and ``response_source`` indicating whether
+        the response text came from ``Text`` or ``Thought`` blocks.
 
     Raises:
         MaxTurnsExceededError: If the loop runs ``max_turns`` times without the
@@ -221,13 +260,41 @@ async def run_agent(
     )
 
     for turn in range(max_turns):
-        raw = await t0.inference(
-            function_name=function_name,
-            episode_id=episode_id,
-            input={"messages": messages},
-            additional_tools=t0_tools,
-            dryrun=dryrun,
-        )
+        # F7.7 — catch recoverable TensorZeroError (e.g. malformed tool name
+        # from <|channel|> artifacts) and inject a corrective user message so
+        # the LLM can retry on the next turn.
+        try:
+            raw = await t0.inference(
+                function_name=function_name,
+                episode_id=episode_id,
+                input={"messages": messages},
+                additional_tools=t0_tools,
+                dryrun=dryrun,
+                tool_choice=tool_choice,
+            )
+        except TensorZeroError as e:
+            if (
+                e.status_code == 400
+                and e.text
+                and any(p.search(e.text) for p in RECOVERABLE_INFERENCE_PATTERNS)
+            ):
+                logger.warning(
+                    "Turn %d: recoverable TensorZeroError caught: %s",
+                    turn + 1, e.text,
+                )
+                tool_names_available = [t["name"] for t in t0_tools]
+                correction = (
+                    f"The previous response contained an invalid tool call "
+                    f"that was rejected: {e.text}\n"
+                    f"Available tools: {tool_names_available}. "
+                    f"Please retry with a valid tool name, stripping any "
+                    f"special tokens."
+                )
+                messages.append(Message(role="assistant", content=[]))
+                messages.append(Message(role="user", content=correction))
+                inference_ids.append(f"error-recoverable-turn-{turn + 1}")
+                continue
+            raise
         # Chat-only loop: inference() returns Union[InferenceResponse,
         # AsyncIterator[InferenceChunk]]; we never set stream=True and we never
         # call run_agent against a JSON function, so cast to narrow for mypy.
@@ -238,16 +305,38 @@ async def run_agent(
         inference_ids.append(str(response.inference_id))
         messages.append(Message(role="assistant", content=response.content))
 
+        # F7.3 — content-type breakdown per turn (INFO).
+        content_types = [type(b).__name__ for b in response.content]
         logger.info(
-            "Turn %d: inference_id=%s, episode_id=%s",
-            turn + 1, response.inference_id, episode_id,
+            "Turn %d: inference_id=%s, episode_id=%s, content_types=%s",
+            turn + 1, response.inference_id, episode_id, content_types,
         )
 
         if not has_tool_calls(response.content):
+            # F7.4 — log Thought content at DEBUG when present.
+            for b in response.content:
+                if isinstance(b, Thought) and b.text:
+                    logger.debug("Thought content: %.500s", b.text)
+
             text = "\n".join(
                 b.text for b in response.content
                 if isinstance(b, Text) and b.text
             )
+            # F7.5 — Thought-only fallback: if no Text blocks produced
+            # content, extract from Thought blocks and flag the source.
+            response_source: Literal["text", "thought"] = "text"
+            if not text:
+                thought_texts = [
+                    b.text for b in response.content
+                    if isinstance(b, Thought) and b.text
+                ]
+                if thought_texts:
+                    text = "\n".join(thought_texts)
+                    response_source = "thought"
+                    logger.info(
+                        "Turn %d: thought-only response used as fallback",
+                        turn + 1,
+                    )
             logger.info(
                 "Agent loop completed: turns=%d, episode_id=%s",
                 turn + 1, episode_id,
@@ -257,12 +346,18 @@ async def run_agent(
                 episode_id=episode_id,
                 inference_ids=inference_ids,
                 turns=turn + 1,
+                response_source=response_source,
             )
 
-        num_tool_calls = sum(
-            1 for b in response.content if isinstance(b, ToolCall)
+        # F7.2 — tool names in dispatch log.
+        tool_calls_in_turn = [
+            b for b in response.content if isinstance(b, ToolCall)
+        ]
+        tool_names = [tc.name or tc.raw_name for tc in tool_calls_in_turn]
+        logger.debug(
+            "Turn %d: dispatching %d tool call(s): %s",
+            turn + 1, len(tool_calls_in_turn), tool_names,
         )
-        logger.debug("Turn %d: dispatching %d tool call(s)", turn + 1, num_tool_calls)
 
         tool_results = await executor(mcp_client, response.content, tool_timeout)
         # F3.5 — N tool results MUST go into a single user message, not N.
