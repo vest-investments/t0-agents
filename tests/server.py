@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel
 
@@ -73,3 +74,39 @@ async def slow_tool(delay_seconds: float) -> str:
     """
     await asyncio.sleep(delay_seconds)
     return "done"
+
+
+# --- Elicitation test fixtures ------------------------------------------------
+# These tools exercise MCP Elicitation (human-in-the-loop approval and
+# structured input).  They require a Client created with an
+# `elicitation_handler` — without one the default MCP callback returns
+# McpError(-32600, "Elicitation not supported").
+
+
+@mcp.tool
+async def approve_action(action: str, ctx: Context) -> str:
+    """Request approval before performing an action."""
+    result = await ctx.elicit(f"Approve: {action}?", response_type=None)
+    if result.action == "accept":
+        return f"Approved: {action}"
+    return f"Rejected: {action}"
+
+
+@dataclass
+class UserInfo:
+    """Flat dataclass for structured elicitation (name + age)."""
+
+    name: str
+    age: int
+
+
+@mcp.tool
+async def collect_info(ctx: Context) -> str:
+    """Collect user information via elicitation."""
+    result = await ctx.elicit(
+        "Please provide your information",
+        response_type=UserInfo,
+    )
+    if result.action == "accept":
+        return f"Hello {result.data.name}, age {result.data.age}"
+    return "Info not provided"
