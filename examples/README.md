@@ -24,6 +24,7 @@ Examples marked **Docker: Yes** additionally need:
 | 04 | `03_multi_server` | Intermediate | Server composition | Yes |
 | 05 | `04_error_handling` | Intermediate | Error recovery patterns | Yes |
 | 06 | `05_feedback_loop` | Advanced | Observability + feedback | Yes |
+| 07 | `07_elicitation` | Advanced | Human-in-the-loop elicitation | Yes |
 
 > Directory names will be renumbered to match the table in a future cleanup.
 
