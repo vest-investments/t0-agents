@@ -109,13 +109,13 @@ so it can recover.
 
 ## Phase 6: Observability and Feedback
 
-- [ ] **F6.1** — `inference_id` and `episode_id` are captured from each T0 response
-- [ ] **F6.2** — Boolean feedback can be sent to the `episode_id` (metric defined in tensorzero.toml)
-- [ ] **F6.3** — Float feedback can be sent to the `inference_id`
-- [ ] **F6.4** — A `comment` can be sent as feedback on an inference
-- [ ] **F6.5** — A `demonstration` can be sent as feedback (ideal output)
-- [ ] **F6.6** — Dynamic tools are recorded in ClickHouse (`dynamic_tools` column)
-- [ ] **F6.7** — The agent loop log shows: tool calls, results, errors, timestamps
+- [x] **F6.1** — `inference_id` and `episode_id` are captured from each T0 response — pinned by `TestObservabilityIds::test_f6_1_ids_captured_on_every_turn` (unit) + `test_f6_1_ids_present_in_agent_result` (integration)
+- [x] **F6.2** — Boolean feedback can be sent to the `episode_id` (metric defined in tensorzero.toml) — pinned by `TestFeedback::test_f6_2_boolean_feedback_on_episode` (unit) + `test_f6_2_boolean_feedback_accepted_by_gateway` (integration)
+- [x] **F6.3** — Float feedback can be sent to the `inference_id` — pinned by `TestFeedback::test_f6_3_float_feedback_on_inference` (unit) + `test_f6_3_float_feedback_accepted_by_gateway` (integration)
+- [x] **F6.4** — A `comment` can be sent as feedback on an inference — pinned by `TestFeedback::test_f6_4_comment_feedback` (unit) + `test_f6_4_comment_feedback_accepted_by_gateway` (integration)
+- [x] **F6.5** — A `demonstration` can be sent as feedback (ideal output) — pinned by `TestFeedback::test_f6_5_demonstration_feedback` (unit) + `test_f6_5_demonstration_feedback_accepted_by_gateway` (integration)
+- [x] **F6.6** — Dynamic tools are recorded in ClickHouse (`dynamic_tools` column) — pinned by `test_f6_6_dynamic_tools_recorded_in_clickhouse` (integration, queries ClickHouse HTTP API directly)
+- [x] **F6.7** — The agent loop log shows: tool calls, results, errors, timestamps — pinned by `TestLogging::test_f6_7_logging_shows_tool_calls_and_results` + `::test_f6_7_logging_shows_errors` + `::test_f6_7_logging_shows_turn_info` (unit, via `caplog`)
 
 ### Success criterion
 You can trace a complete conversation in ClickHouse and send feedback
@@ -133,5 +133,5 @@ for future optimization.
 | 3 — Agent Loop | 8 | 8 / 8 | ✅ |
 | 4 — Multi-Server | 6 | 6 / 6 | ✅ |
 | 5 — Robustness | 8 | 8 / 8 | ✅ |
-| 6 — Observability | 7 | _ / 7 | ⬜ |
+| 6 — Observability | 7 | 7 / 7 | ✅ |
 | **Total** | **49** | **_ / 49** | ⬜ |
