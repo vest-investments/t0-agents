@@ -1,0 +1,152 @@
+# Production Guide
+
+## Transport selection
+
+FastMCP supports multiple transports. Choose based on your deployment model.
+
+| Transport | Use case | Code | Notes |
+|-----------|----------|------|-------|
+| In-memory | Development, testing | `Client(mcp_instance)` | No network overhead. Server runs in-process. |
+| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | Recommended by FastMCP docs. Stateless HTTP. |
+| SSE | Legacy compatibility | `Client("http://host:8000/sse")` | Older MCP protocol. Use HTTP Streamable for new deployments. |
+| stdio | Subprocess model | `Client(StdioTransport("python", "server.py"))` | Server runs as child process. Useful for local tool servers. |
+
+## External MCP servers
+
+The FastMCP client accepts URLs directly. Auth is handled at the transport level.
+
+```python
+from fastmcp import Client
+
+client = Client("https://mcp.example.com/mcp")
+# For auth: use StreamableHttpTransport with headers={"Authorization": "Bearer <token>"}
+```
+
+## TensorZero gateway deployment
+
+**Development**: use Docker Compose. The project includes a compose file that boots the gateway and ClickHouse.
+
+```bash
+docker compose up -d  # gateway:2026.4.0 + clickhouse:lts
+```
+
+**Production**:
+
+- Run the TensorZero gateway as a dedicated service (Docker container or binary).
+- Point it at a persistent ClickHouse instance (not the ephemeral dev container).
+- Pass provider API keys as environment variables, never in config files.
+- TensorZero configuration (`tensorzero.toml`) should be mounted read-only.
+
+```bash
+docker run -d \
+  -v ./config/tensorzero.toml:/app/config/tensorzero.toml:ro \
+  -e GROQ_API_KEY="$GROQ_API_KEY" \
+  -p 3000:3000 \
+  tensorzero/gateway:2026.4.0
+```
+
+## System prompts for tool-use reliability
+
+System prompts significantly affect tool-use behavior. LLMs may default to asking clarification questions instead of calling available tools. Configure the system prompt in TensorZero via the function variant's template.
+
+Recommended guidelines for the system prompt:
+
+- Instruct the model to prefer tool calls over asking clarifying questions
+- Direct the model to keep reasoning brief and act on available information
+- Tell the model to give up on a tool after repeated failures, not retry indefinitely
+- List the general categories of tools available so the model knows what to expect
+
+Example system prompt (`system.minijinja`):
+
+```
+You are a helpful assistant with access to tools.
+
+When a user asks a question that can be answered using the available tools,
+call the appropriate tool immediately. Do not ask for clarification unless
+the request is genuinely ambiguous.
+
+Keep your reasoning brief. If a tool call fails, try a different approach
+or explain what went wrong. Do not retry the same failing call more than twice.
+```
+
+See `examples/03_system_prompt/` for a complete example with Docker Compose and TensorZero configuration.
+
+## Tuning max_turns
+
+The `max_turns` parameter (default 20) caps the number of inference rounds before `MaxTurnsExceededError` is raised. Tune it per task:
+
+| Task type | Suggested max_turns | Rationale |
+|-----------|-------------------|-----------|
+| Simple lookup (1 tool call) | 3-5 | One tool call + answer. Extra budget for retries. |
+| Multi-step workflow | 10-15 | Several tool calls in sequence. |
+| Complex research | 15-20 | Many tools, branching paths, error recovery. |
+
+Setting `max_turns` too high risks the LLM entering retry loops on failing tools. Setting it too low causes premature `MaxTurnsExceededError` on legitimate multi-step tasks. Monitor the `turns` field in `AgentResult` to calibrate.
+
+```python
+result = await run_agent(
+    t0, client, query, "agent",
+    max_turns=5,  # Tight budget for simple queries
+)
+```
+
+## Parallel vs sequential tool execution
+
+`run_agent` accepts `parallel_tools: bool` (default `False`).
+
+**Sequential** (default): tools execute one at a time via a list comprehension of awaited calls. Safer for tools that share resources or have side effects.
+
+**Parallel** (`parallel_tools=True`): tool calls dispatch concurrently via `asyncio.gather`. Faster for I/O-bound tools. Result order is preserved regardless of completion order.
+
+```python
+result = await run_agent(
+    t0, client, query, "agent",
+    parallel_tools=True,  # Concurrent tool execution
+)
+```
+
+Note: the `parallel_tool_calls` inference parameter (which tells the LLM to emit multiple tool calls in one turn) is a separate provider-level concern. Only some providers support it (OpenAI, Fireworks AI). Even without provider support for parallel emission, the LLM may still emit multiple tool calls in one turn, which `parallel_tools=True` will execute concurrently.
+
+## Integration with other libraries
+
+### Pydantic
+
+FastMCP tools accept Pydantic models as parameters. The model's JSON Schema is generated automatically and passed to TensorZero as `additional_tools`. Keep schemas to 2 or fewer nesting levels for broad provider compatibility -- deeply nested schemas may cause issues with some LLM providers.
+
+```python
+from pydantic import BaseModel
+
+class SearchParams(BaseModel):
+    query: str
+    max_results: int = 10
+
+@mcp.tool
+def search(params: SearchParams) -> list[dict]:
+    """Search the database."""
+    ...
+```
+
+### asyncio
+
+The library is async-first. Use `asyncio.run()` at the entry point. For existing event loops (web frameworks), call `run_agent` directly from an async context.
+
+### Web frameworks
+
+FastAPI/Starlette can wrap `run_agent` in endpoint handlers. Initialize the gateway and MCP client at startup, share across requests:
+
+```python
+@app.post("/agent")
+async def agent_endpoint(query: str) -> dict:
+    result = await run_agent(app.state.t0, app.state.client, query, "agent")
+    return {"response": result.response, "turns": result.turns}
+```
+
+## Monitoring checklist
+
+- Enable Python logging at INFO level in production (`t0_agents.mcp.loop` logger)
+- Track `MaxTurnsExceededError` frequency -- high rates indicate prompt or tool issues
+- Send episode-level boolean feedback (`task_success`) to measure task completion rates
+- Monitor `AgentResult.turns` distribution to detect regressions in agent efficiency
+- Set up ClickHouse dashboards for inference latency and tool call frequency
+- Alert on elevated ERROR-level log rates (tool failures, invalid arguments)
+- Track `response_source == "thought"` occurrences -- indicates reasoning-model fallback behavior
