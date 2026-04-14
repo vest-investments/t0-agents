@@ -1,21 +1,4 @@
-"""Phase 7 — Harness engineering for tool-use reliability (unit tests).
-
-One test per F7.x gate, each with the matching docstring marker so
-``docs/implementation-plan/02-validation-checklist-v3-final.md`` can cite the
-test function by name.
-
-F7.1-F7.4 validate logging micro-gaps (duration_ms, tool names in dispatch,
-content-type breakdown, Thought.text at DEBUG).
-
-F7.5 validates Thought-only response handling (``response_source="thought"``
-on ``AgentResult``).
-
-F7.6 validates that ``tool_choice`` is forwarded to every ``t0.inference()`` call.
-
-F7.7 validates that recoverable ``TensorZeroError`` (e.g. malformed tool name)
-is caught in-loop and a corrective message is injected for retry.
-
-F7.8 validates that the ``dryrun`` docstring documents the feedback constraint.
+"""Harness engineering for tool-use reliability (unit tests).
 
 All tests reuse ``FakeT0`` / ``FakeChatResponse`` from ``tests._fake_t0`` and
 the ``FakeMCPClient`` / ``_tool_call`` / ``_make_result`` / ``_mcp_tool``
@@ -46,12 +29,12 @@ from tests.test_mcp.test_loop import (
 
 
 class TestLoggingMicrogaps:
-    """F7.1-F7.4 — Logging micro-gaps closed in Phase 7."""
+    """Logging completeness: duration, tool names, content types, thought text."""
 
-    async def test_f7_1_duration_ms_logged_for_tool_call(
+    async def test_duration_ms_logged_for_tool_call(
         self, caplog: Any,
     ) -> None:
-        """F7.1: DEBUG record contains 'completed in' with a numeric ms value."""
+        """DEBUG record contains 'completed in' with a numeric ms value."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])
@@ -71,10 +54,10 @@ class TestLoggingMicrogaps:
         # Verify numeric ms value is present (e.g. "completed in 0.1ms")
         assert any("ms" in m for m in duration_msgs)
 
-    async def test_f7_1_duration_ms_logged_on_error(
+    async def test_duration_ms_logged_on_error(
         self, caplog: Any,
     ) -> None:
-        """F7.1: duration_ms is also logged when a tool raises an error."""
+        """duration_ms is also logged when a tool raises an error."""
         from fastmcp.exceptions import ToolError
 
         r1 = FakeChatResponse(content=[_tool_call(name="fail")])
@@ -97,10 +80,10 @@ class TestLoggingMicrogaps:
         duration_msgs = [m for m in messages if "completed in" in m]
         assert len(duration_msgs) >= 1
 
-    async def test_f7_2_tool_names_in_dispatch_log(
+    async def test_tool_names_in_dispatch_log(
         self, caplog: Any,
     ) -> None:
-        """F7.2: DEBUG dispatch record includes tool names."""
+        """DEBUG dispatch record includes tool names."""
         r1 = FakeChatResponse(content=[
             _tool_call(name="add", call_id="c1"),
             _tool_call(name="greet", raw_name="greet", call_id="c2"),
@@ -131,10 +114,10 @@ class TestLoggingMicrogaps:
         assert "add" in msg
         assert "greet" in msg
 
-    async def test_f7_3_content_type_breakdown_logged(
+    async def test_content_type_breakdown_logged(
         self, caplog: Any,
     ) -> None:
-        """F7.3: INFO record includes content_types= with block type names."""
+        """INFO record includes content_types= with block type names."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])
@@ -156,10 +139,10 @@ class TestLoggingMicrogaps:
         # Turn 2 should show Text
         assert any("Text" in m for m in ct_msgs)
 
-    async def test_f7_4_thought_text_logged_at_debug(
+    async def test_thought_text_logged_at_debug(
         self, caplog: Any,
     ) -> None:
-        """F7.4: Thought.text logged at DEBUG on a Thought-only terminal turn."""
+        """Thought.text logged at DEBUG on a Thought-only terminal turn."""
         r1 = FakeChatResponse(content=[
             Thought(text="I'm thinking about the answer..."),
         ])
@@ -184,10 +167,10 @@ class TestLoggingMicrogaps:
 
 
 class TestThoughtOnlyHandling:
-    """F7.5 — Thought-only responses produce response_source='thought'."""
+    """Thought-only responses produce response_source='thought'."""
 
-    async def test_f7_5_thought_only_response_extracted(self) -> None:
-        """F7.5: Thought-only response returns response_source='thought'."""
+    async def test_thought_only_response_extracted(self) -> None:
+        """Thought-only response returns response_source='thought'."""
         r1 = FakeChatResponse(content=[
             Thought(text="The answer is 5"),
         ])
@@ -205,8 +188,8 @@ class TestThoughtOnlyHandling:
         assert result.response_source == "thought"
         assert result.turns == 1
 
-    async def test_f7_5_thought_none_text_returns_empty(self) -> None:
-        """F7.5: Thought(text=None) results in empty response, source='text'."""
+    async def test_thought_none_text_returns_empty(self) -> None:
+        """Thought(text=None) results in empty response, source='text'."""
         r1 = FakeChatResponse(content=[
             Thought(text=None),
         ])
@@ -223,8 +206,8 @@ class TestThoughtOnlyHandling:
         assert result.response == ""
         assert result.response_source == "text"
 
-    async def test_f7_5_text_takes_priority_over_thought(self) -> None:
-        """F7.5: When both Text and Thought are present, Text wins."""
+    async def test_text_takes_priority_over_thought(self) -> None:
+        """When both Text and Thought are present, Text wins."""
         r1 = FakeChatResponse(content=[
             Thought(text="internal reasoning"),
             Text(text="The sum is 5"),
@@ -242,8 +225,8 @@ class TestThoughtOnlyHandling:
         assert result.response == "The sum is 5"
         assert result.response_source == "text"
 
-    async def test_f7_5_multiple_thoughts_joined(self) -> None:
-        """F7.5: Multiple Thought blocks are joined with newlines."""
+    async def test_multiple_thoughts_joined(self) -> None:
+        """Multiple Thought blocks are joined with newlines."""
         r1 = FakeChatResponse(content=[
             Thought(text="Step 1: add 2+3"),
             Thought(text="Step 2: the answer is 5"),
@@ -262,8 +245,8 @@ class TestThoughtOnlyHandling:
         assert "Step 2: the answer is 5" in result.response
         assert result.response_source == "thought"
 
-    async def test_f7_5_thought_only_logs_fallback(self, caplog: Any) -> None:
-        """F7.5: INFO log emitted when thought-only fallback is used."""
+    async def test_thought_only_logs_fallback(self, caplog: Any) -> None:
+        """INFO log emitted when thought-only fallback is used."""
         r1 = FakeChatResponse(content=[
             Thought(text="reasoning"),
         ])
@@ -286,10 +269,10 @@ class TestThoughtOnlyHandling:
 
 
 class TestToolChoice:
-    """F7.6 — tool_choice parameter forwarded to t0.inference()."""
+    """tool_choice parameter forwarded to t0.inference()."""
 
-    async def test_f7_6_tool_choice_forwarded_every_turn(self) -> None:
-        """F7.6: tool_choice is passed to every t0.inference() call."""
+    async def test_tool_choice_forwarded_every_turn(self) -> None:
+        """tool_choice is passed to every t0.inference() call."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])
@@ -307,8 +290,8 @@ class TestToolChoice:
         assert t0.calls[0]["tool_choice"] == {"specific": "add"}
         assert t0.calls[1]["tool_choice"] == {"specific": "add"}
 
-    async def test_f7_6_tool_choice_none_by_default(self) -> None:
-        """F7.6: When tool_choice is not specified, None is passed."""
+    async def test_tool_choice_none_by_default(self) -> None:
+        """When tool_choice is not specified, None is passed."""
         r1 = FakeChatResponse(content=[Text(text="hi")])
         t0 = FakeT0([r1])
         mcp = FakeMCPClient()
@@ -322,8 +305,8 @@ class TestToolChoice:
 
         assert t0.calls[0]["tool_choice"] is None
 
-    async def test_f7_6_tool_choice_literal_values(self) -> None:
-        """F7.6: Literal tool_choice values ('auto', 'required') are forwarded."""
+    async def test_tool_choice_literal_values(self) -> None:
+        """Literal tool_choice values ('auto', 'required') are forwarded."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])
@@ -345,10 +328,10 @@ class TestToolChoice:
 
 
 class TestRecoverableInferenceError:
-    """F7.7 — Recoverable TensorZeroError caught in-loop with retry."""
+    """Recoverable TensorZeroError caught in-loop with retry."""
 
-    async def test_f7_7_malformed_tool_name_caught_and_retried(self) -> None:
-        """F7.7: TensorZeroError with 'not in request.tools' is caught;
+    async def test_malformed_tool_name_caught_and_retried(self) -> None:
+        """TensorZeroError with 'not in request.tools' is caught;
         loop injects corrective message and continues to next turn."""
         error = TensorZeroError(
             status_code=400,
@@ -381,8 +364,8 @@ class TestRecoverableInferenceError:
         ]
         assert len(corrective_msgs) >= 1
 
-    async def test_f7_7_corrective_message_lists_available_tools(self) -> None:
-        """F7.7: The corrective message includes available tool names."""
+    async def test_corrective_message_lists_available_tools(self) -> None:
+        """The corrective message includes available tool names."""
         error = TensorZeroError(
             status_code=400,
             text='validation failed: "bad_name" not in request.tools',
@@ -410,8 +393,8 @@ class TestRecoverableInferenceError:
         assert "add" in corrective[-1]["content"]
         assert "greet" in corrective[-1]["content"]
 
-    async def test_f7_7_non_matching_error_re_raised(self) -> None:
-        """F7.7: TensorZeroError that doesn't match patterns is re-raised."""
+    async def test_non_matching_error_re_raised(self) -> None:
+        """TensorZeroError that doesn't match patterns is re-raised."""
         error = TensorZeroError(status_code=500, text="internal server error")
         t0 = FakeT0([error])
         mcp = FakeMCPClient()
@@ -426,8 +409,8 @@ class TestRecoverableInferenceError:
 
         assert exc_info.value.status_code == 500
 
-    async def test_f7_7_non_400_error_re_raised(self) -> None:
-        """F7.7: Non-400 TensorZeroError with matching text is still re-raised."""
+    async def test_non_400_error_re_raised(self) -> None:
+        """Non-400 TensorZeroError with matching text is still re-raised."""
         error = TensorZeroError(
             status_code=503, text="not in request.tools",
         )
@@ -444,8 +427,8 @@ class TestRecoverableInferenceError:
 
         assert exc_info.value.status_code == 503
 
-    async def test_f7_7_error_logged_as_warning(self, caplog: Any) -> None:
-        """F7.7: Caught TensorZeroError is logged at WARNING level."""
+    async def test_error_logged_as_warning(self, caplog: Any) -> None:
+        """Caught TensorZeroError is logged at WARNING level."""
         error = TensorZeroError(
             status_code=400,
             text='tool call validation failed: "x" not in request.tools',
@@ -467,8 +450,8 @@ class TestRecoverableInferenceError:
         ]
         assert any("recoverable TensorZeroError" in m for m in warning_msgs)
 
-    async def test_f7_7_sentinel_inference_id_recorded(self) -> None:
-        """F7.7: Error turn records a sentinel inference_id."""
+    async def test_sentinel_inference_id_recorded(self) -> None:
+        """Error turn records a sentinel inference_id."""
         error = TensorZeroError(
             status_code=400,
             text='"bad" not in request.tools',
@@ -487,8 +470,8 @@ class TestRecoverableInferenceError:
         assert len(result.inference_ids) == 2
         assert result.inference_ids[0].startswith("error-recoverable-turn-")
 
-    async def test_f7_7_recoverable_patterns_extensible(self) -> None:
-        """F7.7: RECOVERABLE_INFERENCE_PATTERNS is a module-level list
+    async def test_recoverable_patterns_extensible(self) -> None:
+        """RECOVERABLE_INFERENCE_PATTERNS is a module-level list
         that can be extended with new patterns."""
         import re
 
@@ -503,10 +486,10 @@ class TestRecoverableInferenceError:
 
 
 class TestDryrunDocstring:
-    """F7.8 — run_agent docstring documents dryrun + feedback constraint."""
+    """run_agent docstring documents dryrun + feedback constraint."""
 
-    def test_f7_8_dryrun_feedback_constraint_documented(self) -> None:
-        """F7.8: run_agent docstring mentions dryrun and feedback constraint."""
+    def test_dryrun_feedback_constraint_documented(self) -> None:
+        """run_agent docstring mentions dryrun and feedback constraint."""
         doc = run_agent.__doc__
         assert doc is not None
         assert "dryrun" in doc

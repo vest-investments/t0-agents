@@ -5,10 +5,10 @@ of ``run_agent`` starts a fresh ``messages`` list and only carries continuity
 through the optional ``episode_id`` (which TensorZero uses to group inferences
 in ClickHouse for analytics and feedback).
 
-Both ``execute_tool_calls`` (sequential, M3.1) and ``execute_tool_calls_parallel``
-(concurrent via ``asyncio.gather``, M3.7) share the same per-call helper
-``_execute_single_tool_call``, so the error contract — null arguments (EC-2),
-``ToolError`` (F5.1), ``McpError`` (F5.2 / timeout F5.4), and any other
+Both ``execute_tool_calls`` (sequential) and ``execute_tool_calls_parallel``
+(concurrent via ``asyncio.gather``) share the same per-call helper
+``_execute_single_tool_call``, so the error contract — null arguments,
+``ToolError``, ``McpError`` (including timeouts), and any other
 ``Exception`` — is identical across the two execution strategies.
 """
 
@@ -65,19 +65,19 @@ async def _execute_single_tool_call(
 ) -> ToolResult:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
 
-    Implements the M3.1 error contract:
+    Implements the error contract:
 
     * ``name is None`` (LLM hallucinated a tool name not in the schema; T0
       validates it against ``additional_tools`` and zeroes the field) →
       ``ToolResult`` with a ``"ERROR: tool name ... is not in the schema"``
       payload, never invoking ``call_tool``.
-    * ``arguments is None`` (EC-2: T0 marks invalid LLM JSON with
+    * ``arguments is None`` (T0 marks invalid LLM JSON with
       ``arguments=None``, but ``raw_arguments`` always carries the raw string)
       → ``ToolResult`` with an ``"ERROR: invalid JSON arguments..."`` payload
       that the LLM can read on the next turn and (potentially) retry from.
-    * ``ToolError`` (F5.1: the tool itself raised) → ``"ERROR: tool execution
+    * ``ToolError`` (the tool itself raised) → ``"ERROR: tool execution
       failed: <e>"``.
-    * ``McpError`` (F5.2 / F5.4: MCP protocol error, including timeout code
+    * ``McpError`` (MCP protocol error, including timeout code
       ``-32000``) → ``"ERROR: MCP protocol error (possibly timeout): <e>"``.
     * Any other ``Exception`` → ``"ERROR: unexpected <Type>: <e>"``. Belt-and-
       braces so a single misbehaving tool can't crash the agent loop.
@@ -150,7 +150,7 @@ async def execute_tool_calls(
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
-    """Execute every ``ToolCall`` in ``content_blocks`` sequentially (M3.1).
+    """Execute every ``ToolCall`` in ``content_blocks`` sequentially.
 
     Non-``ToolCall`` blocks (``Text``, ``Thought``, etc.) are skipped silently.
     The output preserves the input order of the ``ToolCall`` blocks.
@@ -167,7 +167,7 @@ async def execute_tool_calls_parallel(
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
-    """Execute ``ToolCall`` blocks concurrently via ``asyncio.gather`` (M3.7).
+    """Execute ``ToolCall`` blocks concurrently via ``asyncio.gather``.
 
     Useful when an inference response contains multiple ``ToolCall`` blocks and
     the underlying tools are I/O-bound. The returned list preserves the input
@@ -211,19 +211,19 @@ async def run_agent(
     Args:
         t0: A connected ``AsyncTensorZeroGateway`` (already inside ``async with``).
         mcp_client: A connected ``fastmcp.Client`` (already inside ``async with``).
-            Per the FastMCP guide §11.6, the client context **must** span the
+            Per FastMCP's documentation, the client context **must** span the
             full loop; ``run_agent`` does not wrap it in its own ``async with``.
         user_message: The user's query as a plain string.
         function_name: Name of the chat function defined in ``tensorzero.toml``.
         episode_id: Existing T0 episode id to continue, or ``None`` for a fresh
             episode (T0 will allocate one and we capture it).
         max_turns: Maximum number of inference turns before the loop aborts with
-            ``MaxTurnsExceededError`` (anticipates F5.7 / M5.4).
+            ``MaxTurnsExceededError``.
         tool_timeout: Per-tool-call timeout in seconds, forwarded to
             ``Client.call_tool(timeout=...)``. Note: FastMCP's docs flag that
             timeout only applies to foreground execution.
         parallel_tools: If ``True``, dispatch tool calls via ``asyncio.gather``
-            (``execute_tool_calls_parallel``); otherwise sequential per M3.1.
+            (``execute_tool_calls_parallel``); otherwise sequential.
         dryrun: If ``True``, forwarded to every ``t0.inference(dryrun=True)``
             call so integration tests don't pollute ClickHouse. Defaults to
             ``False`` for production usage.
@@ -260,7 +260,7 @@ async def run_agent(
     )
 
     for turn in range(max_turns):
-        # F7.7 — catch recoverable TensorZeroError (e.g. malformed tool name
+        # Catch recoverable TensorZeroError (e.g. malformed tool name
         # from <|channel|> artifacts) and inject a corrective user message so
         # the LLM can retry on the next turn.
         try:
@@ -305,7 +305,7 @@ async def run_agent(
         inference_ids.append(str(response.inference_id))
         messages.append(Message(role="assistant", content=response.content))
 
-        # F7.3 — content-type breakdown per turn (INFO).
+        # Content-type breakdown per turn.
         content_types = [type(b).__name__ for b in response.content]
         logger.info(
             "Turn %d: inference_id=%s, episode_id=%s, content_types=%s",
@@ -313,7 +313,7 @@ async def run_agent(
         )
 
         if not has_tool_calls(response.content):
-            # F7.4 — log Thought content at DEBUG when present.
+            # Log Thought content at DEBUG when present.
             for b in response.content:
                 if isinstance(b, Thought) and b.text:
                     logger.debug("Thought content: %.500s", b.text)
@@ -322,8 +322,8 @@ async def run_agent(
                 b.text for b in response.content
                 if isinstance(b, Text) and b.text
             )
-            # F7.5 — Thought-only fallback: if no Text blocks produced
-            # content, extract from Thought blocks and flag the source.
+            # Thought-only fallback: if no Text blocks produced content,
+            # extract from Thought blocks and flag the source.
             response_source: Literal["text", "thought"] = "text"
             if not text:
                 thought_texts = [
@@ -349,7 +349,7 @@ async def run_agent(
                 response_source=response_source,
             )
 
-        # F7.2 — tool names in dispatch log.
+        # Log tool names in dispatch.
         tool_calls_in_turn = [
             b for b in response.content if isinstance(b, ToolCall)
         ]
@@ -360,7 +360,7 @@ async def run_agent(
         )
 
         tool_results = await executor(mcp_client, response.content, tool_timeout)
-        # F3.5 — N tool results MUST go into a single user message, not N.
+        # N tool results MUST go into a single user message, not N.
         messages.append(Message(role="user", content=tool_results))
 
     logger.warning(

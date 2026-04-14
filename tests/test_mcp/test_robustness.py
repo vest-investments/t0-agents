@@ -1,22 +1,13 @@
-"""Phase 5 — Robustness and error handling (unit tests).
+"""Robustness and error handling (unit tests).
 
-One test per F5.x gate, each with the matching docstring marker so
-``docs/implementation-plan/02-validation-checklist-v3-final.md`` can cite the
-test function by name (Phase 2/3/4 convention).
-
-The error contract itself lives in ``src/t0_agents/mcp/loop.py`` and was
-implemented up front in Phase 3 (see ``docs/phase-3/phase-3-implementation-log.md``
-§ Decisions, row 1). Phase 5 is therefore **validation** — every F5.x item
-maps to behavior that already exists, plus the explicit retry (F5.5) and
-``ValidationError``-through-``ToolError`` (F5.6) gates that Phase 3's tests
-did not pin directly.
+The error contract itself lives in ``src/t0_agents/mcp/loop.py``. These tests
+validate that every error path (ToolError, McpError, invalid JSON, timeout,
+retry, ValidationError-through-ToolError, max_turns, and None-description
+tools) behaves correctly.
 
 All tests reuse ``FakeT0`` / ``FakeChatResponse`` from ``tests._fake_t0`` and
 the ``FakeMCPClient`` / ``_tool_call`` / ``_make_result`` / ``_mcp_error`` /
-``_mcp_tool`` helpers defined once in ``tests.test_mcp.test_loop``. Cross-test
-imports are preferred over a third shared helper module here — Phase 5 is the
-only consumer of ``FakeMCPClient`` beyond ``test_loop.py``; if a fourth
-consumer appears later, extract at that time.
+``_mcp_tool`` helpers defined once in ``tests.test_mcp.test_loop``.
 """
 
 from __future__ import annotations
@@ -44,10 +35,10 @@ from tests.test_mcp.test_loop import (
 
 
 class TestRobustness:
-    """Phase 5 gates validated against the Phase 3 error contract."""
+    """Error handling validated against the error contract."""
 
-    async def test_f5_1_tool_error_caught(self) -> None:
-        """F5.1: ``ToolError`` from FastMCP is caught and surfaced to the LLM
+    async def test_tool_error_caught(self) -> None:
+        """``ToolError`` from FastMCP is caught and surfaced to the LLM
         as a ``ToolResult`` with an error payload. ``run_agent`` does not crash.
 
         Two-turn flow: turn 1 emits a ``ToolCall`` that hits a ``ToolError``;
@@ -84,13 +75,13 @@ class TestRobustness:
         assert error_block.result.startswith("ERROR: tool execution failed:")
         assert "boom" in error_block.result
 
-    async def test_f5_2_mcp_error_caught(self) -> None:
-        """F5.2: ``McpError`` from mcp (timeout, protocol) is caught and
-        surfaced as an error ``ToolResult``. ``run_agent`` does not crash.
+    async def test_mcp_error_caught(self) -> None:
+        """``McpError`` from mcp (timeout, protocol) is caught and surfaced as
+        an error ``ToolResult``. ``run_agent`` does not crash.
 
-        We raise a plain (non-timeout) McpError to distinguish F5.2 from F5.4:
-        the catch chain routes both through the same branch but the meaning
-        differs per the integration contract.
+        We raise a plain (non-timeout) McpError to distinguish from the timeout
+        case: the catch chain routes both through the same branch but the
+        meaning differs per the integration contract.
         """
         tc = _tool_call(call_id="c1")
         t0 = FakeT0(
@@ -114,8 +105,8 @@ class TestRobustness:
         assert error_block.result.startswith("ERROR: MCP protocol error")
         assert "transport closed" in error_block.result
 
-    async def test_f5_3_invalid_json_detected(self) -> None:
-        """F5.3: ``block.arguments is None`` (LLM produced invalid JSON) is
+    async def test_invalid_json_detected(self) -> None:
+        """``block.arguments is None`` (LLM produced invalid JSON) is
         detected and reported as an error ``ToolResult`` without invoking the
         underlying tool.
         """
@@ -135,16 +126,16 @@ class TestRobustness:
         )
         assert result.turns == 2
 
-        # The tool was never called (EC-2 contract).
+        # The tool was never called (invalid JSON arguments contract).
         assert client.call_tool_invocations == []
 
         error_block = t0.calls[1]["input"]["messages"][-1]["content"][0]
         assert error_block.result.startswith("ERROR: invalid JSON arguments")
         assert "{this is not json" in error_block.result
 
-    async def test_f5_4_timeout_surfaces_as_mcperror(self) -> None:
-        """F5.4: ``Client.call_tool(..., timeout=N)`` raises ``McpError``
-        (code ``-32000``) on timeout, which the loop catches via the F5.2
+    async def test_timeout_surfaces_as_mcperror(self) -> None:
+        """``Client.call_tool(..., timeout=N)`` raises ``McpError``
+        (code ``-32000``) on timeout, which the loop catches via the McpError
         branch. This test pins the timeout-specific flavor: the error code
         and the "timed out" message reach the LLM intact.
         """
@@ -165,15 +156,15 @@ class TestRobustness:
             "agent",
             tool_timeout=0.5,
         )
-        # Loop forwarded our timeout value to call_tool (F5.4 plumbing).
+        # Loop forwarded our timeout value to call_tool.
         assert client.call_tool_invocations[0][2] == 0.5
 
         error_block = t0.calls[1]["input"]["messages"][-1]["content"][0]
         assert error_block.result.startswith("ERROR: MCP protocol error")
         assert "timed out" in error_block.result
 
-    async def test_f5_5_loop_continues_after_error_and_llm_retries(self) -> None:
-        """F5.5: after an error ``ToolResult``, the LLM can retry — ``run_agent``
+    async def test_loop_continues_after_error_and_llm_retries(self) -> None:
+        """After an error ``ToolResult``, the LLM can retry -- ``run_agent``
         keeps the conversation alive.
 
         Scenario pinned:
@@ -224,18 +215,17 @@ class TestRobustness:
         assert last_user["content"][0].name == "add"
         assert last_user["content"][0].result == "5"
 
-    async def test_f5_6_validation_error_surfaces_through_tool_error(self) -> None:
-        """F5.6: a pydantic ``ValidationError`` on the FastMCP server side
-        (invalid tool arguments) becomes an MCP error response which
-        ``Client.call_tool`` re-raises as ``ToolError`` — flowing through our
-        F5.1 branch without needing a separate catch.
+    async def test_validation_error_surfaces_through_tool_error(self) -> None:
+        """A pydantic ``ValidationError`` on the FastMCP server side (invalid
+        tool arguments) becomes an MCP error response which ``Client.call_tool``
+        re-raises as ``ToolError`` -- flowing through the ToolError branch
+        without needing a separate catch.
 
-        This is the most counter-intuitive gate: the Phase 5 guide § 10 says
-        to worry about ``ValidationError`` separately, but the FastMCP SDK
-        source (``fastmcp/client/mixins/tools.py:387-393``) shows the server
-        pre-converts all pydantic validation failures to ``ToolError`` before
-        they reach the client. We pin the contract so a future SDK change
-        that raises ``ValidationError`` directly would fail this test loudly.
+        The FastMCP SDK source (``fastmcp/client/mixins/tools.py:387-393``)
+        shows the server pre-converts all pydantic validation failures to
+        ``ToolError`` before they reach the client. We pin the contract so a
+        future SDK change that raises ``ValidationError`` directly would fail
+        this test loudly.
         """
         tc = _tool_call(call_id="c1")
         t0 = FakeT0(
@@ -263,11 +253,9 @@ class TestRobustness:
         assert error_block.result.startswith("ERROR: tool execution failed:")
         assert "validation error" in error_block.result.lower()
 
-    async def test_f5_7_max_turns_raises_with_correct_limit(self) -> None:
-        """F5.7: when the LLM keeps returning tool calls past ``max_turns``,
-        ``run_agent`` raises ``MaxTurnsExceededError`` — the raise pattern
-        from meta-plan M5.4, not the Phase 5 unified guide's softened
-        "one final inference" proposal.
+    async def test_max_turns_raises_with_correct_limit(self) -> None:
+        """When the LLM keeps returning tool calls past ``max_turns``,
+        ``run_agent`` raises ``MaxTurnsExceededError``.
 
         ``e.max_turns`` carries the configured limit so callers can surface a
         useful error message.
@@ -295,17 +283,16 @@ class TestRobustness:
         else:
             raise AssertionError("expected MaxTurnsExceededError")
 
-    async def test_f5_8_none_description_round_trip(self) -> None:
-        """F5.8: a tool with ``description=None`` flows through ``convert_tools``
+    async def test_none_description_round_trip(self) -> None:
+        """A tool with ``description=None`` flows through ``convert_tools``
         to T0's ``additional_tools`` as ``description=""`` — the loop does not
         crash and T0 receives a well-formed payload.
 
         This pins the end-to-end integration: the MCPTool has ``description=None``,
         ``run_agent`` discovers it, ``convert_tools`` coerces to ``""``, and
         the captured ``additional_tools`` on the first inference reflects the
-        fallback. We do not pin the LLM's response here — that's F5.8's
-        *integration* variant. Mock-side we only guarantee no crash and the
-        correct adapter output.
+        fallback. Mock-side we only guarantee no crash and the correct adapter
+        output.
         """
         none_desc_tool = MCPTool(
             name="no_desc_tool",
@@ -333,8 +320,8 @@ class TestRobustness:
 
 class TestRobustnessEpisode:
     """A small companion to TestRobustness: episode_id is preserved across
-    error recovery (F5.5 supporting invariant). Pinned separately so the
-    F5.5 test above stays focused on the retry mechanism."""
+    error recovery. Pinned separately so the retry test above stays focused
+    on the retry mechanism."""
 
     async def test_episode_id_survives_error_then_success(self) -> None:
         """The error path shares the same episode_id as the successful retry."""

@@ -2,14 +2,13 @@
 """Flake-rate benchmark: run an integration test suite N times and report
 pass/skip/fail rates.
 
-This is a development tool for measuring the effect of reliability mitigations
-(Phase 7 and beyond).  It invokes ``uv run pytest`` as a subprocess and parses
-the summary line.
+This is a development tool for measuring the effect of reliability mitigations.
+It invokes ``uv run pytest`` as a subprocess and parses the summary line.
 
 Usage::
 
-    uv run python scripts/flake_benchmark.py --runs 20 --suite phase5
-    uv run python scripts/flake_benchmark.py --runs 10 -k "test_f5_1"
+    uv run python scripts/flake_benchmark.py --runs 20 --suite robustness
+    uv run python scripts/flake_benchmark.py --runs 10 -k "test_tool_error"
     uv run python scripts/flake_benchmark.py --runs 5 --suite all --verbose
 
 Requires ``docker compose up -d`` (TensorZero gateway + ClickHouse).
@@ -24,12 +23,12 @@ import sys
 from dataclasses import dataclass, field
 
 SUITE_MAP: dict[str, str] = {
-    "phase1": "-m integration -k 'test_f1 or test_tool_choice'",
-    "phase2": "-m integration -k test_f2",
-    "phase3": "-m integration -k test_f3",
-    "phase4": "-m integration -k test_f4",
-    "phase5": "-m integration -k test_f5",
-    "phase6": "-m integration -k test_f6",
+    "adapter": "-m integration -k 'test_adapter or test_tool_choice'",
+    "serialization": "-m integration -k test_serialization",
+    "loop": "-m integration -k test_loop",
+    "multi_server": "-m integration -k test_multi_server",
+    "robustness": "-m integration -k test_robustness",
+    "observability": "-m integration -k test_observability",
     "all": "-m integration",
 }
 

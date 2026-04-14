@@ -1,18 +1,15 @@
-"""Phase 4 — Multi-server composition (unit tests).
+"""Multi-server composition (unit tests).
 
 FastMCP natively supports multi-server composition via ``mount()`` +
-``namespace=...`` — the Phase 4 milestone is **validation** that the Phase 3
-agent loop works transparently over a composed server, because both
-``convert_tools`` and ``execute_tool_calls`` treat ``Tool.name`` /
-``ToolCall.name`` as opaque strings.
+``namespace=...`` -- the adapter and agent loop work transparently over a
+composed server, because both ``convert_tools`` and ``execute_tool_calls``
+treat ``Tool.name`` / ``ToolCall.name`` as opaque strings.
 
-These tests pin F4.1 / F4.2 / F4.4 (local) / F4.6 without touching T0 at all.
-The live-gateway end-to-end gates (F4.3 + F4.4 across T0) live in
-``tests/test_mcp/test_integration.py``. F4.5 (``Client({"mcpServers": …})``)
-is covered by a manual sanity-check snippet in the Phase 4 implementation
-log, per the interview decision.
+These tests validate tool listing, conversion, routing, and namespace
+collision handling without touching T0 at all. The live-gateway end-to-end
+tests live in ``tests/test_mcp/test_integration.py``.
 
-Fixture shape (pins F4.6 — collision):
+Fixture shape (collision test):
 
 * ``server_a`` has tools ``add(a, b) -> int`` and ``greet(name) -> str``
   (returns ``"hello from A: …"``).
@@ -80,11 +77,11 @@ def _build_composed_server() -> FastMCP[None]:
 
 
 class TestMountedNamespacing:
-    """F4.1 + F4.2 + F4.4 (local routing) + F4.6 via the ``mount()`` path."""
+    """Namespaced tool listing, conversion, and local routing via ``mount()``."""
 
     async def test_list_tools_returns_prefixed_names(self) -> None:
-        """F4.1 + F4.2 + F4.6 (count): list_tools returns four distinct entries,
-        each namespaced with ``{a,b}_{original}``."""
+        """list_tools returns four distinct entries, each namespaced with
+        ``{a,b}_{original}``."""
         main = _build_composed_server()
         client: Client[Any] = Client(main)
         async with client:
@@ -94,15 +91,15 @@ class TestMountedNamespacing:
         assert names == {"a_add", "a_greet", "b_subtract", "b_greet"}, (
             f"expected four namespaced tools, got {names!r}"
         )
-        # F4.2 — every listed tool name carries a `{ns}_` prefix.
+        # Every listed tool name carries a `{ns}_` prefix.
         for t in tools:
             assert t.name.startswith(("a_", "b_")), (
                 f"tool {t.name!r} missing namespace prefix"
             )
 
     async def test_convert_tools_passes_namespaced_names_through(self) -> None:
-        """F4.2 adapter bridge: convert_tools preserves the prefixed names
-        verbatim in the T0 payload shape — no renaming, no stripping."""
+        """convert_tools preserves the prefixed names verbatim in the T0
+        payload shape -- no renaming, no stripping."""
         main = _build_composed_server()
         client: Client[Any] = Client(main)
         async with client:
@@ -111,19 +108,18 @@ class TestMountedNamespacing:
         t0_tools = convert_tools(tools)
         names = {t["name"] for t in t0_tools}
         assert names == {"a_add", "a_greet", "b_subtract", "b_greet"}
-        # Shape invariant from Phase 1: each entry has exactly these three keys.
+        # Shape invariant: each entry has exactly these three keys.
         for t0_tool in t0_tools:
             assert set(t0_tool.keys()) == {"name", "description", "parameters"}
             assert t0_tool["parameters"].get("type") == "object"
 
     async def test_call_tool_routes_to_correct_server_via_prefix(self) -> None:
-        """F4.4 local + F4.6 routing: each namespace routes to its own
-        underlying server.
+        """Each namespace routes to its own underlying server.
 
         ``a_add`` and ``b_subtract`` prove cross-namespace routing at the arith
         level; ``a_greet`` vs ``b_greet`` prove that even when both servers
         register a tool with the *same unqualified name*, the prefix resolves
-        the collision — the two implementations return different strings.
+        the collision -- the two implementations return different strings.
         """
         main = _build_composed_server()
         client: Client[Any] = Client(main)
@@ -143,7 +139,7 @@ class TestMountedNamespacing:
             assert greet_a.data == "hello from A: x"
             assert greet_b.data == "hello from B: x"
             assert greet_a.data != greet_b.data, (
-                "F4.6: namespace must resolve the collision — a_greet and "
+                "namespace must resolve the collision -- a_greet and "
                 "b_greet must return the two distinct implementations"
             )
 
@@ -152,14 +148,14 @@ class TestMountedNamespacing:
 
 
 class TestRunAgentOverComposedServer:
-    """M4.4 mock-level: run_agent routes a namespaced ToolCall transparently.
+    """run_agent routes a namespaced ToolCall transparently (mock-level).
 
     We stub out T0 with ``FakeT0`` (emits a forced ``ToolCall(name="a_add", …)``
     on turn 1, then a terminating ``Text`` on turn 2) and pass a **real**
     in-memory FastMCP ``Client`` over the composed server. If the namespaced
     name flows through ``execute_tool_calls → Client.call_tool`` untouched,
     FastMCP's Namespace transform strips the prefix and dispatches to the
-    correct sub-server — and ``run_agent`` never needs to know that
+    correct sub-server -- and ``run_agent`` never needs to know that
     namespaces exist.
     """
 
@@ -203,7 +199,7 @@ class TestRunAgentOverComposedServer:
         # tie it back to the original ToolCall by id/name.
         assert tool_result_block.name == "a_add"
         assert tool_result_block.id == "call-a-add"
-        # Serialized via Phase 2's serialize_tool_result -> json.dumps(5) -> "5"
+        # Serialized via serialize_tool_result -> json.dumps(5) -> "5"
         assert tool_result_block.result == "5"
 
     async def test_run_agent_executes_namespaced_tool_call_on_other_namespace(
@@ -244,8 +240,8 @@ class TestRunAgentOverComposedServer:
     async def test_run_agent_surfaces_colliding_greet_from_correct_namespace(
         self,
     ) -> None:
-        """F4.6 end-to-end pin: when the ToolCall names ``a_greet``, the
-        result reflects server A's implementation, not server B's."""
+        """When the ToolCall names ``a_greet``, the result reflects server A's
+        implementation, not server B's."""
         tc = ToolCall(
             id="call-greet-a",
             raw_arguments='{"name": "world"}',
@@ -275,5 +271,5 @@ class TestRunAgentOverComposedServer:
         # (the str passthrough branch, not json.dumps).
         assert tool_result_block.result == "hello from A: world"
         assert "hello from B" not in tool_result_block.result, (
-            "F4.6: a_greet must not leak B's implementation"
+            "a_greet must not leak B's implementation"
         )

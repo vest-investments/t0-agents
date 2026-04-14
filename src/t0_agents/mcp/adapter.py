@@ -39,20 +39,19 @@ def serialize_tool_result(result: CallToolResult) -> str:
     """Serialize a FastMCP ``CallToolResult`` to the ``str`` T0 expects.
 
     TensorZero's ``ToolResult.result`` is always a string, so every branch of
-    this function must produce one. The strategy follows the meta-plan v3 M2.1
-    and the integration contract §4.3:
+    this function must produce one. The serialization strategy handles each case:
 
-    * ``is_error=True`` (F2.6) → ``"ERROR: "`` + joined ``.content[*].text``
+    * ``is_error=True`` → ``"ERROR: "`` + joined ``.content[*].text``
       (``"Unknown tool error"`` if no textual block is present). Callers should
       invoke ``client.call_tool(..., raise_on_error=False)`` so that FastMCP
       surfaces errors through the result rather than as exceptions.
-    * ``.data: str`` (F2.2) → passthrough.
-    * ``.data`` anything else (F2.2 primitives, F2.3 dict/list, F2.5 complex
-      types via ``default=str``) → ``json.dumps(data, default=str,
+    * ``.data: str`` → passthrough.
+    * ``.data`` anything else (primitives, dicts, lists, and complex types via
+      ``default=str``) → ``json.dumps(data, default=str,
       ensure_ascii=False)``. Booleans become JSON-cased (``"true"`` /
       ``"false"``); ``datetime`` and ``UUID`` are stringified by ``default=str``
       and embedded as JSON strings.
-    * ``.data is None`` (F2.4) → concatenate ``.text`` from every content block
+    * ``.data is None`` → concatenate ``.text`` from every content block
       that exposes it, joined with ``"\\n"``. Non-textual blocks
       (``ImageContent``, ``AudioContent``, ``EmbeddedResource``) are skipped
       intentionally.
@@ -90,8 +89,8 @@ def build_tool_result(tool_call: ToolCall, mcp_result: CallToolResult) -> ToolRe
     We fall back to ``tool_call.raw_name`` — the raw string produced by the
     model, which is always populated — so T0 always receives a string.
     Upstream callers that want to reject hallucinations before execution (see
-    Phase 3's ``execute_tool_calls``) should do so before reaching this
-    function; Phase 2 itself only needs to produce a well-shaped ``ToolResult``.
+    ``execute_tool_calls``) should do so before reaching this function; this
+    function only needs to produce a well-shaped ``ToolResult``.
     """
     return ToolResult(
         name=tool_call.name or tool_call.raw_name,

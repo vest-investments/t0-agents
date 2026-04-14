@@ -1,5 +1,4 @@
-# Phase 0 minimal config: one chat function (`agent`) using Groq's gpt-oss-20b.
-# Later phases will grow this file with more variants and metrics.
+# TensorZero gateway configuration
 
 [gateway]
 bind_address = "0.0.0.0:3000"
@@ -18,7 +17,7 @@ type = "chat"
 type = "chat_completion"
 model = "gpt_oss_20"
 
-# Phase 6: metrics for feedback (F6.2, F6.3)
+# Metrics for feedback
 [metrics.task_success]
 type = "boolean"
 level = "episode"

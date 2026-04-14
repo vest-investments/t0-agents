@@ -6,14 +6,9 @@ straightforwardly. ``run_agent`` does ``cast(ChatInferenceResponse, raw)``
 rather than ``isinstance``-checking, so the duck-typed ``FakeChatResponse``
 satisfies the runtime contract without subclassing the real Rust-backed type.
 
-Phase 3 gates covered here:
-* F3.4 — termination on text-only response (``TestRunAgent``)
-* F3.5 — N tool calls in one response collapse into ONE ``Message(role="user")``
-* F3.6 — message history is ``user → assistant → user(tools) → ...``
-* F3.3 — ``episode_id`` capture + propagation across turns
-* F3.8 — parallel executor preserves order, errors are isolated per call
-* M3.1 error contract — ``ToolError`` / ``McpError`` / ``Exception`` / null args
-  (the unit tests pin the behavior; F5.x in Phase 5 will validate it as a gate)
+Covers: termination behavior, message history shape, episode_id propagation,
+parallel execution, and the full error contract (``ToolError`` / ``McpError`` /
+``Exception`` / null args).
 """
 
 from __future__ import annotations
@@ -73,8 +68,8 @@ def _tool_call(
 ) -> ToolCall:
     """Build a TensorZero ToolCall (mirrors test_adapter._tool_call).
 
-    ``null_args=True`` reproduces the EC-2 case (T0 sets ``arguments=None`` when
-    the LLM emitted invalid JSON; ``raw_arguments`` carries the raw string).
+    ``null_args=True`` reproduces the invalid-name case (T0 sets ``arguments=None``
+    when the LLM emitted invalid JSON; ``raw_arguments`` carries the raw string).
     Otherwise ``arguments`` defaults to ``{"a": 2, "b": 3}`` for the ``add`` tool.
     """
     if null_args:
@@ -185,7 +180,7 @@ class TestHasToolCalls:
 
 
 class TestExecuteToolCalls:
-    """Sequential per M3.1, including the full error contract."""
+    """Sequential tool execution, including the full error contract."""
 
     async def test_happy_path_one_call(self) -> None:
         client = FakeMCPClient(
@@ -218,7 +213,7 @@ class TestExecuteToolCalls:
         assert [r.id for r in results] == ["c1", "c2"]
 
     async def test_arguments_none_returns_error_result(self) -> None:
-        """EC-2: arguments=None means LLM produced invalid JSON. We never call
+        """arguments=None means LLM produced invalid JSON. We never call
         the tool and return an error ToolResult instead."""
         client = FakeMCPClient(call_results={})
         results = await execute_tool_calls(
@@ -232,7 +227,7 @@ class TestExecuteToolCalls:
         assert client.call_tool_invocations == []
 
     async def test_tool_error_caught(self) -> None:
-        """F5.1 (anticipated): ToolError → error ToolResult, loop continues."""
+        """ToolError → error ToolResult, loop continues."""
         client = FakeMCPClient(call_results={"add": ToolError("division by zero")})
         results = await execute_tool_calls(
             cast(Client[Any], client),
@@ -243,7 +238,7 @@ class TestExecuteToolCalls:
         assert "division by zero" in results[0].result
 
     async def test_mcp_error_caught(self) -> None:
-        """F5.2 / F5.4 (anticipated): McpError (incl. timeout -32000) → error result."""
+        """McpError (incl. timeout -32000) → error result."""
         client = FakeMCPClient(call_results={"add": _mcp_error("timed out")})
         results = await execute_tool_calls(
             cast(Client[Any], client),
@@ -283,7 +278,7 @@ class TestExecuteToolCalls:
         assert results[0].name == "hallucinated"
 
     async def test_name_none_with_valid_args_does_not_call_tool(self) -> None:
-        """Hallucinated name + valid args: still an EC-2-like failure. We must
+        """Hallucinated name + valid args: still an invalid-name failure. We must
         never reach call_tool with a None name (would TypeError on the FastMCP
         side); the error is reported back to the LLM via ToolResult.result."""
         client = FakeMCPClient(call_results={})
@@ -311,7 +306,7 @@ class TestExecuteToolCalls:
 
 
 class TestExecuteToolCallsParallel:
-    """M3.7: same contract as sequential, but dispatched via asyncio.gather."""
+    """Parallel executor: same contract as sequential, dispatched via asyncio.gather."""
 
     async def test_runs_concurrently_preserves_input_order(self) -> None:
         """Even when later tools complete first, the result list matches input order."""
@@ -380,7 +375,7 @@ class TestExecuteToolCallsParallel:
 
 class TestRunAgent:
     async def test_terminates_on_text_only_first_turn(self) -> None:
-        """F3.4: response with only Text blocks → loop returns immediately."""
+        """Response with only Text blocks → loop returns immediately."""
         episode = uuid4()
         inference = uuid4()
         t0 = FakeT0([
@@ -434,7 +429,7 @@ class TestRunAgent:
         assert result.response == "real text"
 
     async def test_single_turn_assembles_user_assistant_user_tools_history(self) -> None:
-        """F3.6: after one tool round-trip, the inference history sent to T0
+        """After one tool round-trip, the inference history sent to T0
         must be exactly user → assistant(tool_call) → user(tool_results)."""
         episode = uuid4()
         tc = _tool_call(name="add", call_id="c1")
@@ -463,14 +458,14 @@ class TestRunAgent:
         assert second_messages[1]["role"] == "assistant"
         assert second_messages[1]["content"] == [tc]
         assert second_messages[2]["role"] == "user"
-        # F3.6: exactly one ToolResult, in a user message.
+        # Exactly one ToolResult, in a user message.
         results_block = second_messages[2]["content"]
         assert len(results_block) == 1
         assert results_block[0].name == "add"
         assert results_block[0].id == "c1"
 
     async def test_two_tool_calls_collapse_into_one_user_message(self) -> None:
-        """F3.5: N tool calls in one response → ONE Message(role="user")
+        """N tool calls in one response → ONE Message(role="user")
         carrying N ToolResults. Not N separate user messages."""
         tc_a = _tool_call(name="add", raw_name="add", call_id="a", arguments={"a": 1, "b": 2})
         tc_b = _tool_call(name="greet", raw_name="greet", call_id="b", arguments={"name": "x"})
@@ -500,7 +495,7 @@ class TestRunAgent:
         assert {r.id for r in last["content"]} == {"a", "b"}
 
     async def test_episode_id_propagates_across_turns(self) -> None:
-        """F3.3: episode_id from the first response is forwarded on every later
+        """episode_id from the first response is forwarded on every later
         turn (and the second response's episode_id flows through to subsequent
         calls too — they must all be tied to the same episode)."""
         ep = uuid4()
@@ -522,7 +517,7 @@ class TestRunAgent:
         assert result.episode_id == str(ep)
 
     async def test_caller_supplied_episode_id_is_used_on_first_call(self) -> None:
-        """F3.7 enabler: caller passes a previous episode_id to continue."""
+        """Caller passes a previous episode_id to continue a conversation."""
         prev = str(uuid4())
         new_ep = uuid4()
         t0 = FakeT0([
@@ -582,8 +577,8 @@ class TestRunAgent:
             raise AssertionError("expected MaxTurnsExceededError")
 
     async def test_parallel_tools_flag_uses_parallel_executor(self) -> None:
-        """F3.8 unit: when parallel_tools=True, two tool calls execute via
-        asyncio.gather — proven by reverse completion order matching the
+        """When parallel_tools=True, two tool calls execute via asyncio.gather
+        — proven by reverse completion order matching the
         TestExecuteToolCallsParallel pattern."""
         completion_order: list[str] = []
 

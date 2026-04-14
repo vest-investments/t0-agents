@@ -1,19 +1,9 @@
-"""Phase 6 — Observability and feedback (unit tests).
+"""Observability and feedback (unit tests).
 
-One test per F6.x gate, each with the matching docstring marker so
-``docs/implementation-plan/02-validation-checklist-v3-final.md`` can cite the
-test function by name.
-
-F6.1 validates that ``inference_id`` and ``episode_id`` are captured on every
-turn (already implemented in ``loop.py:221-222``; Phase 6 adds an explicit pin).
-
-F6.2-F6.5 validate that feedback calls (boolean, float, comment, demonstration)
-pass the correct parameters through to ``t0.feedback()``. Since ``run_agent``
-does *not* call feedback — the caller does — these tests exercise the
-mock contract directly.
-
-F6.7 validates that the agent loop emits structured log records for tool calls,
-results, errors, and timestamps (pytest ``caplog`` fixture).
+Tests validate that ``inference_id`` and ``episode_id`` are captured on every
+turn, that feedback calls (boolean, float, comment, demonstration) pass the
+correct parameters through to ``t0.feedback()``, and that the agent loop emits
+structured log records for tool calls, results, errors, and timestamps.
 
 All tests reuse ``FakeT0`` / ``FakeChatResponse`` / ``FakeFeedbackResponse``
 from ``tests._fake_t0`` and the ``FakeMCPClient`` / ``_tool_call`` /
@@ -53,10 +43,10 @@ def _is_uuid(value: str) -> bool:
 
 
 class TestObservabilityIds:
-    """F6.1 — inference_id and episode_id captured from each T0 response."""
+    """inference_id and episode_id captured from each T0 response."""
 
-    async def test_f6_1_ids_captured_on_every_turn(self) -> None:
-        """F6.1: 3-turn flow captures episode_id and one inference_id per turn."""
+    async def test_ids_captured_on_every_turn(self) -> None:
+        """3-turn flow captures episode_id and one inference_id per turn."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(
             content=[_tool_call(name="add", call_id="call-2")],
@@ -90,7 +80,7 @@ class TestObservabilityIds:
 
 
 class TestFeedback:
-    """F6.2-F6.5: Feedback calls pass correct parameters to t0.feedback()."""
+    """Feedback calls pass correct parameters to t0.feedback()."""
 
     async def _run_and_get_result(self) -> tuple[FakeT0, Any]:
         """Run a minimal 1-turn agent loop and return (FakeT0, AgentResult)."""
@@ -106,8 +96,8 @@ class TestFeedback:
         )
         return t0, result
 
-    async def test_f6_2_boolean_feedback_on_episode(self) -> None:
-        """F6.2: Boolean feedback sent to episode_id with task_success metric."""
+    async def test_boolean_feedback_on_episode(self) -> None:
+        """Boolean feedback sent to episode_id with task_success metric."""
         t0, result = await self._run_and_get_result()
 
         resp = await t0.feedback(
@@ -124,8 +114,8 @@ class TestFeedback:
         assert call["episode_id"] == result.episode_id
         assert call["value"] is True
 
-    async def test_f6_2_boolean_feedback_false_value(self) -> None:
-        """F6.2: Boolean feedback also works with value=False."""
+    async def test_boolean_feedback_false_value(self) -> None:
+        """Boolean feedback also works with value=False."""
         t0, result = await self._run_and_get_result()
 
         await t0.feedback(
@@ -136,8 +126,8 @@ class TestFeedback:
 
         assert t0.feedback_calls[0]["value"] is False
 
-    async def test_f6_3_float_feedback_on_inference(self) -> None:
-        """F6.3: Float feedback sent to inference_id with quality_score metric."""
+    async def test_float_feedback_on_inference(self) -> None:
+        """Float feedback sent to inference_id with quality_score metric."""
         t0, result = await self._run_and_get_result()
 
         resp = await t0.feedback(
@@ -152,8 +142,8 @@ class TestFeedback:
         assert call["inference_id"] == result.inference_ids[0]
         assert call["value"] == 8.5
 
-    async def test_f6_4_comment_feedback(self) -> None:
-        """F6.4: Comment feedback (built-in metric, no config needed)."""
+    async def test_comment_feedback(self) -> None:
+        """Comment feedback (built-in metric, no config needed)."""
         t0, result = await self._run_and_get_result()
 
         await t0.feedback(
@@ -167,8 +157,8 @@ class TestFeedback:
         assert call["inference_id"] == result.inference_ids[-1]
         assert call["value"] == "Good tool selection."
 
-    async def test_f6_5_demonstration_feedback(self) -> None:
-        """F6.5: Demonstration feedback (inference_id only, built-in metric)."""
+    async def test_demonstration_feedback(self) -> None:
+        """Demonstration feedback (inference_id only, built-in metric)."""
         t0, result = await self._run_and_get_result()
 
         await t0.feedback(
@@ -187,12 +177,12 @@ class TestFeedback:
 
 
 class TestLogging:
-    """F6.7 — Agent loop log shows tool calls, results, errors, timestamps."""
+    """Agent loop log shows tool calls, results, errors, timestamps."""
 
-    async def test_f6_7_logging_shows_tool_calls_and_results(
+    async def test_logging_shows_tool_calls_and_results(
         self, caplog: Any,
     ) -> None:
-        """F6.7: DEBUG records contain tool name and result for a 2-turn flow."""
+        """DEBUG records contain tool name and result for a 2-turn flow."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])
@@ -212,8 +202,8 @@ class TestLogging:
         # Tool result logged
         assert any("Tool 'add' returned:" in m for m in messages)
 
-    async def test_f6_7_logging_shows_errors(self, caplog: Any) -> None:
-        """F6.7: ERROR records appear when a tool raises ToolError."""
+    async def test_logging_shows_errors(self, caplog: Any) -> None:
+        """ERROR records appear when a tool raises ToolError."""
         r1 = FakeChatResponse(content=[_tool_call(name="fail")])
         r2 = FakeChatResponse(content=[Text(text="sorry")])
         t0 = FakeT0([r1, r2])
@@ -234,8 +224,8 @@ class TestLogging:
         assert len(error_records) >= 1
         assert any("fail" in r.message and "ToolError" in r.message for r in error_records)
 
-    async def test_f6_7_logging_shows_turn_info(self, caplog: Any) -> None:
-        """F6.7: INFO records mention turn number and inference_id."""
+    async def test_logging_shows_turn_info(self, caplog: Any) -> None:
+        """INFO records mention turn number and inference_id."""
         r1 = FakeChatResponse(content=[_tool_call(name="add")])
         r2 = FakeChatResponse(content=[Text(text="5")])
         t0 = FakeT0([r1, r2])

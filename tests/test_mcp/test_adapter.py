@@ -20,7 +20,7 @@ class TestConvertTools:
     async def test_list_tools_returns_valid_structure(
         self, mcp_client: Client[Any]
     ) -> None:
-        """F1.1: list_tools() returns objects with .name, .description, .inputSchema."""
+        """list_tools() returns objects with .name, .description, .inputSchema."""
         async with mcp_client:
             tools = await mcp_client.list_tools()
 
@@ -34,7 +34,7 @@ class TestConvertTools:
     async def test_convert_tools_produces_expected_shape(
         self, mcp_client: Client[Any]
     ) -> None:
-        """F1.2: adapter maps list[Tool] → list[dict] with name/description/parameters."""
+        """Adapter maps list[Tool] → list[dict] with name/description/parameters."""
         async with mcp_client:
             tools = await mcp_client.list_tools()
 
@@ -45,7 +45,7 @@ class TestConvertTools:
             # Exactly these keys — no leaks of FastMCP-specific fields.
             assert set(t0_tool.keys()) == {"name", "description", "parameters"}
             assert isinstance(t0_tool["name"], str) and t0_tool["name"]
-            # After the adapter, description is always a string (F1.6).
+            # After the adapter, description is always a string.
             assert isinstance(t0_tool["description"], str)
             assert isinstance(t0_tool["parameters"], dict)
             assert t0_tool["parameters"].get("type") == "object"
@@ -57,13 +57,13 @@ class TestConvertTools:
     async def test_convert_tools_handles_none_description(
         self, mcp_client: Client[Any]
     ) -> None:
-        """F1.6: tool with description=None at the FastMCP layer becomes ""."""
+        """Tool with description=None at the FastMCP layer becomes ""."""
         async with mcp_client:
             tools = await mcp_client.list_tools()
 
         # FastMCP leaves description as None when there is no docstring and no
         # explicit description= on the decorator. This is the precondition for
-        # F1.6 to be meaningful — if it changes upstream, the adapter is still
+        # this test to be meaningful — if it changes upstream, the adapter is still
         # correct but this assertion anchors the scenario we're testing.
         echo = next(t for t in tools if t.name == "echo_no_docs")
         assert echo.description is None
@@ -73,8 +73,8 @@ class TestConvertTools:
         assert echo_t0["description"] == ""
 
     def test_convert_tools_none_description_on_synthesized_tool(self) -> None:
-        """F5.8 (unit): description=None on a synthesized ``MCPTool`` coerces
-        to ``""`` without depending on live FastMCP behavior.
+        """description=None on a synthesized ``MCPTool`` coerces to ``""``
+        without depending on live FastMCP behavior.
 
         Complements ``test_convert_tools_handles_none_description`` above by
         pinning the adapter's ``or ""`` coercion directly — future FastMCP
@@ -91,11 +91,10 @@ class TestConvertTools:
         assert t0_tools[0]["description"] == ""
 
     def test_convert_tools_empty_description_stays_empty(self) -> None:
-        """F5.8 (unit): description="" stays "" after conversion.
+        """description="" stays "" after conversion.
 
-        The Phase 5 unified guide (§12) proposes using
-        ``"No description available."`` as a fallback for empty descriptions.
-        The integration contract §4.1 and our adapter both use ``""`` instead.
+        The adapter uses ``""`` rather than a placeholder like
+        ``"No description available."`` for empty descriptions.
         This test locks that decision so a future refactor cannot silently
         inject a placeholder string the LLM would see.
         """
@@ -137,49 +136,48 @@ def _make_result(
 
 
 class TestSerializeToolResult:
-    """Phase 2 — F2.2 through F2.6."""
+    """Serialization of FastMCP CallToolResult to string."""
 
     def test_serialize_str_passthrough(self) -> None:
-        """F2.2: .data: str → the same str, untouched."""
+        """.data: str → the same str, untouched."""
         assert serialize_tool_result(_make_result(data="hello")) == "hello"
 
     def test_serialize_int_as_json(self) -> None:
-        """F2.2: .data: int → JSON number. FastMCP unwraps primitives into .data;
-        ``json.dumps(42) == "42"`` matches both the meta-plan and ``str(int)``."""
+        """.data: int → JSON number. FastMCP unwraps primitives into .data;
+        ``json.dumps(42) == "42"`` matches ``str(int)``."""
         assert serialize_tool_result(_make_result(data=42)) == "42"
 
     def test_serialize_float_as_json(self) -> None:
-        """F2.2: .data: float → JSON number. ``json.dumps(3.14) == "3.14"``."""
+        """.data: float → JSON number. ``json.dumps(3.14) == "3.14"``."""
         assert serialize_tool_result(_make_result(data=3.14)) == "3.14"
 
     def test_serialize_bool_as_json(self) -> None:
-        """F2.2: .data: bool → JSON ``"true"`` / ``"false"``.
+        """.data: bool → JSON ``"true"`` / ``"false"``.
 
-        This matches meta-plan v3 M2.1 and integration contract §4.3, which
-        prescribe ``json.dumps(data, default=str)`` for any non-string ``.data``.
+        ``json.dumps(data, default=str)`` is used for any non-string ``.data``.
         ``json.dumps(True) == "true"`` (lowercase), unlike ``str(True) == "True"``.
         """
         assert serialize_tool_result(_make_result(data=True)) == "true"
         assert serialize_tool_result(_make_result(data=False)) == "false"
 
     def test_serialize_dict_as_json(self) -> None:
-        """F2.3: .data: dict → json.dumps(data, default=str, ensure_ascii=False)."""
+        """.data: dict → json.dumps(data, default=str, ensure_ascii=False)."""
         out = serialize_tool_result(_make_result(data={"count": 42, "label": "ok"}))
         assert json.loads(out) == {"count": 42, "label": "ok"}
 
     def test_serialize_list_as_json(self) -> None:
-        """F2.3 (extended): .data: list → json.dumps(...)."""
+        """.data: list → json.dumps(...)."""
         out = serialize_tool_result(_make_result(data=[1, 2, 3]))
         assert json.loads(out) == [1, 2, 3]
 
     def test_serialize_dict_preserves_unicode(self) -> None:
-        """F2.3: ensure_ascii=False preserves non-ASCII characters raw."""
+        """ensure_ascii=False preserves non-ASCII characters raw."""
         out = serialize_tool_result(_make_result(data={"saludo": "hóla ñ"}))
         assert "hóla ñ" in out
         assert json.loads(out) == {"saludo": "hóla ñ"}
 
     def test_serialize_complex_datetime_via_default_str(self) -> None:
-        """F2.5: datetime nested in a dict is serialized via default=str."""
+        """datetime nested in a dict is serialized via default=str."""
         out = serialize_tool_result(
             _make_result(data={"when": datetime(2024, 1, 15, 10, 30, 0)})
         )
@@ -191,32 +189,32 @@ class TestSerializeToolResult:
         assert "2024-01-15" in decoded["when"]
 
     def test_serialize_complex_uuid_via_default_str(self) -> None:
-        """F2.5: UUID nested in a dict is serialized via default=str."""
+        """UUID nested in a dict is serialized via default=str."""
         uid = UUID("550e8400-e29b-41d4-a716-446655440000")
         out = serialize_tool_result(_make_result(data={"id": uid}))
         decoded = json.loads(out)
         assert decoded["id"] == str(uid)
 
     def test_serialize_none_fallback_to_content_text(self) -> None:
-        """F2.4: .data is None → concatenate .content[*].text."""
+        """.data is None → concatenate .content[*].text."""
         out = serialize_tool_result(
             _make_result(data=None, content=[_text("fallback result")])
         )
         assert out == "fallback result"
 
     def test_serialize_none_multiple_content_blocks_joined(self) -> None:
-        """F2.4: multiple TextContent blocks are joined with a newline."""
+        """Multiple TextContent blocks are joined with a newline."""
         out = serialize_tool_result(
             _make_result(data=None, content=[_text("line A"), _text("line B")])
         )
         assert out == "line A\nline B"
 
     def test_serialize_none_no_content_returns_empty(self) -> None:
-        """F2.4 edge: .data is None and no content → empty string."""
+        """.data is None and no content → empty string."""
         assert serialize_tool_result(_make_result(data=None, content=[])) == ""
 
     def test_serialize_is_error_prefix(self) -> None:
-        """F2.6: .is_error=True → 'ERROR: ' + extracted text."""
+        """.is_error=True → 'ERROR: ' + extracted text."""
         out = serialize_tool_result(
             _make_result(is_error=True, content=[_text("division by zero")])
         )
@@ -224,7 +222,7 @@ class TestSerializeToolResult:
         assert "division by zero" in out
 
     def test_serialize_is_error_multiple_blocks(self) -> None:
-        """F2.6: multiple error blocks are joined with a newline under the prefix."""
+        """Multiple error blocks are joined with a newline under the prefix."""
         out = serialize_tool_result(
             _make_result(
                 is_error=True,
@@ -234,14 +232,14 @@ class TestSerializeToolResult:
         assert out == "ERROR: step 1 failed\nstep 2 failed"
 
     def test_serialize_is_error_empty_content(self) -> None:
-        """F2.6 edge: .is_error=True with no textual content → generic message."""
+        """.is_error=True with no textual content → generic message."""
         assert (
             serialize_tool_result(_make_result(is_error=True, content=[]))
             == "ERROR: Unknown tool error"
         )
 
     def test_serialize_is_error_wins_over_data(self) -> None:
-        """F2.6: when is_error=True, .data is ignored (errors come from content)."""
+        """When is_error=True, .data is ignored (errors come from content)."""
         out = serialize_tool_result(
             _make_result(
                 is_error=True,
@@ -254,7 +252,7 @@ class TestSerializeToolResult:
 
 
 class TestBuildToolResult:
-    """Phase 2 — F2.7 (shape of the constructed ToolResult)."""
+    """Shape of the constructed ToolResult."""
 
     def _tool_call(
         self,
@@ -273,14 +271,14 @@ class TestBuildToolResult:
         )
 
     def test_build_preserves_id_and_name(self) -> None:
-        """F2.7 shape: id and name round-trip from ToolCall to ToolResult."""
+        """id and name round-trip from ToolCall to ToolResult."""
         tc = self._tool_call(name="add", call_id="call-xyz")
         tr = build_tool_result(tc, _make_result(data=5))
         assert tr.id == "call-xyz"
         assert tr.name == "add"
 
     def test_build_result_is_serialized_string(self) -> None:
-        """F2.7: the result field is always a string (serialized through
+        """The result field is always a string (serialized through
         serialize_tool_result)."""
         tc = self._tool_call()
         tr = build_tool_result(tc, _make_result(data={"sum": 5}))
@@ -288,7 +286,7 @@ class TestBuildToolResult:
         assert json.loads(tr.result) == {"sum": 5}
 
     def test_build_falls_back_to_raw_name_when_name_is_none(self) -> None:
-        """F2.7 defensive: if the model hallucinated a name (name=None),
+        """Defensive: if the model hallucinated a name (name=None),
         ToolResult.name falls back to raw_name so T0 still receives a str."""
         tc = self._tool_call(name=None, raw_name="hallucinated_tool")
         tr = build_tool_result(tc, _make_result(data="ignored"))

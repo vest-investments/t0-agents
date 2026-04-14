@@ -5,9 +5,8 @@ mypy-strict-clean. ``run_agent`` does ``cast(ChatInferenceResponse, raw)``
 instead of ``isinstance``-checking, so the duck-typed ``FakeChatResponse``
 satisfies the runtime contract without subclassing the real Rust-backed type.
 
-Extracted from ``tests/test_mcp/test_loop.py`` in Phase 4 so that both
-``test_loop.py`` and ``test_multi_server.py`` can share a single source of
-truth for the T0 mock contract.
+Extracted from ``tests/test_mcp/test_loop.py`` so that multiple test modules
+can share a single source of truth for the T0 mock contract.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ class FakeT0:
     The response queue accepts both ``FakeChatResponse`` and ``Exception``
     items.  When the next item is an ``Exception``, ``inference()`` raises
     it — this lets tests simulate ``TensorZeroError`` and other failures
-    at the inference layer (F7.7).
+    at the inference layer.
     """
 
     def __init__(self, responses: list[FakeChatResponse | Exception]) -> None:
