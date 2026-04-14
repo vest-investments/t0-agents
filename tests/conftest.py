@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from fastmcp import Client
+from fastmcp.client.elicitation import ElicitResult
 
 from tests.server import mcp
 
@@ -12,3 +13,42 @@ from tests.server import mcp
 async def mcp_client() -> Client[Any]:
     """FastMCP client connected to the shared test server."""
     return Client(mcp)
+
+
+# --- Elicitation handler fixtures -------------------------------------------
+
+
+@pytest.fixture
+def auto_approve_handler() -> Any:
+    """Handler that accepts all elicitation requests with empty content."""
+
+    async def handler(
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> ElicitResult[Any]:
+        return ElicitResult(action="accept", content={})
+
+    return handler
+
+
+@pytest.fixture
+def auto_decline_handler() -> Any:
+    """Handler that declines all elicitation requests."""
+
+    async def handler(
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> ElicitResult[Any]:
+        return ElicitResult(action="decline")
+
+    return handler
+
+
+@pytest.fixture
+async def elicitation_client(auto_approve_handler: Any) -> Client[Any]:
+    """Client with auto-approve elicitation handler."""
+    return Client(mcp, elicitation_handler=auto_approve_handler)

@@ -110,3 +110,33 @@ async def collect_info(ctx: Context) -> str:
     if result.action == "accept":
         return f"Hello {result.data.name}, age {result.data.age}"
     return "Info not provided"
+
+
+@mcp.tool
+async def multi_step(ctx: Context) -> str:
+    """Two sequential elicitations: name then confirmation."""
+    r1 = await ctx.elicit("Step 1: name?", response_type=str)
+    if r1.action != "accept":
+        return "Cancelled at step 1"
+    r2 = await ctx.elicit("Step 2: confirm?", response_type=None)
+    if r2.action != "accept":
+        return "Rejected at step 2"
+    return f"Completed: {r1.data}"
+
+
+@mcp.tool
+async def pick_priority(ctx: Context) -> str:
+    """Constrained choice from low/medium/high."""
+    result = await ctx.elicit("Priority?", response_type=["low", "medium", "high"])
+    if result.action == "accept":
+        return f"Priority: {result.data}"
+    return "No priority set"
+
+
+@mcp.tool
+async def ask_age(ctx: Context) -> str:
+    """Scalar int elicitation."""
+    result = await ctx.elicit("Age?", response_type=int)
+    if result.action == "accept":
+        return f"Age: {result.data}"
+    return "Age not provided"
