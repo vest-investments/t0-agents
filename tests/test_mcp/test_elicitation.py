@@ -1,19 +1,25 @@
-"""Smoke tests for MCP Elicitation (Phase 0).
+"""Elicitation test suite (Phase 0 smoke tests + Phase 1 comprehensive coverage).
 
-Validates that FastMCP's elicitation mechanism works end-to-end with
-the in-memory test transport — no production code changes needed.
+Phase 0 — smoke tests validating the in-memory transport works with elicitation.
+Phase 1 — pattern coverage, error paths, and timeout behavior.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.exceptions import ToolError
+from mcp import McpError
+from tensorzero import ToolCall
 
+from t0_agents.mcp import execute_tool_calls
 from tests.server import mcp
+
+# --- Phase 0: Smoke tests ---------------------------------------------------
 
 
 async def test_smoke_approve() -> None:
@@ -74,3 +80,199 @@ async def test_smoke_no_handler() -> None:
     async with Client(mcp) as client:
         with pytest.raises(ToolError, match="Elicitation not supported"):
             await client.call_tool("approve_action", {"action": "deploy"})
+
+
+# --- Phase 1: Elicitation pattern tests (P1.3-P1.11) ------------------------
+
+
+class TestElicitationPatterns:
+    """Comprehensive coverage of elicitation patterns."""
+
+    async def test_approval_accept(self, auto_approve_handler: Any) -> None:
+        """P1.3 — Handler accepts, tool proceeds."""
+        async with Client(mcp, elicitation_handler=auto_approve_handler) as client:
+            result = await client.call_tool("approve_action", {"action": "deploy"})
+            assert result.data == "Approved: deploy"
+
+    async def test_approval_decline(self, auto_decline_handler: Any) -> None:
+        """P1.4 — Handler declines, tool returns rejection."""
+        async with Client(mcp, elicitation_handler=auto_decline_handler) as client:
+            result = await client.call_tool("approve_action", {"action": "deploy"})
+            assert result.data == "Rejected: deploy"
+
+    async def test_approval_cancel(self) -> None:
+        """P1.5 — Handler cancels, tool handles gracefully (same else branch)."""
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            return ElicitResult(action="cancel")
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("approve_action", {"action": "deploy"})
+            assert result.data == "Rejected: deploy"
+
+    async def test_scalar_str(self) -> None:
+        """P1.6 — Scalar string flows through multi_step's first elicitation."""
+        call_count = 0
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # "Step 1: name?"
+                return ElicitResult(action="accept", content={"value": "Alice"})
+            return ElicitResult(action="accept", content={})  # "Step 2: confirm?"
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("multi_step", {})
+            assert result.data == "Completed: Alice"
+
+    async def test_scalar_int(self) -> None:
+        """P1.7 — Scalar int via ask_age tool."""
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            return ElicitResult(action="accept", content={"value": 42})
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("ask_age", {})
+            assert result.data == "Age: 42"
+
+    async def test_structured_input(self) -> None:
+        """P1.8 — Structured dataclass input via collect_info."""
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            return ElicitResult(action="accept", content={"name": "Bob", "age": 25})
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("collect_info", {})
+            assert result.data == "Hello Bob, age 25"
+
+    async def test_constrained_choice(self) -> None:
+        """P1.9 — Constrained choice via pick_priority."""
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            return ElicitResult(action="accept", content={"value": "medium"})
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("pick_priority", {})
+            assert result.data == "Priority: medium"
+
+    async def test_multi_turn_accept(self) -> None:
+        """P1.10 — Both elicitations accepted in multi_step."""
+        call_count = 0
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # "Step 1: name?"
+                return ElicitResult(action="accept", content={"value": "Alice"})
+            return ElicitResult(action="accept", content={})  # "Step 2: confirm?"
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("multi_step", {})
+            assert result.data == "Completed: Alice"
+            assert call_count == 2
+
+    async def test_multi_turn_cancel(self) -> None:
+        """P1.11 — First elicitation accepted, second declined."""
+        call_count = 0
+
+        async def handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # "Step 1: name?"
+                return ElicitResult(action="accept", content={"value": "Alice"})
+            return ElicitResult(action="decline")  # "Step 2: confirm?" declined
+
+        async with Client(mcp, elicitation_handler=handler) as client:
+            result = await client.call_tool("multi_step", {})
+            assert result.data == "Rejected at step 2"
+
+
+# --- Phase 1: Error path tests (P1.12-P1.14) --------------------------------
+
+
+class TestElicitationErrors:
+    """Error handling for elicitation edge cases."""
+
+    async def test_no_handler_raises_tool_error(self) -> None:
+        """P1.12 — No handler → ToolError (not McpError, per Phase 0 finding)."""
+        async with Client(mcp) as client:
+            with pytest.raises(ToolError, match="Elicitation not supported"):
+                await client.call_tool("approve_action", {"action": "deploy"})
+
+    async def test_no_handler_through_execute(self) -> None:
+        """P1.13 — No handler through execute_tool_calls → error ToolResult.
+
+        The ToolError is caught by _execute_single_tool_call's ``except ToolError``
+        branch (loop.py line 114), producing a ToolResult with the error message.
+        """
+        tc = ToolCall(
+            id="c1",
+            raw_arguments='{"action": "deploy"}',
+            raw_name="approve_action",
+            arguments={"action": "deploy"},
+            name="approve_action",
+        )
+        async with Client(mcp) as client:
+            results = await execute_tool_calls(client, [tc], timeout=30.0)
+            assert len(results) == 1
+            assert results[0].name == "approve_action"
+            assert results[0].result.startswith("ERROR: tool execution failed:")
+            assert "Elicitation not supported" in results[0].result
+
+    async def test_timeout_covers_elicitation(self) -> None:
+        """P1.14 — Timeout wraps elicitation roundtrip.
+
+        A slow handler (simulating human wait time) causes the call_tool
+        timeout to fire, proving that the timeout covers the full
+        elicitation exchange — not just the tool execution.
+        """
+
+        async def slow_handler(
+            message: str,
+            response_type: type[Any] | None,
+            params: Any,
+            context: Any,
+        ) -> ElicitResult[Any]:
+            await asyncio.sleep(2.0)
+            return ElicitResult(action="accept", content={})
+
+        async with Client(mcp, elicitation_handler=slow_handler) as client:
+            with pytest.raises((McpError, TimeoutError)):
+                await client.call_tool(
+                    "approve_action", {"action": "deploy"}, timeout=0.1
+                )
