@@ -16,6 +16,13 @@
 > `openai/gpt-oss-20b` via TensorZero — some items are specific to that
 > model/provider, others are model-agnostic loop-engineering concerns.
 
+> **Post-Phase-6 update (2026-04-14).** Phase 6 shipped structured
+> logging (F6.7), feedback integration (F6.2-F6.5), and ClickHouse
+> dynamic-tools verification (F6.6). Several items below are now
+> partially or fully addressed; these are marked with a **[P6]** tag
+> and a note on what remains. New items discovered during Phase 6 are
+> marked **[NEW-P6]**.
+
 ---
 
 ## 1. Observed failure modes
@@ -95,12 +102,22 @@ multi-step flows. A more nuanced signature would accept a callable
 `tool_choice: Callable[[list[Message]], T0ToolChoice | None]`, but
 that's harder to document.
 
-### 2.4 Handle Thought-only responses (addresses O2)
+### 2.4 Handle Thought-only responses (addresses O2) — **[P6] now observable, still unhandled**
 
 Today, if the terminating turn contains only `Thought` blocks (common
 for reasoning models), `result.response` is `""`. Downstream callers
 that do `if not result.response: raise` will crash; callers that don't
 check get a silent empty reply.
+
+**Phase 6 update:** with structured logging (F6.7), a Thought-only
+response now produces a visible `"Agent loop completed: turns=N"` INFO
+log followed by an empty-string response. The failure mode is now
+*discoverable* in logs but still *unhandled* in code. The text
+extraction at `loop.py:247-249` filters `isinstance(b, Text) and
+b.text` — `Thought` blocks with `text: Optional[str]` and
+`summary: Optional[List[ThoughtSummaryBlock]]` fall through silently.
+This makes § 2.4 higher priority: the user sees the empty response in
+logs, expects the library to have handled it.
 
 **Proposal:** when the final turn has no `Text` blocks but has one or
 more `Thought` blocks, either:
@@ -210,35 +227,92 @@ agreed on tag names (e.g. `"slow"`, `"expensive"`, `"interactive"`).
 
 ## 5. Observability / debugging improvements
 
-Phase 6 (Observability) is already in the meta-plan; these are
-additional items specifically targeting tool-selection debuggability.
+Phase 6 shipped structured logging (F6.7) and feedback integration.
+The items below reflect what remains after Phase 6.
 
-### 5.1 Per-turn structured log (addresses all)
+### 5.1 Per-turn structured log (addresses all) — **[P6] mostly done**
 
-Today `run_agent` emits no log lines. When a test flakes against the
-real server, the only evidence is the final exception. Adding a
-structured log like:
+Phase 6 added `logging.getLogger("t0_agents.mcp.loop")` with:
+
+- INFO: loop start (function, max_turns, tool count), per-turn
+  summary (inference_id, episode_id), loop completion (turns, episode_id),
+  max-turns warning.
+- DEBUG: tool dispatch count per turn, tool execution (name + args),
+  tool result (name + truncated result).
+- ERROR: tool failures (ToolError, McpError, unexpected Exception),
+  name-not-in-schema, invalid-JSON-arguments.
+
+**Three micro-gaps remain** from the original sketch:
+
+1. **`duration_ms` per tool call.** The sketch showed `duration_ms=432`
+   but Phase 6 does not time `call_tool()`. Adding
+   `time.monotonic()` around the call in `_execute_single_tool_call`
+   is ~4 lines and feeds § 2.5 (timeout-per-tool) and § 4.2 (latency
+   metadata). **High value, low effort.**
+
+2. **Tool names in the dispatch log.** Phase 6 logs the *count*
+   (`"dispatching 3 tool call(s)"`) but not *which* tools. Changing to
+   `"dispatching 3 tool call(s): [add, greet, search]"` costs one
+   list comprehension.
+
+3. **Content-type breakdown per turn.** The per-turn INFO log shows
+   `inference_id` and `episode_id` but not what the response contains.
+   Logging `content_types=[Thought, ToolCall, ToolCall]` would let
+   O2 (Thought-only) and O5 (tool-selection skipped) be diagnosed
+   from INFO logs alone, without needing DEBUG.
+
+### 5.2 Capture `Thought` content (addresses O2) — **[P6] insertion point known**
+
+Phase 6 revealed the exact location: `loop.py:246`
+(`if not has_tool_calls(response.content)`) is where Thought blocks
+disappear. `Thought.text: Optional[str]` and
+`Thought.summary: Optional[List[ThoughtSummaryBlock]]` both carry
+useful content. A single `logger.debug()` call there completes this
+item. Now trivial — the infrastructure is in place.
+
+### 5.3 Raw `ToolCall.raw_name` / `raw_arguments` always logged (addresses O1) — **[P6] partially done**
+
+Phase 6 logs `block.raw_name` in the `name is None` error branch and
+`block.raw_arguments` in the `arguments is None` branch. But in the
+*normal* flow path, only `block.name` and `block.arguments` are
+logged — the raw forms are invisible when things work. The original
+intent was a corpus of *all* raw data, not just error cases.
+
+### 5.4 ClickHouse trace utility (addresses all) — **[NEW-P6]**
+
+Phase 6's F6.6 test proved we can query ClickHouse's HTTP API via
+`httpx` with minimal code (credentials in `docker-compose.yml`, the
+`tensorzero` database is always present). A debugging script or
+library function that takes an `episode_id` and prints the full
+conversation trace would be a force multiplier for diagnosing O1-O6:
 
 ```
-turn=1 inference_id=... tools=[add,greet,...] tool_call=execute_sql args={...} duration_ms=432
-turn=1 tool_result len=145 is_error=False preview="[{"rows":..."
-turn=2 inference_id=... response_content_blocks=[Thought,Text] response_text="..."
+scripts/trace_episode.py <episode_id>
+→ Turn 1: inference=abc  input=[user:"compute 2+3"]  output=[ToolCall:add]
+  Turn 1: tool_result=add  result="5"  is_error=False
+  Turn 2: inference=def  input=[user:tools]  output=[Text:"The sum is 5"]
+  Feedback: task_success=True (episode)  quality_score=9.0 (inference=abc)
 ```
 
-would make post-hoc diagnosis trivial. `logging` module at INFO level
-with a `t0_agents.loop` logger so callers can silence.
+Data sources per turn: `ChatInference.input` (JSON), `.output`
+(JSON), `.dynamic_tools` (Array), plus join to
+`BooleanMetricFeedback` / `FloatMetricFeedback` / `CommentFeedback`
+/ `DemonstrationFeedback` on `target_id`.
 
-### 5.2 Capture `Thought` content (addresses O2)
+### 5.5 Document `dryrun` constraint for feedback automation — **[NEW-P6]**
 
-When `response.content` includes `Thought` blocks (reasoning models),
-log them at DEBUG. They often reveal *why* the model chose (or skipped)
-a tool call.
+Phase 6 discovered (divergence #1 in `phase-6-implementation-log.md`)
+that `t0.feedback()` validates the target ID exists in ClickHouse.
+When inference uses `dryrun=True`, the IDs are generated but never
+stored, so feedback calls fail with `"Episode ID: ... does not exist"`
+(HTTP 400).
 
-### 5.3 Raw `ToolCall.raw_name` / `raw_arguments` always logged (addresses O1)
-
-When we reject a malformed tool call (§ 2.1), log the raw strings so
-we can build a corpus of real failure cases — useful for model-switch
-benchmarking (§ 3.3) and for prompt engineering (§ 3.1).
+This is a **design constraint** for any future feedback automation
+(§ 7.2's pluggable callback, auto-success-feedback after loop
+completion, etc.): feedback cannot work when `dryrun=True`.
+Document this explicitly in `run_agent`'s docstring and in the
+FastMCP integration guide. If § 7.2 ships, the callback must either
+skip feedback when `dryrun=True` or raise a clear error.
 
 ## 6. Testing / harness improvements
 
@@ -294,29 +368,52 @@ decide whether to continue the loop. Returning `False` short-circuits
 to a clean `AgentResult` with whatever text the model has produced so
 far.
 
+**[P6] constraint:** any callback that sends feedback must respect the
+`dryrun` constraint discovered in Phase 6 — `t0.feedback()` validates
+the target ID exists in ClickHouse, so feedback calls fail when
+`dryrun=True`. The callback must either skip feedback when `dryrun` is
+set, or the loop must propagate the `dryrun` flag to the callback. See
+§ 5.5 for details.
+
 ---
 
 ## Priority ordering
 
-When Phase 7 is actually scoped for implementation, the order below
-maximizes reliability-per-effort based on what we saw:
+**Updated after Phase 6 (2026-04-14).** Items marked [DONE] have been
+fully delivered; items marked [MICRO] are residual gaps from a mostly-
+done item.
 
 1. **§ 3.1 system prompt engineering** — highest leverage, low code
-   change, affects O3/O4/O5 directly.
-2. **§ 5.1 structured per-turn logging** — prerequisite for measuring
-   everything else.
-3. **§ 6.1 flake-rate benchmark harness** — required to evaluate § 3.3
-   without shipping it blindly.
-4. **§ 3.3 model replacement evaluation** — likely kills O1/O2 at the
-   source.
-5. **§ 2.1 `<|channel|>` error capture** — last-resort mitigation if
-   we have to stay on Groq gpt-oss-20b.
-6. **§ 2.4 Thought-only handling** — small caller-facing fix with
-   outsized debuggability value.
-7. **§ 7.1/§ 7.2 caller-facing API additions** — after all loop-side
-   mitigations have landed.
-8. **§ 2.2 / § 2.3 / § 2.5** — incremental loop-layer knobs. Tackle
-   only if the benchmark harness shows they close a gap.
+   change, affects O3/O4/O5 directly. (unchanged)
+2. ~~§ 5.1 structured per-turn logging~~ — **[DONE]** by Phase 6
+   (F6.7). Three micro-gaps remain:
+   - **[MICRO] § 5.1a** `duration_ms` per tool call (~4 lines).
+   - **[MICRO] § 5.1b** tool names in dispatch log (1 list comp).
+   - **[MICRO] § 5.1c** content-type breakdown per turn (1 log line).
+3. **§ 5.2 Thought content at DEBUG** — now trivial: one
+   `logger.debug()` at `loop.py:246`, exact insertion point known
+   from Phase 6.
+4. **§ 2.4 Thought-only handling** — *promoted* from #6 to #4.
+   Phase 6 logging made O2 discoverable but still unhandled;
+   users who enable logging will see the empty response and expect
+   the library to have a fallback.
+5. **§ 6.1 flake-rate benchmark harness** — required to evaluate
+   § 3.3 without shipping it blindly. (unchanged)
+6. **§ 3.3 model replacement evaluation** — likely kills O1/O2 at the
+   source. (unchanged)
+7. **§ 5.4 ClickHouse trace utility** — **[NEW-P6]** debugging
+   multiplier, builds on F6.6 infrastructure (`httpx` + ClickHouse
+   HTTP API). Low effort, high payoff for diagnosing O1-O6.
+8. **§ 2.1 `<|channel|>` error capture** — last-resort mitigation if
+   we have to stay on Groq gpt-oss-20b. (unchanged)
+9. **§ 7.1/§ 7.2 caller-facing API additions** — after all loop-side
+   mitigations have landed. § 7.2 now carries a `dryrun` constraint
+   from Phase 6 (see § 5.5).
+10. **§ 5.5 document `dryrun` constraint** — **[NEW-P6]** small but
+    load-bearing for any future feedback automation.
+11. **§ 2.2 / § 2.3 / § 2.5** — incremental loop-layer knobs. Tackle
+    only if the benchmark harness shows they close a gap. § 2.5 now
+    has a path via § 5.1a timing data.
 
-Items not listed above (§ 3.2, § 4.1, § 4.2, § 5.2, § 5.3, § 6.2) are
-worth doing but their effort-to-impact ratio is worse than the top 8.
+Items not listed above (§ 3.2, § 4.1, § 4.2, § 5.3, § 6.2) are
+worth doing but their effort-to-impact ratio is worse than the top 11.
