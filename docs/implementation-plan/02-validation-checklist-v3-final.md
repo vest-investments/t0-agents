@@ -123,6 +123,30 @@ for future optimization.
 
 ---
 
+---
+
+## Phase 7: Harness Engineering
+
+- [x] **F7.1** — `duration_ms` is logged at DEBUG for each tool call — pinned by `TestLoggingMicrogaps::test_f7_1_duration_ms_logged_for_tool_call` + `::test_f7_1_duration_ms_logged_on_error`
+- [x] **F7.2** — Tool names appear in the dispatch log — pinned by `TestLoggingMicrogaps::test_f7_2_tool_names_in_dispatch_log`
+- [x] **F7.3** — Content-type breakdown logged at INFO per turn — pinned by `TestLoggingMicrogaps::test_f7_3_content_type_breakdown_logged`
+- [x] **F7.4** — `Thought.text` logged at DEBUG on Thought-only terminal turn — pinned by `TestLoggingMicrogaps::test_f7_4_thought_text_logged_at_debug`
+- [x] **F7.5** — Thought-only responses produce `response_source="thought"` on `AgentResult` — pinned by `TestThoughtOnlyHandling::test_f7_5_thought_only_response_extracted` + `::test_f7_5_text_takes_priority_over_thought` + `::test_f7_5_multiple_thoughts_joined` + `::test_f7_5_thought_none_text_returns_empty`
+- [x] **F7.6** — `tool_choice` parameter forwarded to every `t0.inference()` call — pinned by `TestToolChoice::test_f7_6_tool_choice_forwarded_every_turn` + `::test_f7_6_tool_choice_none_by_default` + `::test_f7_6_tool_choice_literal_values`
+- [x] **F7.7** — Recoverable `TensorZeroError` with "not in request.tools" caught in-loop; corrective message injected; loop continues — pinned by `TestRecoverableInferenceError::test_f7_7_malformed_tool_name_caught_and_retried` + `::test_f7_7_corrective_message_lists_available_tools` + `::test_f7_7_non_matching_error_re_raised` + `::test_f7_7_non_400_error_re_raised` + `::test_f7_7_sentinel_inference_id_recorded`
+- [x] **F7.8** — `run_agent` docstring documents the `dryrun` + feedback constraint — pinned by `TestDryrunDocstring::test_f7_8_dryrun_feedback_constraint_documented`
+- [x] **F7.9** — `scripts/flake_benchmark.py` runs and reports pass/skip/fail rates — manual verification
+- [x] **F7.10** — `scripts/trace_episode.py` outputs a human-readable episode trace — manual verification (requires `docker compose up`)
+- [x] **F7.11** — `examples/02_system_prompt/` demonstrates system prompt wiring with TensorZero — manual review
+- [x] **F7.12** — All pre-existing tests pass (no regressions) — 102 unit tests passed, `ruff check` clean, `mypy` clean
+
+### Success criterion
+The agent loop is more observable (logging gaps closed, Thought blocks handled),
+more resilient (malformed tool names caught in-loop, tool_choice exposed),
+and better instrumented (flake benchmark, ClickHouse trace utility).
+
+---
+
 ## Progress summary
 
 | Phase | Items | Completed | Status |
@@ -134,4 +158,5 @@ for future optimization.
 | 4 — Multi-Server | 6 | 6 / 6 | ✅ |
 | 5 — Robustness | 8 | 8 / 8 | ✅ |
 | 6 — Observability | 7 | 7 / 7 | ✅ |
-| **Total** | **49** | **_ / 49** | ⬜ |
+| 7 — Harness Engineering | 12 | 12 / 12 | ✅ |
+| **Total** | **61** | **_ / 61** | ⬜ |
