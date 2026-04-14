@@ -39,10 +39,16 @@ class FakeFeedbackResponse:
 
 
 class FakeT0:
-    """Records every ``inference()`` and ``feedback()`` call."""
+    """Records every ``inference()`` and ``feedback()`` call.
 
-    def __init__(self, responses: list[FakeChatResponse]) -> None:
-        self._queue = list(responses)
+    The response queue accepts both ``FakeChatResponse`` and ``Exception``
+    items.  When the next item is an ``Exception``, ``inference()`` raises
+    it — this lets tests simulate ``TensorZeroError`` and other failures
+    at the inference layer (F7.7).
+    """
+
+    def __init__(self, responses: list[FakeChatResponse | Exception]) -> None:
+        self._queue: list[FakeChatResponse | Exception] = list(responses)
         self.calls: list[dict[str, Any]] = []
         self.feedback_calls: list[dict[str, Any]] = []
 
@@ -62,7 +68,10 @@ class FakeT0:
         self.calls.append(captured)
         if not self._queue:
             raise AssertionError("FakeT0 ran out of canned responses")
-        return self._queue.pop(0)
+        item = self._queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     async def feedback(self, **kwargs: Any) -> FakeFeedbackResponse:
         self.feedback_calls.append(dict(kwargs))
