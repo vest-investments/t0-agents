@@ -56,7 +56,7 @@ async def run_agent(
 | `function_name` | `str` | *(required)* | Name of the chat function defined in `tensorzero.toml`. |
 | `episode_id` | `str \| None` | `None` | Existing episode ID to continue. `None` starts a fresh episode; TensorZero allocates one and the loop captures it. |
 | `max_turns` | `int` | `20` | Maximum inference turns before aborting with `MaxTurnsExceededError`. |
-| `tool_timeout` | `float` | `30.0` | Per-tool-call timeout in seconds, forwarded to `Client.call_tool(timeout=...)`. Only applies to foreground execution. |
+| `tool_timeout` | `float` | `30.0` | Per-tool-call timeout in seconds, forwarded to `Client.call_tool(timeout=...)`. Covers the **entire** `call_tool()` duration including any [elicitation](elicitation.md) wait time. When using elicitation-enabled tools, set to `None` (no timeout) or a generous value (e.g., `300.0`). Only applies to foreground execution. |
 | `parallel_tools` | `bool` | `False` | If `True`, dispatches tool calls concurrently via `asyncio.gather`. Otherwise sequential. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
@@ -86,6 +86,11 @@ IDs, turn count, and response source.
   and retries the loop turn.
 - Tool results from all tool calls in a single turn are bundled into one user
   message (not one message per result).
+- When elicitation-enabled tools are in use (tools that call `ctx.elicit()`
+  server-side), `tool_timeout` must account for human response time. The
+  default `30.0` seconds may not be sufficient. Use `tool_timeout=None` to
+  disable or `tool_timeout=300.0` for a generous budget. See
+  [Elicitation](elicitation.md) for details.
 
 ### Examples
 

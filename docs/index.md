@@ -12,6 +12,7 @@ t0-agents is a Python library that connects [TensorZero](https://www.tensorzero.
 
 - [Getting Started](getting-started.md) -- Install, adapter quickstart (no Docker), agent loop quickstart (Docker required)
 - [Concepts](concepts.md) -- Architecture, agent loop lifecycle, data flow, design decisions
+- [Elicitation](elicitation.md) -- Human-in-the-loop approval and structured input via MCP Elicitation
 
 ## Public API
 

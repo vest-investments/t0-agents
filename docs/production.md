@@ -4,12 +4,12 @@
 
 FastMCP supports multiple transports. Choose based on your deployment model.
 
-| Transport | Use case | Code | Notes |
-|-----------|----------|------|-------|
-| In-memory | Development, testing | `Client(mcp_instance)` | No network overhead. Server runs in-process. |
-| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | Recommended by FastMCP docs. Stateless HTTP. |
-| SSE | Legacy compatibility | `Client("http://host:8000/sse")` | Older MCP protocol. Use HTTP Streamable for new deployments. |
-| stdio | Subprocess model | `Client(StdioTransport("python", "server.py"))` | Server runs as child process. Useful for local tool servers. |
+| Transport | Use case | Code | Elicitation | Notes |
+|-----------|----------|------|-------------|-------|
+| In-memory | Development, testing | `Client(mcp_instance)` | Yes | No network overhead. Server runs in-process. |
+| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | No | Stateless HTTP breaks bidirectional elicitation sessions. |
+| SSE | Production, legacy | `Client("http://host:8000/sse")` | Yes | Stateful session supports elicitation. |
+| stdio | Subprocess model | `Client(StdioTransport("python", "server.py"))` | Yes | Server runs as child process. |
 
 ## External MCP servers
 
@@ -104,6 +104,28 @@ result = await run_agent(
     parallel_tools=True,  # Concurrent tool execution
 )
 ```
+
+## Elicitation timeout
+
+When tools use [elicitation](elicitation.md) (human-in-the-loop prompts),
+the default `tool_timeout=30.0` may be too short. The timeout wraps the
+entire `call_tool()` duration, including human response time.
+
+| Scenario | Recommended `tool_timeout` |
+|----------|--------------------------|
+| No elicitation-capable tools | `30.0` (default) |
+| Mixed tools (some with elicitation) | `300.0` (5 minutes) |
+| All tools may elicit | `None` (disable timeout) |
+
+```python
+# Generous timeout for mixed workloads
+result = await run_agent(
+    t0, client, query, "agent",
+    tool_timeout=300.0,
+)
+```
+
+See [Elicitation](elicitation.md) for the full guide.
 
 Note: the `parallel_tool_calls` inference parameter (which tells the LLM to emit multiple tool calls in one turn) is a separate provider-level concern. Only some providers support it (OpenAI, Fireworks AI). Even without provider support for parallel emission, the LLM may still emit multiple tool calls in one turn, which `parallel_tools=True` will execute concurrently.
 

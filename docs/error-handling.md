@@ -29,6 +29,22 @@ error string in the `result` field. The five cases:
 | `McpError` | MCP protocol error or transport timeout (code `-32000`) | `"ERROR: MCP protocol error (possibly timeout): <e>"` | MCP transport layer failure, including per-call timeout expiry |
 | Unexpected exception | Any other exception type | `"ERROR: unexpected <ExceptionType>: <e>"` | Catch-all safety net so a single misbehaving tool cannot crash the loop |
 
+**Elicitation not supported.** When a tool calls `ctx.elicit()` but the
+Client was created without an `elicitation_handler`, the server raises
+`McpError(-32600, "Elicitation not supported")`. FastMCP's tool dispatch
+catches this, wraps it into `CallToolResult(isError=True)`, and returns it
+as a normal `tools/call` response. The client raises `ToolError` (because
+`raise_on_error=True` by default), which hits the `ToolError` branch in the
+table above. The resulting `ToolResult` message is:
+`"ERROR: tool execution failed: Elicitation not supported"`.
+
+This means the existing error contract handles the no-handler case
+automatically -- no new error types or catch branches are needed. The LLM
+sees the error on its next turn and can explain the failure or try a
+different approach. To enable elicitation, pass an `elicitation_handler`
+when creating the Client. See [Elicitation](elicitation.md) for the handler
+interface.
+
 In all five cases, the tool call is not retried automatically at the
 execution level. The error string becomes the `ToolResult.result` that the
 LLM reads on its next turn. The LLM may then choose to retry the tool call,
