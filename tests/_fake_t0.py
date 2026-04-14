@@ -31,12 +31,20 @@ class FakeChatResponse:
     inference_id: UUID = field(default_factory=uuid4)
 
 
+@dataclass
+class FakeFeedbackResponse:
+    """Duck-typed stand-in for ``tensorzero.types.FeedbackResponse``."""
+
+    feedback_id: UUID = field(default_factory=uuid4)
+
+
 class FakeT0:
-    """Records every ``inference()`` call and returns canned responses in order."""
+    """Records every ``inference()`` and ``feedback()`` call."""
 
     def __init__(self, responses: list[FakeChatResponse]) -> None:
         self._queue = list(responses)
         self.calls: list[dict[str, Any]] = []
+        self.feedback_calls: list[dict[str, Any]] = []
 
     async def inference(self, **kwargs: Any) -> FakeChatResponse:
         # Snapshot mutable args at call time. Real T0 serializes the request
@@ -55,3 +63,7 @@ class FakeT0:
         if not self._queue:
             raise AssertionError("FakeT0 ran out of canned responses")
         return self._queue.pop(0)
+
+    async def feedback(self, **kwargs: Any) -> FakeFeedbackResponse:
+        self.feedback_calls.append(dict(kwargs))
+        return FakeFeedbackResponse()
