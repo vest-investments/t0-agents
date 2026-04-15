@@ -476,3 +476,86 @@ result = await run_agent(
     tool_choice={"specific": "get_weather"},
 )
 ```
+
+---
+
+## Reference Elicitation Handlers
+
+Pre-built handlers for use with `Client(mcp, elicitation_handler=...)`. Intended
+for **testing and prototyping** — production applications should implement a
+handler that presents prompts to the user via their UI.
+
+Available from `t0_agents.mcp`:
+
+```python
+from t0_agents.mcp import auto_approve_handler, auto_decline_handler
+```
+
+### `auto_approve_handler`
+
+Approves binary approval requests (`response_type is None`) and declines
+structured input requests (where data would need to be provided).
+
+#### Signature
+
+```python
+async def auto_approve_handler(
+    message: str,
+    response_type: type[Any] | None,
+    params: Any,
+    context: Any,
+) -> ElicitResult[Any]:
+```
+
+#### Behavior
+
+| `response_type` | Action | Content |
+|-----------------|--------|---------|
+| `None` (approval) | `"accept"` | `{}` |
+| Anything else | `"decline"` | — |
+
+#### Example
+
+```python
+from fastmcp import Client
+from t0_agents.mcp import auto_approve_handler
+
+client = Client(mcp_server, elicitation_handler=auto_approve_handler)
+async with client:
+    result = await client.call_tool("delete_files", {"files": ["a.txt"]})
+```
+
+### `auto_decline_handler`
+
+Declines all elicitation requests unconditionally. Useful for verifying that
+tools handle rejection gracefully.
+
+#### Signature
+
+```python
+async def auto_decline_handler(
+    message: str,
+    response_type: type[Any] | None,
+    params: Any,
+    context: Any,
+) -> ElicitResult[Any]:
+```
+
+#### Behavior
+
+Always returns `ElicitResult(action="decline")` regardless of `response_type`.
+
+#### Example
+
+```python
+from fastmcp import Client
+from t0_agents.mcp import auto_decline_handler
+
+client = Client(mcp_server, elicitation_handler=auto_decline_handler)
+async with client:
+    result = await client.call_tool("delete_files", {"files": ["a.txt"]})
+    # Tool receives decline and handles gracefully
+```
+
+See [Elicitation](elicitation.md) for the full handler interface, content
+format guide, and server-side patterns.
