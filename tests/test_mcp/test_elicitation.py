@@ -1,7 +1,8 @@
-"""Elicitation test suite (Phase 0 smoke tests + Phase 1 comprehensive coverage).
+"""Elicitation test suite.
 
 Phase 0 — smoke tests validating the in-memory transport works with elicitation.
 Phase 1 — pattern coverage, error paths, and timeout behavior.
+Phase 4 — reference handler unit tests.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from mcp import McpError
 from tensorzero import ToolCall
 
 from t0_agents.mcp import execute_tool_calls
+from t0_agents.mcp.elicitation import auto_approve_handler, auto_decline_handler
 from tests.server import mcp
 
 # --- Phase 0: Smoke tests ---------------------------------------------------
@@ -276,3 +278,43 @@ class TestElicitationErrors:
                 await client.call_tool(
                     "approve_action", {"action": "deploy"}, timeout=0.1
                 )
+
+
+# --- Phase 4: Reference handler tests ----------------------------------------
+
+
+class TestReferenceHandlers:
+    """Unit tests for library reference handlers in t0_agents.mcp.elicitation."""
+
+    async def test_auto_approve_accepts_approval(self) -> None:
+        """auto_approve_handler accepts binary approval (response_type=None)."""
+        result = await auto_approve_handler("Approve?", None, None, None)
+        assert result.action == "accept"
+        assert result.content == {}
+
+    async def test_auto_approve_declines_structured(self) -> None:
+        """auto_approve_handler declines when structured input is requested."""
+        result = await auto_approve_handler("Details?", str, None, None)
+        assert result.action == "decline"
+
+    async def test_auto_decline_declines_approval(self) -> None:
+        """auto_decline_handler declines binary approval."""
+        result = await auto_decline_handler("Approve?", None, None, None)
+        assert result.action == "decline"
+
+    async def test_auto_decline_declines_structured(self) -> None:
+        """auto_decline_handler declines structured input."""
+        result = await auto_decline_handler("Details?", str, None, None)
+        assert result.action == "decline"
+
+    async def test_auto_approve_works_with_client(self) -> None:
+        """auto_approve_handler works when passed to Client for binary approval."""
+        async with Client(mcp, elicitation_handler=auto_approve_handler) as client:
+            result = await client.call_tool("approve_action", {"action": "deploy"})
+            assert result.data == "Approved: deploy"
+
+    async def test_auto_decline_works_with_client(self) -> None:
+        """auto_decline_handler works when passed to Client."""
+        async with Client(mcp, elicitation_handler=auto_decline_handler) as client:
+            result = await client.call_tool("approve_action", {"action": "deploy"})
+            assert result.data == "Rejected: deploy"
