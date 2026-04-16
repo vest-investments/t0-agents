@@ -7,17 +7,23 @@ Requires the ``serve`` extra::
 Public surface:
 
 * :func:`create_app` — wrap an :class:`~t0_agents.core.Agent` in a
-  FastAPI app with ``/chat``, ``/feedback``, ``/health``, ``/info``.
+  FastAPI app with ``/chat``, ``/feedback``, ``/health``, ``/info``
+  (plus ``/chat/stream`` SSE and ``/chat/ws`` WebSocket when
+  ``streaming=True``).
 * :func:`mount_agent` — mount a per-agent sub-app under a URL prefix
   on an existing FastAPI application.
 * :class:`SessionFactory` — advanced: per-session ``(Client, Agent)``
-  builder that ``create_app`` instantiates internally.  Exposed so
-  integration tests and custom wiring can reuse the same contract.
+  builder that ``create_app`` instantiates internally.
+* :class:`SessionProvider` Protocol + :class:`CallableSessionProvider`
+  adapter — per-session tool-Client construction hook.  Implement
+  :class:`SessionProvider` directly for auth / multi-tenant routing /
+  bespoke elicitation wiring; use the ``client_factory`` /
+  ``elicitation_client_factory`` kwargs on :func:`create_app` for the
+  simple path.  See ``docs/streaming.md``.
 
-Elicitation is not piped to live callers in Phase D (the serving layer
-defaults to auto-decline via
-:class:`~t0_agents.core.ElicitationForwarder`); Phase E ships the SSE /
-WebSocket pipe.
+Streaming elicitation (Phase E, ``streaming=True``) flows through
+:class:`~t0_agents.core.ElicitationForwarder`; the non-streaming Phase D
+HTTP surface continues to decline elicitation by default.
 """
 
 from __future__ import annotations
@@ -33,11 +39,20 @@ except ImportError as exc:  # pragma: no cover - depends on install profile
     ) from exc
 
 from t0_agents.serve.app import create_app, mount_agent
-from t0_agents.serve.session import ClientFactory, SessionFactory
+from t0_agents.serve.session import (
+    CallableSessionProvider,
+    ClientFactory,
+    ElicitationClientFactory,
+    SessionFactory,
+    SessionProvider,
+)
 
 __all__ = [
+    "CallableSessionProvider",
     "ClientFactory",
+    "ElicitationClientFactory",
     "SessionFactory",
+    "SessionProvider",
     "create_app",
     "mount_agent",
 ]
