@@ -25,6 +25,9 @@ dependencies = [
     "tensorzero>=2026.4.0",
 ]
 
+[project.optional-dependencies]
+memory-sqlite = ["aiosqlite>=0.20.0"]
+
 [project.urls]
 Repository = "https://github.com/sproutfi/t0-agents"
 
