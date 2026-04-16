@@ -194,3 +194,34 @@ class TestGuardedToolProvider:
         await wrapped.call_tool("x", {})
         # At least one "pass" entry recorded by the wrapper.
         assert any(e.kind == "pass" for e in log)
+
+    async def test_after_tool_activations_logged(self) -> None:
+        """Each successful ``after_tool`` activation appends a pass entry."""
+        inner = FakeMCPClient(call_results={"x": _ok_result()})
+        log: list[GuardrailLogEntry] = []
+        wrapped = GuardedToolProvider(
+            cast(ToolProvider, inner),
+            [cast(Guardrail, _PassGuardrail())],
+            _ctx(),
+            log,
+        )
+        await wrapped.call_tool("x", {})
+        after_tool_entries = [e for e in log if e.hook == "after_tool"]
+        assert len(after_tool_entries) == 1
+        entry = after_tool_entries[0]
+        assert entry.kind == "pass"
+        assert entry.guardrail_name == "pass"
+        assert entry.tool_name == "x"
+
+    async def test_after_tool_not_logged_when_hook_raises(self) -> None:
+        """``after_tool`` audit entry only appears when the hook succeeds."""
+        inner = FakeMCPClient(call_results={"x": _ok_result()})
+        log: list[GuardrailLogEntry] = []
+        wrapped = GuardedToolProvider(
+            cast(ToolProvider, inner),
+            [cast(Guardrail, _AfterToolBoom())],
+            _ctx(),
+            log,
+        )
+        await wrapped.call_tool("x", {})
+        assert [e for e in log if e.hook == "after_tool"] == []

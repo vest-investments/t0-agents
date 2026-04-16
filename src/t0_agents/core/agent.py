@@ -169,27 +169,10 @@ class Agent:
             )
             on_inference = _make_cost_tracker(guard_ctx)
 
-            for guardrail in self._config.guardrails:
-                try:
-                    await guardrail.before_run(guard_ctx)
-                except T0AgentsFatalError:
-                    raise
-                except Exception:
-                    logger.exception(
-                        "Guardrail %r before_run raised a non-fatal exception; "
-                        "continuing",
-                        guardrail.name,
-                    )
-                else:
-                    guard_log.append(
-                        GuardrailLogEntry(
-                            guardrail_name=guardrail.name,
-                            hook="before_run",
-                            kind="pass",
-                        )
-                    )
-
         # --- 4. Delegate to run_agent ---
+        # ``before_run`` lives inside the try so a fatal abort still runs
+        # ``after_run`` via the finally block — docs/guardrails.md promises
+        # after_run fires even when GuardrailBlockedError propagates.
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
@@ -197,6 +180,27 @@ class Agent:
         )
         result: AgentResult | None = None
         try:
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.before_run(guard_ctx)
+                    except T0AgentsFatalError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r before_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="before_run",
+                                kind="pass",
+                            )
+                        )
+
             result = await run_agent(
                 self._t0,
                 cast(Client[Any], tool_provider),
@@ -213,8 +217,6 @@ class Agent:
                 on_inference=on_inference,
                 **extra_kwargs,
             )
-            if guard_ctx is not None:
-                result.guardrail_log = list(guard_log)
         finally:
             if guard_ctx is not None:
                 for guardrail in self._config.guardrails:
@@ -226,6 +228,16 @@ class Agent:
                             "continuing",
                             guardrail.name,
                         )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="after_run",
+                                kind="pass",
+                            )
+                        )
+                if result is not None:
+                    result.guardrail_log = list(guard_log)
 
         # Control reaches here only when ``run_agent`` returned normally
         # (no exception propagated past the ``try``).  ``result`` is always

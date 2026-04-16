@@ -139,6 +139,15 @@ class GuardedToolProvider:
                     "continuing",
                     guardrail.name,
                 )
+            else:
+                self._log.append(
+                    GuardrailLogEntry(
+                        guardrail_name=guardrail.name,
+                        hook="after_tool",
+                        kind="pass",
+                        tool_name=tool_call.name,
+                    )
+                )
 
 
 def _synthetic_tool_call(name: str, arguments: dict[str, Any]) -> ToolCall:

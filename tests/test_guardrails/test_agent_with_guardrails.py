@@ -252,6 +252,71 @@ class TestAfterRunWithFatalAbort:
         # after_run fires even though run_agent aborted.
         assert seen == [None]
 
+    async def test_after_run_called_when_before_run_raises_fatal(self) -> None:
+        """Fatal in ``before_run`` must not skip ``after_run``."""
+        seen: list[Any] = []
+
+        class _BeforeRunFatal:
+            name = "before_run_fatal"
+
+            async def before_run(self, ctx: Any) -> None:
+                raise GuardrailBlockedError("stop at start")
+
+            async def before_tool(self, ctx: Any, tc: Any) -> str | None:
+                return None
+
+            async def after_tool(
+                self, ctx: Any, tc: Any, result_str: str
+            ) -> None: ...
+
+            async def after_run(self, ctx: Any, result: Any) -> None:
+                seen.append(result)
+
+        t0 = FakeT0([])
+        client = FakeMCPClient()
+        agent = _make_agent(
+            t0=t0,
+            client=client,
+            guardrails=[cast(Any, _BeforeRunFatal())],
+        )
+
+        with pytest.raises(GuardrailBlockedError, match="stop at start"):
+            await agent.run("go")
+        assert seen == [None]
+
+
+class TestAfterRunLogging:
+    async def test_after_run_activations_land_on_result(self) -> None:
+        """``after_run`` pass entries must be visible on ``result.guardrail_log``."""
+
+        class _Noop:
+            name = "noop"
+
+            async def before_run(self, ctx: Any) -> None: ...
+
+            async def before_tool(self, ctx: Any, tc: Any) -> str | None:
+                return None
+
+            async def after_tool(
+                self, ctx: Any, tc: Any, result_str: str
+            ) -> None: ...
+
+            async def after_run(self, ctx: Any, result: Any) -> None: ...
+
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="done")])])
+        client = FakeMCPClient()
+        agent = _make_agent(
+            t0=t0,
+            client=client,
+            guardrails=[cast(Any, _Noop())],
+        )
+
+        result = await agent.run("go")
+        after_run_entries = [e for e in result.guardrail_log if e.hook == "after_run"]
+        assert len(after_run_entries) == 1
+        assert after_run_entries[0].guardrail_name == "noop"
+        assert after_run_entries[0].kind == "pass"
+
 
 class TestContextIsolationAcrossRuns:
     async def test_counter_resets_between_runs(self) -> None:
