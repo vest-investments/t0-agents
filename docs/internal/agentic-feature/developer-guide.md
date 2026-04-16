@@ -139,6 +139,10 @@ Exported from `from t0_agents import …`
 | `GuardrailBlockedError` | exception | `core/exceptions.py` | Hard-abort from a guardrail (`T0AgentsFatalError` subclass). |
 | `run_agent` | async fn | `mcp/loop.py` | The full agent loop: discover → infer → execute → repeat. |
 | `ToolChoice` | re-export | from `tensorzero` | Directive type for forcing / suppressing tool use. |
+| `AgentEvent` | TypeAlias | `stream/events.py` | Union of every streaming-event variant (see below). Phase E. |
+| `TextDeltaEvent`, `TextEndEvent`, `ToolCallDeltaEvent`, `ToolCallEvent`, `ToolResultEvent`, `ThoughtDeltaEvent`, `ThoughtEvent`, `TurnEndEvent`, `DoneEvent`, `ErrorEvent` | dataclasses | `stream/events.py` | Variants of `AgentEvent`. Delta events carry a stable `id` correlation key per contract §3.3. Phase E. |
+| `StreamingAgentLoop` | class | `stream/runner.py` | Streaming analogue of `run_agent`. Phase E. |
+| `TurnStreamAssembler` | class | `stream/assembler.py` | Folds T0 chunks into `AgentEvent` s. Phase E. |
 
 ### Agent methods
 
@@ -147,6 +151,13 @@ Exported from `from t0_agents import …`
   can front-load readiness probes by subclassing `Agent`.  Added in
   Phase D; no TensorZero SDK health API exists as of v2026.4.0, so no
   active probe is shipped by default.
+- `Agent.stream(user_message, *, episode_id=None)` — streaming
+  analogue of `run`.  Yields `AgentEvent` s (delta events, tool-call
+  events, tool-result events) and always terminates with
+  `DoneEvent(result=AgentResult(...))`.  Memory + guardrail scaffolding
+  fires identically to `run`; `after_run` hooks fire inside the
+  generator's `finally` block so the final `DoneEvent`'s
+  `result.guardrail_log` is populated.  Added in Phase E.
 
 ### Mid-level symbols (`t0_agents.mcp`)
 
@@ -204,10 +215,13 @@ so the error is actionable rather than a raw `ImportError`.
 
 | Symbol | Kind | File:line | Summary |
 | --- | --- | --- | --- |
-| `create_app` | fn | `serve/app.py` | Wrap an `Agent` in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info`. |
-| `mount_agent` | fn | `serve/app.py` | Mount a per-agent sub-app under a URL prefix on an existing FastAPI app. |
-| `SessionFactory` | class | `serve/session.py` | Builds `(Client, Agent)` pairs whose lifetime is a caller's session (one HTTP request in Phase D, one SSE stream / WS conn in Phase E). |
+| `create_app` | fn | `serve/app.py` | Wrap an `Agent` in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info`.  `streaming=True` additionally mounts `GET /chat/stream` (SSE) and `WS /chat/ws`. |
+| `mount_agent` | fn | `serve/app.py` | Mount a per-agent sub-app under a URL prefix on an existing FastAPI app.  Accepts the same kwargs as `create_app` including `streaming=`. |
+| `SessionFactory` | class | `serve/session.py` | Builds `(Client, Agent)` pairs whose lifetime is a caller's session (one HTTP request in Phase D, one SSE stream / WS conn in Phase E).  Three-way XOR: `session_provider` / `client_factory` / `shared_tool_provider`. |
+| `SessionProvider` | Protocol | `serve/session.py` | Per-session `Client`-construction hook. Implement directly for auth / multi-tenant / bespoke WS wiring. Phase E. |
+| `CallableSessionProvider` | class | `serve/session.py` | Default `SessionProvider` adapter built from a `client_factory` (and optional `elicitation_client_factory`). Phase E. |
 | `ClientFactory` | TypeAlias | `serve/session.py` | `Callable[[], Client[Any]]` — 0-arg callable that mints a fresh `fastmcp.Client`. |
+| `ElicitationClientFactory` | TypeAlias | `serve/session.py` | `Callable[[ElicitationHandler], Client[Any]]` — 1-arg callable that mints a fresh `Client` wired with a per-connection elicitation handler. Phase E. |
 
 The public route contract lives in Pydantic models at
 `src/t0_agents/serve/protocol.py`:
@@ -1019,6 +1033,31 @@ guides cover these in more depth; the list here is for quick orientation.
   default; override in a subclass to front-load checks before the
   first request.  Called by `t0_agents.serve.build_lifespan` during
   FastAPI startup.
+- **Streaming.** `Agent.stream(message, *, episode_id=None)` yields
+  `AgentEvent` s and terminates with a `DoneEvent`.  Memory + guardrail
+  scaffolding fires identically to `run`; the non-streaming `run` is
+  byte-identical to Phase D.  See [`../streaming.md`](../streaming.md).
+- **Streaming serving knobs.** `create_app(agent, *, streaming=True,
+  session_provider=None, elicitation_client_factory=None, ...)`:
+  - `streaming=True` mounts `GET /chat/stream` (SSE) and `WS /chat/ws`.
+  - `session_provider=SessionProvider` is the advanced per-session
+    `Client` construction hook (auth, multi-tenant, custom WS wiring).
+  - `elicitation_client_factory: Callable[[ElicitationHandler],
+    Client[Any]]` is the simple WS wiring slot — additive to
+    `client_factory`.  Raises `ConfigurationError` when passed without
+    `client_factory`.
+- **Per-session elicitation (WS).** `ElicitationForwarder(*,
+  on_request=None, default_timeout=300.0)` bridges FastMCP's inline
+  elicitation handler to a remote channel via a Future keyed by
+  `elicitation_id`.  `on_request=None` preserves Phase D auto-decline.
+  `resolve(elicitation_id, payload)` drains one Future from an
+  incoming remote frame; `cancel_all(action="decline")` drains every
+  pending Future on WS disconnect.
+- **WS wire protocol.** `from t0_agents.serve.ws_protocol import
+  WSUserMessage, WSElicitationResponse, WSEventFrame,
+  WSElicitationRequest, WSErrorFrame` — Pydantic v2 envelopes for
+  every incoming and outgoing frame (full shape in
+  [`../streaming.md`](../streaming.md)).
 
 ### What is **not** caller-controlled today
 
