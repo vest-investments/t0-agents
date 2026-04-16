@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] — Unreleased
+
+### Added
+
+- **Memory subsystem** (`from t0_agents.memory import InMemoryMemory, SqliteMemory,
+  MemoryProvider`) — repository-pattern memory for `Agent`. Configure
+  `AgentConfig(memory=SqliteMemory("./db"))` to persist state across
+  `.run()` calls. Milestone M2: Stateful Agent.
+- **`InMemoryMemory`** — ephemeral, dict-backed backend for tests and
+  single-process apps.
+- **`SqliteMemory`** — persistent backend behind the `[memory-sqlite]`
+  extra (`pip install 't0-agents[memory-sqlite]'`).
+- **`MemoryProvider` Protocol** — implement `load`, `save`, `search` to
+  bring your own backend (Redis, Postgres, etc.).
+- **`memory_strategy`** field on `AgentConfig` — controls how memory is
+  injected into the prompt (`"auto"`, `"prepended_message"`,
+  `"system_template"`).
+- `system_arguments` keyword argument on `run_agent` — forwards template
+  arguments to `input.system.arguments` in TensorZero inference calls.
+- Example `examples/09_memory/` demonstrating cross-session memory.
+- Public documentation at `docs/memory.md`.
+
 ## [0.2.0] — Unreleased
 
 ### Added

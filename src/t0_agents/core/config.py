@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from tensorzero import ToolChoice
 
 from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.types import MemoryProvider
+
+_VALID_MEMORY_STRATEGIES = frozenset({"auto", "system_template", "prepended_message"})
 
 
 @dataclass(slots=True)
@@ -28,6 +32,13 @@ class AgentConfig:
             or ``{"specific": "<name>"}``).
         tags: Free-form tags forwarded to ``t0.inference()`` for observability.
         namespace: TensorZero namespace for experimentation routing.
+        memory: Optional :class:`MemoryProvider` backend. When set, the
+            ``Agent`` hydrates memory before each run and persists after.
+        memory_strategy: How memory context is injected into the prompt.
+            ``"auto"`` resolves to ``"prepended_message"`` (the strategy
+            that requires no TOML variant support).
+            ``"system_template"`` passes memory via ``input.system.arguments``.
+            ``"prepended_message"`` prepends a text summary to the user message.
     """
 
     # Identity
@@ -45,6 +56,10 @@ class AgentConfig:
     tags: dict[str, str] | None = field(default=None)
     namespace: str | None = None
 
+    # Memory (Phase B)
+    memory: MemoryProvider | None = None
+    memory_strategy: Literal["auto", "system_template", "prepended_message"] = "auto"
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ConfigurationError("AgentConfig.name must be a non-empty string")
@@ -60,4 +75,9 @@ class AgentConfig:
             raise ConfigurationError(
                 f"AgentConfig.tool_timeout must be positive or None, "
                 f"got {self.tool_timeout}"
+            )
+        if self.memory_strategy not in _VALID_MEMORY_STRATEGIES:
+            raise ConfigurationError(
+                f"AgentConfig.memory_strategy must be one of "
+                f"{sorted(_VALID_MEMORY_STRATEGIES)}, got {self.memory_strategy!r}"
             )
