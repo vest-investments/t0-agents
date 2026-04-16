@@ -2,6 +2,10 @@
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.elicitation_forwarder import (
+    ElicitationForwarder,
+    ElicitationRequest,
+)
 from t0_agents.core.exceptions import (
     ConfigurationError,
     GuardrailBlockedError,
@@ -22,6 +26,8 @@ __all__ = [
     "AgentConfig",
     "AgentResult",
     "ConfigurationError",
+    "ElicitationForwarder",
+    "ElicitationRequest",
     "Guardrail",
     "GuardrailBlockedError",
     "GuardrailLogEntry",
