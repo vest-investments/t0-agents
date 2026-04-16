@@ -1,20 +1,29 @@
 """Top-level FastAPI factory — one-line wrap of an ``Agent`` in HTTP.
 
 The public surface is :func:`create_app` and :func:`mount_agent`.  Both
-take an existing :class:`Agent` plus *exactly one* of:
+take an existing :class:`Agent` plus *exactly one* of three modes:
 
-* ``client_factory`` — a zero-arg callable that builds a fresh
-  ``fastmcp.Client`` for every session.  Default, per-session mode.
+* ``session_provider`` — caller-supplied :class:`SessionProvider` (Phase E
+  advanced path: auth, multi-tenant routing, telemetry, custom WS
+  elicitation wiring).  See ``docs/streaming.md``.
+* ``client_factory`` — zero-arg callable that builds a fresh
+  ``fastmcp.Client`` for every session.  Default Phase D path.  Optionally
+  paired with ``elicitation_client_factory`` (Phase E) for streaming WS.
 * ``share_client=True`` — reuse ``agent.tool_provider`` across every
-  session.  Safe only when no tool uses elicitation; the caller owns
-  the ``Client``'s open/close lifecycle.
+  session.  Safe only when no tool uses elicitation; the caller owns the
+  ``Client``'s open/close lifecycle.
 
-Supplying both or neither raises :class:`ConfigurationError` at startup
-— no silent ambiguity.
+Supplying the wrong combination raises :class:`ConfigurationError` at
+startup — no silent ambiguity.
 
 ``deployment_label``, when set, is merged into ``AgentConfig.tags`` as
 ``t0_agents.deployment=<label>`` before any session is built, so every
 inference record carries it automatically (resolved T0 Q3).
+
+``streaming=True`` additionally mounts the SSE (``GET /chat/stream``) and
+WebSocket (``WS /chat/ws``) routes from
+:mod:`t0_agents.serve.streaming_routes`.  Default is ``False`` so Phase D
+deployments stay byte-identical.
 """
 
 from __future__ import annotations
@@ -28,26 +37,38 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.serve.lifespan import build_lifespan
 from t0_agents.serve.routes import build_router
-from t0_agents.serve.session import ClientFactory, SessionFactory
+from t0_agents.serve.session import (
+    ClientFactory,
+    ElicitationClientFactory,
+    SessionFactory,
+    SessionProvider,
+)
 
 
 def create_app(
     agent: Agent,
     *,
+    session_provider: SessionProvider | None = None,
     client_factory: ClientFactory | None = None,
+    elicitation_client_factory: ElicitationClientFactory | None = None,
     share_client: bool = False,
     deployment_label: str | None = None,
+    streaming: bool = False,
 ) -> FastAPI:
     """Build a ``FastAPI`` application that serves ``agent`` over HTTP.
 
-    Raises :class:`ConfigurationError` when neither or both of
-    ``client_factory`` / ``share_client`` is supplied.  Does not start
-    the server — the caller runs ``uvicorn`` (or an equivalent ASGI
-    runner) against the returned app.
+    Raises :class:`ConfigurationError` when the mode is ambiguous (zero or
+    more than one of ``session_provider`` / ``client_factory`` /
+    ``share_client``) or when ``elicitation_client_factory`` is passed
+    without ``client_factory``.  Does not start the server — the caller
+    runs ``uvicorn`` (or an equivalent ASGI runner) against the returned
+    app.
     """
     session_factory = _build_session_factory(
         agent=agent,
+        session_provider=session_provider,
         client_factory=client_factory,
+        elicitation_client_factory=elicitation_client_factory,
         share_client=share_client,
         deployment_label=deployment_label,
     )
@@ -59,6 +80,11 @@ def create_app(
     app.state.t0 = agent._t0
     app.state.session_factory = session_factory
     app.include_router(build_router(session_factory=session_factory, t0=agent._t0))
+    if streaming:
+        # Local import so create_app() stays cheap when streaming is off.
+        from t0_agents.serve.streaming_routes import build_streaming_router
+
+        app.include_router(build_streaming_router(session_factory=session_factory))
     return app
 
 
@@ -67,22 +93,28 @@ def mount_agent(
     agent: Agent,
     prefix: str,
     *,
+    session_provider: SessionProvider | None = None,
     client_factory: ClientFactory | None = None,
+    elicitation_client_factory: ElicitationClientFactory | None = None,
     share_client: bool = False,
     deployment_label: str | None = None,
+    streaming: bool = False,
 ) -> None:
     """Mount a per-agent sub-app under ``prefix`` on an existing FastAPI app.
 
     Each mounted sub-app runs its own lifespan and its own
     :class:`SessionFactory`, so a process can expose several agents
     (e.g. ``/mobile``, ``/analytics``) against the same gateway with
-    different ``deployment_label`` values.
+    different ``deployment_label`` values.  ``streaming`` is per-sub-app.
     """
     sub_app = create_app(
         agent,
+        session_provider=session_provider,
         client_factory=client_factory,
+        elicitation_client_factory=elicitation_client_factory,
         share_client=share_client,
         deployment_label=deployment_label,
+        streaming=streaming,
     )
     parent.mount(prefix, sub_app)
 
@@ -95,25 +127,48 @@ def mount_agent(
 def _build_session_factory(
     *,
     agent: Agent,
+    session_provider: SessionProvider | None,
     client_factory: ClientFactory | None,
+    elicitation_client_factory: ElicitationClientFactory | None,
     share_client: bool,
     deployment_label: str | None,
 ) -> SessionFactory:
-    if client_factory is None and not share_client:
+    modes = sum(
+        [
+            session_provider is not None,
+            client_factory is not None,
+            share_client,
+        ]
+    )
+    if modes != 1:
+        if client_factory is not None and share_client:
+            raise ConfigurationError(
+                "create_app: 'client_factory=...' and 'share_client=True' are "
+                "mutually exclusive. Pick the per-session factory OR reuse the "
+                "agent's existing tool_provider.",
+            )
         raise ConfigurationError(
-            "create_app requires either 'client_factory=...' (per-session mode) "
-            "or 'share_client=True' (reuse the agent's tool_provider). "
-            "See docs/serving.md for the trade-offs.",
+            "create_app requires exactly one of 'session_provider=...', "
+            "'client_factory=...' (per-session mode), or 'share_client=True' "
+            "(reuse the agent's tool_provider). "
+            "These options are mutually exclusive. See docs/serving.md.",
         )
-    if client_factory is not None and share_client:
+    if elicitation_client_factory is not None and client_factory is None:
         raise ConfigurationError(
-            "create_app: 'client_factory=...' and 'share_client=True' are "
-            "mutually exclusive. Pick the per-session factory OR reuse the "
-            "agent's existing tool_provider.",
+            "create_app: 'elicitation_client_factory' is additive to "
+            "'client_factory'. For advanced WS wiring use a "
+            "'session_provider' instead.",
         )
 
     base_config = _apply_deployment_label(agent.config, deployment_label)
 
+    if session_provider is not None:
+        return SessionFactory(
+            base_config=base_config,
+            t0=agent._t0,
+            session_provider=session_provider,
+            agent_class=type(agent),
+        )
     if share_client:
         return SessionFactory(
             base_config=base_config,
@@ -121,11 +176,12 @@ def _build_session_factory(
             shared_tool_provider=agent._tool_provider,
             agent_class=type(agent),
         )
-    assert client_factory is not None  # guarded above
+    assert client_factory is not None  # guarded by XOR above
     return SessionFactory(
         base_config=base_config,
         t0=agent._t0,
         client_factory=client_factory,
+        elicitation_client_factory=elicitation_client_factory,
         agent_class=type(agent),
     )
 
