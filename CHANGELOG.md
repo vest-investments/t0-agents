@@ -4,6 +4,96 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — Unreleased
+
+### Added
+
+- **Streaming primitives** (`from t0_agents import AgentEvent, DoneEvent,
+  TextDeltaEvent, TextEndEvent, ToolCallDeltaEvent, ToolCallEvent,
+  ToolResultEvent, ThoughtDeltaEvent, ThoughtEvent, TurnEndEvent,
+  ErrorEvent, StreamingAgentLoop, TurnStreamAssembler`) — typed event
+  union emitted by `Agent.stream()`.  Milestone M5: Live Agent.  Ships
+  from the base distribution (no extra needed).
+- **`Agent.stream(message, *, episode_id=None) -> AsyncIterator[AgentEvent]`**
+  — streaming analogue of `Agent.run`.  Same memory / guardrail
+  scaffolding; the terminal event is always `DoneEvent(result=...)`
+  carrying a full `AgentResult`.  Non-streaming `Agent.run` is
+  byte-identical to Phase D.
+- **`TurnStreamAssembler`** — folds `AsyncIterator[ChatChunk]` from
+  `AsyncTensorZeroGateway.inference(stream=True)` into an
+  `AsyncIterator[AgentEvent]` with stable correlation ids per T0 Q1.
+- **`StreamingAgentLoop`** — streaming analogue of `mcp.loop.run_agent`;
+  reuses `convert_tools`, `execute_tool_calls[_parallel]` and the
+  recoverable-retry contract from `mcp/`.  `run_agent` and the `mcp/`
+  submodule are untouched (contract §2.1, §6.1).
+- **`ElicitationForwarder` full completion** (`from t0_agents import
+  ElicitationForwarder`) — Phase D skeleton grows `on_request` +
+  `default_timeout` constructor kwargs, a Future-based `handler`, and
+  public `resolve(elicitation_id, payload)` / `cancel_all(action=...)`
+  methods.  Empty-constructor behaviour (always decline) is preserved
+  for Phase D compatibility.
+- **`SessionProvider` Protocol + `CallableSessionProvider` adapter**
+  (`from t0_agents.serve import SessionProvider,
+  CallableSessionProvider`) — advanced extension point for per-session
+  `Client` construction.  Implement the Protocol directly for auth,
+  multi-tenant routing, custom elicitation wiring; the default
+  `client_factory` / `elicitation_client_factory` kwargs wrap in a
+  `CallableSessionProvider` automatically.
+- **`create_app(..., streaming=True, session_provider=...,
+  elicitation_client_factory=...)`** — three additive kwargs.
+  `streaming=True` mounts `GET /chat/stream` (SSE) and `WS /chat/ws`
+  (bidirectional).  `session_provider` is the advanced WS wiring slot.
+  `elicitation_client_factory: Callable[[ElicitationHandler],
+  Client[Any]]` is the simple WS wiring slot — pair it with the existing
+  `client_factory`.  Phase D callers that set only `client_factory` or
+  `share_client=True` keep working unchanged.
+- **WS wire protocol** (`from t0_agents.serve.ws_protocol import
+  WSUserMessage, WSElicitationResponse, WSErrorFrame,
+  WSElicitationRequest`) — Pydantic v2 envelopes for every frame in each
+  direction.  Documented in `docs/streaming.md`.
+- **`sse-starlette>=2.0`** added to the `[serve]` extra.
+- Example `examples/12_streaming_http/` — runnable demo with a FastMCP
+  server, `agent_app.py`, browser WS client (`static/index.html` +
+  `static/app.js`) covering every `AgentEvent.type` and the elicitation
+  round-trip.
+- Public documentation at `docs/streaming.md` — simple +
+  `SessionProvider`-advanced cookbooks, event-type reference, browser
+  recipe, elicitation diagram, backpressure contract.
+
+### Changed
+
+- `SessionFactory` now accepts `session_provider=...` alongside
+  `client_factory=...` and `shared_tool_provider=...` (three-way XOR).
+  Phase D XOR validation error wording is preserved when exactly
+  `client_factory` + `share_client` are both set (test compat).  The
+  existing `session(extra_tags=...)` context manager gains an optional
+  `elicitation_handler=...` kwarg that threads through to the
+  provider's `build_client`.
+- **`Agent.run(message, *, episode_id=None, tags=None)`** and
+  **`Agent.stream(message, *, episode_id=None, tags=None)`** accept a
+  per-call `tags` override that shallow-merges onto `AgentConfig.tags`
+  (override wins on key collisions, configured deployment label is
+  preserved).  Critical for the WebSocket path where one `Agent` is
+  reused across frames — `AgentConfig.tags` alone cannot vary per
+  frame.  Default `tags=None` leaves behaviour byte-identical for
+  callers that never set it.
+- **`WSUserMessage.tags`** is now honoured by the WebSocket route — the
+  field existed in the wire protocol and was documented in
+  `docs/streaming.md`, but `_drive_stream` dropped it before the
+  gateway could observe it.  Now propagates through `agent.stream(tags=...)`.
+- **`GET /chat/stream`** (SSE) accepts an optional `tags=<json>` query
+  parameter (JSON-encoded `dict[str, str]`) for parity with `POST /chat`.
+  Invalid JSON or non-object values surface as the first SSE frame — an
+  `ErrorEvent` with `detail.kind == "invalid_tags"` — and the stream
+  terminates.
+- **`Guardrail.after_run`** Protocol signature tightened from
+  `result: Any` to `result: AgentResult | None` and the docstring now
+  documents explicitly that `result=None` is a valid value when the
+  run aborted before producing an `AgentResult`.  Runtime behaviour is
+  unchanged — `Agent.run` / `Agent.stream` have always invoked
+  `after_run` in their `finally` blocks regardless of the result, per
+  the `docs/guardrails.md` contract.
+
 ## [0.5.0] — Unreleased
 
 ### Added

@@ -1,26 +1,41 @@
 """Per-session factory for ``(Client, Agent)`` pairs.
 
 Contract §3.5 + FastMCP Q3 mandate that a fresh ``Client`` serve each
-logical caller whenever elicitation may fire.  Phase D defaults to this
+logical caller whenever elicitation may fire.  Phase D defaulted to this
 strict interpretation (one ``Client`` per :meth:`SessionFactory.session`
-call) and offers ``share_client=True`` as an explicit opt-out for
-deployments that are certain no tool uses elicitation.
+call) with ``share_client=True`` as the opt-out.  Phase E generalises the
+construction point by introducing the public :class:`SessionProvider`
+Protocol — see ``docs/streaming.md`` for the advanced recipe.
+
+Modes (mutually exclusive; exactly one must be selected):
+
+1. **``session_provider``** (Phase E) — caller-supplied object
+   implementing :class:`SessionProvider`.  Advanced hook for auth,
+   multi-tenant routing, telemetry, custom elicitation wiring.
+2. **``client_factory``** (Phase D / E convenience) — zero-arg callable
+   returning a fresh ``Client``.  Internally wrapped in a
+   :class:`CallableSessionProvider`.  Optionally paired with
+   ``elicitation_client_factory`` (Phase E, for streaming WS).
+3. **``shared_tool_provider``** (Phase D) — reuse a single ``Client``
+   across every session.  Does **not** support streaming elicitation;
+   :meth:`session` raises when ``elicitation_handler`` is supplied.
 
 The :meth:`SessionFactory.session` async context manager carries the
 invariant across transports: its lifetime equals *the caller's
-``async with`` block*.  Phase D calls it inside a FastAPI route
-(lifetime = one HTTP request); Phase E will call it inside an SSE
-streaming endpoint (lifetime = one stream) without changing the shape.
+``async with`` block*.  Phase D uses it inside FastAPI routes (one HTTP
+request); Phase E uses it inside SSE / WS endpoints (one stream / one
+WS connection) without changing the shape.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
-from typing import Any
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Any, Protocol, runtime_checkable
 
 from fastmcp import Client
+from fastmcp.client.elicitation import ElicitationHandler
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
@@ -29,29 +44,86 @@ from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
 
 ClientFactory = Callable[[], Client[Any]]
+ElicitationClientFactory = Callable[[ElicitationHandler], Client[Any]]
+
+
+@runtime_checkable
+class SessionProvider(Protocol):
+    """Per-session tool-Client construction hook.
+
+    The framework calls :meth:`build_client` at the start of every session.
+    The returned async context manager owns the ``Client``'s lifecycle —
+    ``__aenter__`` connects it, ``__aexit__`` closes it deterministically
+    (including on :class:`asyncio.CancelledError`).
+
+    Default path — pass ``client_factory=...`` (optionally with
+    ``elicitation_client_factory=...``) to :func:`create_app`.  The
+    framework wraps them in a :class:`CallableSessionProvider`.
+
+    Advanced path — implement this Protocol directly when you need to hook
+    auth, multi-tenant routing, telemetry, or custom elicitation wiring
+    into session construction.  See ``docs/streaming.md``.
+
+    ``elicitation_handler is None`` signals the non-streaming
+    ``POST /chat`` path — the provider is free to return a Client that
+    has no elicitation handler registered.  ``elicitation_handler`` being
+    set signals the streaming WS path — the provider must register it on
+    the returned Client or raise :class:`ConfigurationError`.
+    """
+
+    def build_client(
+        self,
+        *,
+        elicitation_handler: ElicitationHandler | None = None,
+    ) -> AbstractAsyncContextManager[Client[Any]]: ...
+
+
+class CallableSessionProvider:
+    """Default :class:`SessionProvider` adapter built from one or two lambdas.
+
+    ``client_factory`` is the Phase D zero-arg factory that ignores
+    elicitation.  ``elicitation_client_factory`` — when supplied — is the
+    Phase E factory that receives the per-connection handler; the adapter
+    calls it whenever :meth:`build_client` is invoked with
+    ``elicitation_handler`` set.
+
+    When the caller asks for an elicitation-aware Client and only
+    ``client_factory`` is configured, the adapter raises
+    :class:`ConfigurationError` pointing to the missing slot.
+    """
+
+    __slots__ = ("_client_factory", "_elicitation_client_factory")
+
+    def __init__(
+        self,
+        client_factory: ClientFactory,
+        elicitation_client_factory: ElicitationClientFactory | None = None,
+    ) -> None:
+        self._client_factory = client_factory
+        self._elicitation_client_factory = elicitation_client_factory
+
+    def build_client(
+        self,
+        *,
+        elicitation_handler: ElicitationHandler | None = None,
+    ) -> AbstractAsyncContextManager[Client[Any]]:
+        if elicitation_handler is None:
+            return self._client_factory()
+        if self._elicitation_client_factory is None:
+            raise ConfigurationError(
+                "Streaming elicitation requires 'elicitation_client_factory' "
+                "on create_app(). See docs/streaming.md 'Simple path'.",
+            )
+        return self._elicitation_client_factory(elicitation_handler)
 
 
 class SessionFactory:
     """Builds ``(Client, Agent)`` pairs whose lifetime is a caller's session.
 
-    Phase D supports two modes, selected at construction time:
-
-    * **Per-session** — pass ``client_factory``.  Every call to
-      :meth:`session` invokes the factory and enters the returned
-      ``Client`` for the duration of the caller's ``async with`` block;
-      the ``Client`` is closed deterministically on exit (including
-      cancellation).  Matches the FastMCP Q3 mandate — each caller
-      gets its own elicitation handler slot.
-    * **Shared** — pass ``shared_tool_provider``.  The same tool
-      provider is handed to every session unchanged; this
-      :class:`SessionFactory` does *not* manage its lifecycle.  Callers
-      are responsible for entering and closing the underlying client
-      themselves (typically by entering the ``Client`` outside
-      ``create_app`` or relying on ``Client`` being a FastMCP in-process
-      instance that is always connected).
-
-    Exactly one of the two modes must be selected.  The constructor
-    raises :class:`ConfigurationError` otherwise.
+    Exactly one of ``session_provider`` / ``client_factory`` /
+    ``shared_tool_provider`` must be passed; :class:`ConfigurationError`
+    is raised otherwise.  ``elicitation_client_factory`` is additive —
+    only valid together with ``client_factory``.
     """
 
     def __init__(
@@ -59,20 +131,51 @@ class SessionFactory:
         *,
         base_config: AgentConfig,
         t0: AsyncTensorZeroGateway,
+        session_provider: SessionProvider | None = None,
         client_factory: ClientFactory | None = None,
+        elicitation_client_factory: ElicitationClientFactory | None = None,
         shared_tool_provider: ToolProvider | None = None,
         agent_class: type[Agent] = Agent,
     ) -> None:
-        if (client_factory is None) == (shared_tool_provider is None):
+        modes = sum(
+            [
+                session_provider is not None,
+                client_factory is not None,
+                shared_tool_provider is not None,
+            ]
+        )
+        if modes != 1:
             raise ConfigurationError(
-                "SessionFactory requires exactly one of 'client_factory' "
-                "(per-session mode) or 'shared_tool_provider' (shared mode)",
+                "SessionFactory requires exactly one of 'session_provider', "
+                "'client_factory', or 'shared_tool_provider' (three-way XOR)",
             )
+        if elicitation_client_factory is not None and client_factory is None:
+            raise ConfigurationError(
+                "'elicitation_client_factory' is additive to 'client_factory'; "
+                "use 'session_provider' for advanced WS wiring instead",
+            )
+
         self._base_config = base_config
         self._t0 = t0
-        self._client_factory = client_factory
         self._shared_tool_provider = shared_tool_provider
         self._agent_class = agent_class
+
+        self._provider: SessionProvider | None
+        if session_provider is not None:
+            if not isinstance(session_provider, SessionProvider):
+                raise ConfigurationError(
+                    f"session_provider must implement the SessionProvider "
+                    f"protocol (build_client), got "
+                    f"{type(session_provider).__name__}",
+                )
+            self._provider = session_provider
+        elif client_factory is not None:
+            self._provider = CallableSessionProvider(
+                client_factory=client_factory,
+                elicitation_client_factory=elicitation_client_factory,
+            )
+        else:
+            self._provider = None  # shared-mode path
 
     @property
     def base_config(self) -> AgentConfig:
@@ -82,29 +185,24 @@ class SessionFactory:
     async def startup(self) -> None:
         """Lifecycle hook for :func:`t0_agents.serve.build_lifespan`.
 
-        Phase D is a no-op in both modes.  The shared-mode caller owns
-        their client's lifecycle; the per-session mode allocates inside
-        :meth:`session`.  Future phases may place an embedded-gateway
-        warm-up here without changing callers.
+        Phase D / E are no-ops in every mode.  The shared-mode caller owns
+        their client's lifecycle; per-session / provider modes allocate
+        inside :meth:`session`.  Future phases may place an
+        embedded-gateway warm-up here without changing callers.
         """
         return None
 
     async def shutdown(self) -> None:
-        """Lifecycle hook for :func:`t0_agents.serve.build_lifespan`.
-
-        Phase D is a no-op — see :meth:`startup`.
-        """
+        """Lifecycle hook for :func:`t0_agents.serve.build_lifespan`."""
         return None
 
     def probe_tool_provider(self) -> str:
         """Best-effort status string for ``GET /health``.
 
-        Returns ``"per-session"`` when no persistent tool provider
-        exists (no way to check without opening a throw-away
-        ``Client``).  Returns ``"ok"`` / ``"down"`` when sharing a tool
-        provider that exposes a synchronous ``is_connected()`` method
-        (``fastmcp.Client`` does, per
-        ``.venv/.../fastmcp/client/client.py:412-414``).
+        * ``"per-session"`` when no persistent tool provider exists.
+        * ``"ok"`` / ``"down"`` when a shared provider exposes
+          ``is_connected()`` (``fastmcp.Client`` does, per
+          ``.venv/.../fastmcp/client/client.py:412-414``).
         """
         if self._shared_tool_provider is None:
             return "per-session"
@@ -122,15 +220,21 @@ class SessionFactory:
         self,
         *,
         extra_tags: dict[str, str] | None = None,
+        elicitation_handler: ElicitationHandler | None = None,
     ) -> AsyncIterator[Agent]:
         """Yield an :class:`Agent` bound to a session-scoped tool provider.
 
-        ``extra_tags`` are shallow-merged on top of ``base_config.tags``
-        before the session-scoped :class:`AgentConfig` is built; per-
-        request mutations never touch the base configuration.
+        ``extra_tags`` are shallow-merged on top of ``base_config.tags``.
+        ``elicitation_handler`` — when set — threads through to the
+        :class:`SessionProvider`'s :meth:`build_client`; the WS streaming
+        route passes its per-connection
+        :class:`~t0_agents.core.elicitation_forwarder.ElicitationForwarder.handler`
+        here.  Shared-tool-provider mode raises :class:`ConfigurationError`
+        when ``elicitation_handler`` is set — streaming elicitation
+        requires a per-session Client.
 
         The context manager exits cleanly on
-        :class:`asyncio.CancelledError` — when an HTTP caller
+        :class:`asyncio.CancelledError` — when an HTTP / WS caller
         disconnects mid-request FastAPI cancels the task, Python runs
         ``__aexit__``, and any freshly-opened ``Client`` is torn down
         deterministically.
@@ -139,6 +243,13 @@ class SessionFactory:
         session_config = dataclasses.replace(self._base_config, tags=merged_tags)
 
         if self._shared_tool_provider is not None:
+            if elicitation_handler is not None:
+                raise ConfigurationError(
+                    "Streaming elicitation is incompatible with "
+                    "'shared_tool_provider' mode — each caller needs its own "
+                    "elicitation handler (FastMCP Q3).  Use 'client_factory' "
+                    "+ 'elicitation_client_factory' or a 'session_provider'.",
+                )
             yield self._agent_class(
                 session_config,
                 t0=self._t0,
@@ -146,9 +257,10 @@ class SessionFactory:
             )
             return
 
-        assert self._client_factory is not None  # guaranteed by __init__
-        client = self._client_factory()
-        async with client:
+        assert self._provider is not None  # guaranteed by __init__ XOR
+        async with self._provider.build_client(
+            elicitation_handler=elicitation_handler
+        ) as client:
             yield self._agent_class(
                 session_config, t0=self._t0, tool_provider=client,
             )

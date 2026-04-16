@@ -219,6 +219,38 @@ class TestAgent:
         await agent.run("go")
         assert t0.calls[0]["tags"] == {"k": "v"}
 
+    async def test_run_tags_override_merges_with_config(self) -> None:
+        """Per-call tags shallow-merge on top of AgentConfig.tags."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0, tags={"env": "prod", "app": "api"})
+        await agent.run("go", tags={"request_id": "r-1"})
+        assert t0.calls[0]["tags"] == {
+            "env": "prod",
+            "app": "api",
+            "request_id": "r-1",
+        }
+
+    async def test_run_tags_override_wins_on_collision(self) -> None:
+        """Override values replace base config values on matching keys."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0, tags={"env": "prod"})
+        await agent.run("go", tags={"env": "staging"})
+        assert t0.calls[0]["tags"] == {"env": "staging"}
+
+    async def test_run_tags_none_preserves_config_only(self) -> None:
+        """Default tags=None leaves config.tags untouched (byte-identity)."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0, tags={"env": "prod"})
+        await agent.run("go")
+        assert t0.calls[0]["tags"] == {"env": "prod"}
+
+    async def test_run_tags_empty_config_and_override_forwards_none(self) -> None:
+        """No config.tags and no override → tags=None reaches run_agent."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0)  # no tags in config
+        await agent.run("go")
+        assert t0.calls[0]["tags"] is None
+
     async def test_namespace_forwarded(self) -> None:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, namespace="prod")

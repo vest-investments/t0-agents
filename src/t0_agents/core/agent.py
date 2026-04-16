@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal, cast
 
 from fastmcp import Client
@@ -22,6 +22,8 @@ from t0_agents.guardrails.base import GuardrailContext
 from t0_agents.guardrails.runtime import GuardedToolProvider
 from t0_agents.mcp.loop import run_agent
 from t0_agents.memory.base import MemoryRecord, render_memory_summary
+from t0_agents.stream.events import AgentEvent, DoneEvent
+from t0_agents.stream.runner import StreamingAgentLoop
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +124,7 @@ class Agent:
         user_message: str,
         *,
         episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
     ) -> AgentResult:
         """Run the agent loop and return the final response.
 
@@ -137,6 +140,12 @@ class Agent:
             user_message: The user's query as a plain string.
             episode_id: Existing TensorZero episode id to continue, or
                 ``None`` for a fresh episode.
+            tags: Per-call tags that shallow-merge on top of
+                ``config.tags`` for observability — values here win on key
+                collisions, and ``None`` leaves the configured tags
+                untouched.  The configured deployment label (if any) is
+                already part of ``config.tags`` and is preserved by the
+                merge.
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
@@ -231,7 +240,7 @@ class Agent:
                 parallel_tools=self._config.parallel_tools,
                 dryrun=self._config.dryrun,
                 tool_choice=self._config.tool_choice,
-                tags=self._config.tags,
+                tags=self._merge_tags(tags),
                 namespace=self._config.namespace,
                 on_inference=on_inference,
                 **extra_kwargs,
@@ -285,9 +294,212 @@ class Agent:
 
         return result
 
+    async def stream(
+        self,
+        user_message: str,
+        *,
+        episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Streaming analogue of :meth:`run`.
+
+        Same lifecycle — memory hydration, guardrail scaffolding, tool
+        execution — except the turn loop is driven by
+        :class:`~t0_agents.stream.runner.StreamingAgentLoop` and every
+        intermediate token / tool-call / thought is surfaced as an
+        :class:`~t0_agents.stream.events.AgentEvent`.
+
+        The terminal event is always a
+        :class:`~t0_agents.stream.events.DoneEvent` carrying a fully-
+        populated :class:`~t0_agents.core.types.AgentResult` (including
+        the ``guardrail_log`` when guardrails are configured).
+
+        Args:
+            user_message: The user's query as a plain string.
+            episode_id: Existing TensorZero episode id to continue, or
+                ``None`` for a fresh episode.
+            tags: Per-call tags that shallow-merge on top of
+                ``config.tags``.  Critical for the WebSocket serving path
+                where one :class:`Agent` is shared across many frames —
+                without this kwarg there is no way to vary tags
+                per-frame.  Matches :meth:`run`'s semantics.
+
+        Yields:
+            :class:`~t0_agents.stream.events.AgentEvent` instances as the
+            LLM streams them and tools execute.  The last event is always
+            a :class:`DoneEvent`.
+
+        Raises:
+            MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
+            GuardrailBlockedError: If any guardrail hard-aborts the run.
+        """
+        # --- 1. Load memory --- (mirrors run())
+        memory_records: list[MemoryRecord] = []
+        if self._config.memory is not None and episode_id is not None:
+            try:
+                raw_records = await self._config.memory.load(episode_id)
+                memory_records = cast(list[MemoryRecord], raw_records)
+            except Exception:
+                logger.warning(
+                    "Memory load failed for episode %s; proceeding without context",
+                    episode_id,
+                    exc_info=True,
+                )
+
+        # --- 2. Prepare injection ---
+        effective_message, extra_kwargs = self._prepare_memory_injection(
+            user_message, memory_records,
+        )
+
+        # --- 3. Set up guardrails ---
+        guard_ctx: GuardrailContext | None = None
+        guard_log: list[GuardrailLogEntry] = []
+        tool_provider: ToolProvider = self._tool_provider
+        on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
+
+        if self._config.guardrails:
+            guard_ctx = GuardrailContext(
+                agent_name=self._config.name,
+                function_name=self._config.function_name,
+                user_message=user_message,
+            )
+            tool_provider = GuardedToolProvider(
+                self._tool_provider,
+                list(self._config.guardrails),
+                guard_ctx,
+                guard_log,
+            )
+            on_inference = _make_cost_tracker(guard_ctx)
+
+        tool_timeout = (
+            self._config.tool_timeout
+            if self._config.tool_timeout is not None
+            else _DEFAULT_TOOL_TIMEOUT
+        )
+
+        # --- 4. before_run hooks ---
+        if guard_ctx is not None:
+            for guardrail in self._config.guardrails:
+                try:
+                    await guardrail.before_run(guard_ctx)
+                except T0AgentsFatalError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Guardrail %r before_run raised a non-fatal exception; "
+                        "continuing",
+                        guardrail.name,
+                    )
+                else:
+                    guard_log.append(
+                        GuardrailLogEntry(
+                            guardrail_name=guardrail.name,
+                            hook="before_run",
+                            kind="pass",
+                        )
+                    )
+
+        # --- 5. Drive the streaming loop ---
+        # DoneEvent is buffered so we can attach the full guardrail_log
+        # (populated by after_run hooks below) before surfacing it.  If the
+        # stream aborts (e.g. GuardrailBlockedError), done_result stays
+        # None and the caller sees the exception propagate.
+        streamer = StreamingAgentLoop()
+        done_result: AgentResult | None = None
+        try:
+            async for event in streamer.stream(
+                self._t0,
+                cast(Client[Any], tool_provider),
+                effective_message,
+                self._config.function_name,
+                episode_id=episode_id,
+                max_turns=self._config.max_turns,
+                tool_timeout=tool_timeout,
+                parallel_tools=self._config.parallel_tools,
+                dryrun=self._config.dryrun,
+                tool_choice=self._config.tool_choice,
+                tags=self._merge_tags(tags),
+                namespace=self._config.namespace,
+                on_inference=on_inference,
+                **extra_kwargs,
+            ):
+                if isinstance(event, DoneEvent):
+                    done_result = event.result
+                    # Don't yield DoneEvent yet — finally block populates
+                    # guardrail_log and persists memory first.
+                    break
+                yield event
+        finally:
+            # --- 6. after_run hooks (fire even on error, parity with run()) ---
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.after_run(guard_ctx, done_result)
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r after_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="after_run",
+                                kind="pass",
+                            )
+                        )
+                if done_result is not None:
+                    done_result.guardrail_log = list(guard_log)
+
+            # --- 7. Persist memory ---
+            if (
+                self._config.memory is not None
+                and done_result is not None
+                and done_result.episode_id
+            ):
+                record = MemoryRecord(
+                    episode_id=done_result.episode_id,
+                    user_message=user_message,
+                    agent_response=done_result.response,
+                    turns=done_result.turns,
+                    inference_ids=list(done_result.inference_ids),
+                )
+                try:
+                    await self._config.memory.save(record)
+                except Exception:
+                    logger.warning(
+                        "Memory save failed for episode %s; run result is still valid",
+                        done_result.episode_id,
+                        exc_info=True,
+                    )
+
+        # --- 8. Terminal DoneEvent (outside try so after_run fires first) ---
+        if done_result is not None:
+            yield DoneEvent(result=done_result)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _merge_tags(
+        self,
+        override: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        """Shallow-merge a per-call ``tags`` override onto ``config.tags``.
+
+        Matches :meth:`t0_agents.serve.session.SessionFactory._merge_tags`
+        so the streaming-WS path (one :class:`Agent` shared across frames)
+        and the per-HTTP path (fresh :class:`Agent` per request) stay
+        behaviourally identical.  Returns ``None`` when both inputs are
+        empty — preserves the byte-identity guarantee for callers that
+        never supply tags.
+        """
+        base = self._config.tags or {}
+        extra = override or {}
+        if not base and not extra:
+            return None
+        return {**base, **extra}
 
     def _resolve_memory_strategy(
         self,

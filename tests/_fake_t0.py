@@ -7,13 +7,27 @@ satisfies the runtime contract without subclassing the real Rust-backed type.
 
 Extracted from ``tests/test_mcp/test_loop.py`` so that multiple test modules
 can share a single source of truth for the T0 mock contract.
+
+Phase E adds streaming fakes: ``stream=True`` on ``FakeT0.inference``
+returns an async iterator over a scripted ``list[ChatChunk]``.  Build
+those scripts with :func:`chat_chunk` / :func:`text_chunk` /
+:func:`tool_call_chunk` / :func:`thought_chunk` / :func:`final_chunk`.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid4
+
+from tensorzero.types import (
+    ChatChunk,
+    TextChunk,
+    ThoughtChunk,
+    ToolCallChunk,
+    Usage,
+)
 
 
 @dataclass
@@ -55,21 +69,100 @@ class FakeFeedbackResponse:
     feedback_id: UUID = field(default_factory=uuid4)
 
 
+# ---------------------------------------------------------------------------
+# Streaming helpers (Phase E)
+# ---------------------------------------------------------------------------
+
+
+def text_chunk(text: str, *, block_id: str = "text-1") -> TextChunk:
+    """Build a ``TextChunk`` with a stable ``id`` for assembler tests."""
+    return TextChunk(id=block_id, text=text, type="text")
+
+
+def tool_call_chunk(
+    raw_name: str = "",
+    raw_arguments: str = "",
+    *,
+    block_id: str = "tc-1",
+) -> ToolCallChunk:
+    """Build a ``ToolCallChunk`` — pass partial name/args to simulate deltas."""
+    return ToolCallChunk(
+        id=block_id,
+        raw_name=raw_name,
+        raw_arguments=raw_arguments,
+        type="tool_call",
+    )
+
+
+def thought_chunk(text: str, *, block_id: str = "th-1") -> ThoughtChunk:
+    """Build a ``ThoughtChunk`` with the given reasoning-text delta."""
+    return ThoughtChunk(id=block_id, text=text, type="thought")
+
+
+def chat_chunk(
+    content: list[Any],
+    *,
+    usage: Usage | None = None,
+    episode_id: UUID | None = None,
+    inference_id: UUID | None = None,
+    variant_name: str = "test-variant",
+) -> ChatChunk:
+    """Build a ``ChatChunk`` carrying one or more content-block deltas."""
+    return ChatChunk(
+        inference_id=inference_id or uuid4(),
+        episode_id=episode_id or uuid4(),
+        variant_name=variant_name,
+        content=content,
+        usage=usage,
+    )
+
+
+def final_chunk(
+    *,
+    cost: float = 0.0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    episode_id: UUID | None = None,
+    inference_id: UUID | None = None,
+    variant_name: str = "test-variant",
+) -> ChatChunk:
+    """Build the terminal ``ChatChunk`` — empty content, populated ``usage``."""
+    return ChatChunk(
+        inference_id=inference_id or uuid4(),
+        episode_id=episode_id or uuid4(),
+        variant_name=variant_name,
+        content=[],
+        usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),  # type: ignore[call-arg]
+    )
+
+
+StreamScript = list[ChatChunk]
+"""One turn's worth of streaming chunks — feed to ``FakeT0`` response queue."""
+
+
 class FakeT0:
     """Records every ``inference()`` and ``feedback()`` call.
 
-    The response queue accepts both ``FakeChatResponse`` and ``Exception``
-    items.  When the next item is an ``Exception``, ``inference()`` raises
-    it — this lets tests simulate ``TensorZeroError`` and other failures
-    at the inference layer.
+    The response queue accepts ``FakeChatResponse``, ``StreamScript``
+    (``list[ChatChunk]`` for ``stream=True`` calls), or ``Exception``
+    entries.  When the next item is an ``Exception``, ``inference()``
+    raises it — letting tests simulate ``TensorZeroError`` and other
+    failures at the inference layer.
     """
 
-    def __init__(self, responses: list[FakeChatResponse | Exception]) -> None:
-        self._queue: list[FakeChatResponse | Exception] = list(responses)
+    def __init__(
+        self,
+        responses: list[FakeChatResponse | StreamScript | Exception],
+    ) -> None:
+        self._queue: list[FakeChatResponse | StreamScript | Exception] = list(
+            responses
+        )
         self.calls: list[dict[str, Any]] = []
         self.feedback_calls: list[dict[str, Any]] = []
 
-    async def inference(self, **kwargs: Any) -> FakeChatResponse:
+    async def inference(
+        self, **kwargs: Any
+    ) -> FakeChatResponse | AsyncIterator[ChatChunk]:
         # Snapshot mutable args at call time. Real T0 serializes the request
         # immediately; without snapshotting, ``run_agent`` mutating ``messages``
         # later in the loop would retroactively change what tests see in
@@ -88,8 +181,27 @@ class FakeT0:
         item = self._queue.pop(0)
         if isinstance(item, Exception):
             raise item
+        if kwargs.get("stream") is True:
+            if not isinstance(item, list):
+                raise AssertionError(
+                    "FakeT0: stream=True call expected a StreamScript "
+                    f"(list[ChatChunk]), got {type(item).__name__}",
+                )
+            return _script_iterator(item)
+        if isinstance(item, list):
+            raise AssertionError(
+                "FakeT0: non-streaming call received a StreamScript; "
+                "pass stream=True or script FakeChatResponse instead",
+            )
         return item
 
     async def feedback(self, **kwargs: Any) -> FakeFeedbackResponse:
         self.feedback_calls.append(dict(kwargs))
         return FakeFeedbackResponse()
+
+
+async def _script_iterator(
+    chunks: list[ChatChunk],
+) -> AsyncIterator[ChatChunk]:
+    for chunk in chunks:
+        yield chunk

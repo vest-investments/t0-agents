@@ -68,6 +68,13 @@ class Guardrail(Protocol):
       existing adapter serializer).
     - Raising ``GuardrailBlockedError`` (or any ``T0AgentsFatalError``) →
       hard-abort the run; the exception propagates past the loop.
+
+    ``after_run`` always fires, even when the run aborted before producing
+    an :class:`AgentResult` (for example a ``GuardrailBlockedError`` from
+    ``before_run``, an upstream ``TensorZeroError``, or cancellation of a
+    streaming turn).  In those cases ``result`` is ``None`` — implementations
+    must tolerate the ``None`` branch rather than dereferencing fields
+    blindly.  See ``docs/guardrails.md`` for the failure-mode matrix.
     """
 
     name: str
@@ -80,7 +87,7 @@ class Guardrail(Protocol):
         self, ctx: Any, tool_call: Any, result_str: str
     ) -> None: ...
 
-    async def after_run(self, ctx: Any, result: Any) -> None: ...
+    async def after_run(self, ctx: Any, result: AgentResult | None) -> None: ...
 
 
 @dataclass(slots=True)
