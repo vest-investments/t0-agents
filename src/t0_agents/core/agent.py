@@ -98,6 +98,25 @@ class Agent:
         """Read-only access to the agent's configuration."""
         return self._config
 
+    async def warmup(self) -> None:
+        """Optional lifespan-phase readiness hook.
+
+        Called by :func:`t0_agents.serve.create_app` during FastAPI
+        startup so deployments can front-load one-time checks.  The
+        default implementation is a no-op: TensorZero v2026.4.0 does
+        not expose a public ``health()`` method (validated at
+        ``.venv/.../tensorzero/tensorzero.pyi:1017``), so any built-in
+        probe would either couple the Agent to the per-request MCP
+        ``Client`` lifecycle or burn provider tokens via
+        ``inference(dryrun=True)``.  ``docker compose`` already runs a
+        gateway-side healthcheck and the first ``/chat`` surfaces any
+        real failure.
+
+        Subclasses may override this method to add custom probes (for
+        example pinging an auxiliary tool provider or warming a cache).
+        """
+        return None
+
     async def run(
         self,
         user_message: str,

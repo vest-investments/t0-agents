@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — Unreleased
+
+### Added
+
+- **HTTP serving layer** (`from t0_agents.serve import create_app,
+  mount_agent, SessionFactory`) — declarative FastAPI wrap of an
+  `Agent`. Milestone M4: Hosted Agent. Requires the new `[serve]`
+  extra (`pip install 't0-agents[serve]'`), which pulls
+  `fastapi>=0.115.0`, `uvicorn[standard]>=0.32.0`, and `pydantic>=2.0`.
+- **`create_app(agent, *, client_factory=..., share_client=False,
+  deployment_label=None)`** — builds a FastAPI app with `POST /chat`,
+  `POST /feedback`, `GET /health`, `GET /info`. Validates that
+  exactly one of `client_factory` / `share_client=True` is provided
+  (no silent ambiguity). `deployment_label` is merged into every
+  inference's tags as `t0_agents.deployment=<label>`.
+- **`mount_agent(parent, agent, prefix, **kwargs)`** — mounts a
+  per-agent sub-app under `prefix` on an existing FastAPI
+  application. Same kwargs as `create_app`. Enables hosting several
+  agents in one process on disjoint URL prefixes (`/mobile`,
+  `/analytics`).
+- **`SessionFactory`** — advanced: per-session `(Client, Agent)`
+  builder that `create_app` uses internally. Exposes
+  `session(extra_tags=...)` async context manager whose lifetime is
+  the caller's `async with` block (one HTTP request in Phase D; Phase
+  E's SSE / WS streams will reuse the same primitive unchanged).
+  Enforces the FastMCP Q3 / contract §3.5 per-session-Client mandate
+  by default.
+- **`ElicitationForwarder`, `ElicitationRequest`**
+  (`from t0_agents import ElicitationForwarder, ElicitationRequest`)
+   — future-based elicitation bridge. Phase D ships the skeleton with
+  a default `handler` that declines everything (HTTP has no return
+  channel). Phase E will complete `forward()` / `resolve()` /
+  `wait_for()` for SSE + WS piping.
+- **`Agent.warmup()`** — async readiness hook. Default no-op;
+  override in a subclass to front-load readiness probes. Called by
+  `serve.build_lifespan` during FastAPI startup.
+- Example `examples/11_http_agent/` — runnable single-agent demo with
+  `server.py`, `agent_app.py`, `run.sh`, `client.sh`, and a README
+  that covers the multi-agent `mount_agent` pattern and the
+  `share_client=True` trade-off.
+- Public documentation at `docs/serving.md` — quickstart, per-surface
+  deployment recipe, concurrency model, `share_client` trade-off,
+  GKE / cloud-LB deployment notes (sticky sessions planned for
+  Phase E).
+
+### Changed
+
+- Phase D does not modify `AgentConfig`; the serving layer wraps an
+  existing `Agent` instance. `run_agent` and the `mcp/` submodule are
+  untouched (contract §2.1, §6.1).
+
 ## [0.4.0] — Unreleased
 
 ### Added
