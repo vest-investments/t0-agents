@@ -149,6 +149,125 @@ def test_ws_streams_events_and_closes_cleanly(
     assert collected[-1]["result"]["response"] == "¡listo!"
 
 
+async def test_sse_tags_query_param_reaches_gateway(
+    streaming_client_factory: Callable[[], FakeFastMCPClient],
+) -> None:
+    """SSE ``?tags=<json>`` propagates to ``agent.stream(tags=...)``."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    agent = Agent(
+        AgentConfig(name="sse-tags", function_name="agent"),
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=FakeFastMCPClient(),
+    )
+    app = create_app(
+        agent,
+        client_factory=streaming_client_factory,
+        streaming=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as http:
+        async with http.stream(
+            "GET",
+            "/chat/stream",
+            params={"message": "hi", "tags": json.dumps({"env": "staging"})},
+        ) as resp:
+            assert resp.status_code == 200
+            async for _ in resp.aiter_bytes():
+                pass
+
+    assert fake_t0.calls[0]["tags"] == {"env": "staging"}
+
+
+async def test_sse_invalid_tags_yields_error_event(
+    streaming_client_factory: Callable[[], FakeFastMCPClient],
+) -> None:
+    """Non-JSON ``?tags=`` surfaces as the first SSE frame (ErrorEvent)."""
+    fake_t0 = FakeT0(responses=[])
+    agent = Agent(
+        AgentConfig(name="sse-bad", function_name="agent"),
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=FakeFastMCPClient(),
+    )
+    app = create_app(
+        agent,
+        client_factory=streaming_client_factory,
+        streaming=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as http:
+        async with http.stream(
+            "GET",
+            "/chat/stream",
+            params={"message": "hi", "tags": "not-json"},
+        ) as resp:
+            body = b""
+            async for chunk in resp.aiter_bytes():
+                body += chunk
+
+    decoded = body.decode("utf-8")
+    assert "event: error" in decoded
+    assert '"kind": "invalid_tags"' in decoded
+    # No inference was attempted — the parser rejected before session opened.
+    assert fake_t0.calls == []
+
+
+def test_ws_user_message_tags_reach_gateway(
+    elicitation_client_factory: Callable[[Any], FakeFastMCPClient],
+) -> None:
+    """``WSUserMessage.tags`` must propagate to the T0 inference call."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    agent = Agent(
+        AgentConfig(
+            name="ws-tags",
+            function_name="agent",
+            tags={"env": "prod"},
+        ),
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=FakeFastMCPClient(),
+    )
+    app = create_app(
+        agent,
+        client_factory=lambda: FakeFastMCPClient(),
+        elicitation_client_factory=elicitation_client_factory,
+        streaming=True,
+    )
+
+    client = TestClient(app)
+    with client.websocket_connect("/chat/ws") as ws:
+        ws.send_json({
+            "type": "user_message",
+            "message": "hola",
+            "tags": {"request_id": "r-42"},
+        })
+        while True:
+            frame = ws.receive_json()
+            if frame["type"] == "done":
+                break
+
+    assert fake_t0.calls[0]["tags"] == {
+        "env": "prod",
+        "request_id": "r-42",
+    }
+
+
 def test_ws_rejects_invalid_frames_without_closing(
     elicitation_client_factory: Callable[[Any], FakeFastMCPClient],
 ) -> None:

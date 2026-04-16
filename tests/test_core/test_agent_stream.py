@@ -196,6 +196,78 @@ async def test_agent_stream_fatal_guardrail_propagates() -> None:
             pass
 
 
+async def test_agent_stream_tags_override_merges_with_config() -> None:
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(
+            name="tg",
+            function_name="agent",
+            tags={"env": "prod", "app": "api"},
+        ),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    async for _ in agent.stream("hi", tags={"request_id": "r-9"}):
+        pass
+
+    assert fake_t0.calls[0]["tags"] == {
+        "env": "prod",
+        "app": "api",
+        "request_id": "r-9",
+    }
+
+
+async def test_agent_stream_tags_override_wins_on_collision() -> None:
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(name="tg2", function_name="agent", tags={"env": "prod"}),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    async for _ in agent.stream("hi", tags={"env": "staging"}):
+        pass
+
+    assert fake_t0.calls[0]["tags"] == {"env": "staging"}
+
+
+async def test_agent_stream_tags_none_preserves_config_only() -> None:
+    """Default tags=None on stream() leaves config.tags untouched."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(name="tg3", function_name="agent", tags={"env": "prod"}),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    async for _ in agent.stream("hi"):
+        pass
+
+    assert fake_t0.calls[0]["tags"] == {"env": "prod"}
+
+
 async def test_agent_run_unchanged_after_phase_e() -> None:
     """Regression: Phase D-style Agent.run still returns the expected result."""
     from tensorzero import Text

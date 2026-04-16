@@ -114,6 +114,21 @@ event: done
 data: {"type":"done","result":{"response":"...","episode_id":"..."}}
 ```
 
+#### SSE query parameters
+
+| Param | Type | Required | Purpose |
+|---|---|---|---|
+| `message` | `str` | yes | The user's query. |
+| `episode_id` | `str` | no | Continue an existing TensorZero episode. |
+| `tags` | JSON-encoded `dict[str, str]` | no | Shallow-merge on top of `AgentConfig.tags` for this request only (matches the `tags` field of `POST /chat`'s body). Invalid JSON or non-object values surface as the first SSE frame — an `ErrorEvent` with `detail.kind == "invalid_tags"` — and the stream terminates. |
+
+Example:
+
+```bash
+curl --no-buffer \
+  'http://localhost:8080/chat/stream?message=hi&tags=%7B%22env%22%3A%22staging%22%7D'
+```
+
 ### WebSocket frame shapes
 
 Client → server:
@@ -122,6 +137,13 @@ Client → server:
 {"type":"user_message","message":"hi","episode_id":null,"tags":{}}
 {"type":"elicitation_response","elicitation_id":"uuid","payload":{"action":"accept","content":{}}}
 ```
+
+`tags` in a `user_message` frame shallow-merges onto `AgentConfig.tags`
+for *that frame only* — the same behaviour as `tags` in the `POST /chat`
+body and `?tags=<json>` on `GET /chat/stream`.  Override values win on
+key collisions; the configured deployment label is preserved across
+every frame.  This is the **only** way to vary tags per frame, because
+one `Agent` instance is shared across the lifetime of a WS connection.
 
 Server → client: every `AgentEvent` serialised as JSON (its `type` field
 is the discriminator), plus:

@@ -34,7 +34,7 @@ import dataclasses
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -74,6 +74,7 @@ def build_streaming_router(*, session_factory: SessionFactory) -> APIRouter:
     async def chat_stream(
         message: str,
         episode_id: str | None = None,
+        tags: str | None = None,
     ) -> EventSourceResponse:
         """Stream :class:`AgentEvent` frames as SSE events.
 
@@ -84,11 +85,19 @@ def build_streaming_router(*, session_factory: SessionFactory) -> APIRouter:
             event: text_delta
             data: {"id": "...", "delta": "...", "type": "text_delta"}
 
+        ``tags`` is an optional JSON-encoded ``dict[str, str]`` query
+        parameter (e.g. ``?tags=%7B%22env%22%3A%22staging%22%7D``) that
+        shallow-merges onto the agent's configured tags for parity with
+        ``POST /chat``'s request body.  Invalid JSON or a non-object
+        decoded value surfaces as the first SSE frame — an
+        :class:`~t0_agents.stream.events.ErrorEvent` with
+        ``detail.kind == "invalid_tags"`` — and the stream terminates.
+
         Clients decode with ``EventSource`` in the browser or any
         SSE-aware HTTP library.
         """
         return EventSourceResponse(
-            _sse_event_stream(session_factory, message, episode_id)
+            _sse_event_stream(session_factory, message, episode_id, tags)
         )
 
     # -- WebSocket ---------------------------------------------------------
@@ -156,11 +165,21 @@ async def _sse_event_stream(
     session_factory: SessionFactory,
     message: str,
     episode_id: str | None,
+    raw_tags: str | None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield ``EventSourceResponse``-shaped dicts for the SSE endpoint."""
     try:
+        parsed_tags = _parse_tags_query(raw_tags)
+    except ValueError as exc:
+        yield _to_sse_frame(
+            ErrorEvent(message=str(exc), detail={"kind": "invalid_tags"}),
+        )
+        return
+    try:
         async with session_factory.session() as agent:
-            async for event in agent.stream(message, episode_id=episode_id):
+            async for event in agent.stream(
+                message, episode_id=episode_id, tags=parsed_tags,
+            ):
                 yield _to_sse_frame(event)
     except MaxTurnsExceededError as exc:
         yield _to_sse_frame(
@@ -174,6 +193,33 @@ async def _sse_event_stream(
         yield _to_sse_frame(
             ErrorEvent(message=str(exc), detail={"kind": type(exc).__name__}),
         )
+
+
+def _parse_tags_query(raw: str | None) -> dict[str, str] | None:
+    """Decode the ``?tags=<json>`` SSE query parameter.
+
+    ``None`` and empty-string decode to ``None`` (no per-request override).
+    Anything else must decode to a JSON object whose keys and values are
+    all strings; other shapes raise :class:`ValueError` so the caller can
+    surface an ``ErrorEvent`` with ``detail.kind == "invalid_tags"``.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"tags query param is not valid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"tags query param must decode to a JSON object, "
+            f"got {type(parsed).__name__}",
+        )
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError(
+                "tags query param must have only string keys and string values",
+            )
+    return cast(dict[str, str], parsed)
 
 
 def _to_sse_frame(event: AgentEvent) -> dict[str, str]:
@@ -244,6 +290,7 @@ async def _drive_stream(
         async for event in agent.stream(
             frame.message,
             episode_id=frame.episode_id,
+            tags=frame.tags,
         ):
             await ws.send_json(_event_to_json(event))
     except asyncio.CancelledError:

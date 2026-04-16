@@ -124,6 +124,7 @@ class Agent:
         user_message: str,
         *,
         episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
     ) -> AgentResult:
         """Run the agent loop and return the final response.
 
@@ -139,6 +140,12 @@ class Agent:
             user_message: The user's query as a plain string.
             episode_id: Existing TensorZero episode id to continue, or
                 ``None`` for a fresh episode.
+            tags: Per-call tags that shallow-merge on top of
+                ``config.tags`` for observability — values here win on key
+                collisions, and ``None`` leaves the configured tags
+                untouched.  The configured deployment label (if any) is
+                already part of ``config.tags`` and is preserved by the
+                merge.
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
@@ -233,7 +240,7 @@ class Agent:
                 parallel_tools=self._config.parallel_tools,
                 dryrun=self._config.dryrun,
                 tool_choice=self._config.tool_choice,
-                tags=self._config.tags,
+                tags=self._merge_tags(tags),
                 namespace=self._config.namespace,
                 on_inference=on_inference,
                 **extra_kwargs,
@@ -292,6 +299,7 @@ class Agent:
         user_message: str,
         *,
         episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Streaming analogue of :meth:`run`.
 
@@ -310,6 +318,11 @@ class Agent:
             user_message: The user's query as a plain string.
             episode_id: Existing TensorZero episode id to continue, or
                 ``None`` for a fresh episode.
+            tags: Per-call tags that shallow-merge on top of
+                ``config.tags``.  Critical for the WebSocket serving path
+                where one :class:`Agent` is shared across many frames —
+                without this kwarg there is no way to vary tags
+                per-frame.  Matches :meth:`run`'s semantics.
 
         Yields:
             :class:`~t0_agents.stream.events.AgentEvent` instances as the
@@ -405,7 +418,7 @@ class Agent:
                 parallel_tools=self._config.parallel_tools,
                 dryrun=self._config.dryrun,
                 tool_choice=self._config.tool_choice,
-                tags=self._config.tags,
+                tags=self._merge_tags(tags),
                 namespace=self._config.namespace,
                 on_inference=on_inference,
                 **extra_kwargs,
@@ -468,6 +481,25 @@ class Agent:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _merge_tags(
+        self,
+        override: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        """Shallow-merge a per-call ``tags`` override onto ``config.tags``.
+
+        Matches :meth:`t0_agents.serve.session.SessionFactory._merge_tags`
+        so the streaming-WS path (one :class:`Agent` shared across frames)
+        and the per-HTTP path (fresh :class:`Agent` per request) stay
+        behaviourally identical.  Returns ``None`` when both inputs are
+        empty — preserves the byte-identity guarantee for callers that
+        never supply tags.
+        """
+        base = self._config.tags or {}
+        extra = override or {}
+        if not base and not extra:
+            return None
+        return {**base, **extra}
 
     def _resolve_memory_strategy(
         self,

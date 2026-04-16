@@ -69,6 +69,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   existing `session(extra_tags=...)` context manager gains an optional
   `elicitation_handler=...` kwarg that threads through to the
   provider's `build_client`.
+- **`Agent.run(message, *, episode_id=None, tags=None)`** and
+  **`Agent.stream(message, *, episode_id=None, tags=None)`** accept a
+  per-call `tags` override that shallow-merges onto `AgentConfig.tags`
+  (override wins on key collisions, configured deployment label is
+  preserved).  Critical for the WebSocket path where one `Agent` is
+  reused across frames — `AgentConfig.tags` alone cannot vary per
+  frame.  Default `tags=None` leaves behaviour byte-identical for
+  callers that never set it.
+- **`WSUserMessage.tags`** is now honoured by the WebSocket route — the
+  field existed in the wire protocol and was documented in
+  `docs/streaming.md`, but `_drive_stream` dropped it before the
+  gateway could observe it.  Now propagates through `agent.stream(tags=...)`.
+- **`GET /chat/stream`** (SSE) accepts an optional `tags=<json>` query
+  parameter (JSON-encoded `dict[str, str]`) for parity with `POST /chat`.
+  Invalid JSON or non-object values surface as the first SSE frame — an
+  `ErrorEvent` with `detail.kind == "invalid_tags"` — and the stream
+  terminates.
+- **`Guardrail.after_run`** Protocol signature tightened from
+  `result: Any` to `result: AgentResult | None` and the docstring now
+  documents explicitly that `result=None` is a valid value when the
+  run aborted before producing an `AgentResult`.  Runtime behaviour is
+  unchanged — `Agent.run` / `Agent.stream` have always invoked
+  `after_run` in their `finally` blocks regardless of the result, per
+  the `docs/guardrails.md` contract.
 
 ## [0.5.0] — Unreleased
 
