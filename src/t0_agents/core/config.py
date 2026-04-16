@@ -8,7 +8,7 @@ from typing import Literal
 from tensorzero import ToolChoice
 
 from t0_agents.core.exceptions import ConfigurationError
-from t0_agents.core.types import MemoryProvider
+from t0_agents.core.types import Guardrail, MemoryProvider
 
 _VALID_MEMORY_STRATEGIES = frozenset({"auto", "system_template", "prepended_message"})
 
@@ -39,6 +39,13 @@ class AgentConfig:
             that requires no TOML variant support).
             ``"system_template"`` passes memory via ``input.system.arguments``.
             ``"prepended_message"`` prepends a text summary to the user message.
+        guardrails: Optional list of :class:`Guardrail` instances.  When
+            non-empty, the ``Agent`` wraps the tool provider with a
+            ``GuardedToolProvider`` that fires ``before_tool`` / ``after_tool``
+            hooks around every tool call, tracks per-run counters, and
+            propagates ``GuardrailBlockedError`` as a hard abort.  An empty
+            list (the default) disables the wrapper entirely so behaviour
+            remains byte-identical to the non-guardrail code path.
     """
 
     # Identity
@@ -59,6 +66,9 @@ class AgentConfig:
     # Memory (Phase B)
     memory: MemoryProvider | None = None
     memory_strategy: Literal["auto", "system_template", "prepended_message"] = "auto"
+
+    # Guardrails (Phase C)
+    guardrails: list[Guardrail] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.name:

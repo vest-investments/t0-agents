@@ -4,18 +4,30 @@ from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
+    GuardrailBlockedError,
     MaxTurnsExceededError,
     T0AgentsError,
+    T0AgentsFatalError,
 )
-from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
+from t0_agents.core.types import (
+    AgentResult,
+    Guardrail,
+    GuardrailLogEntry,
+    MemoryProvider,
+    ToolProvider,
+)
 
 __all__ = [
     "Agent",
     "AgentConfig",
     "AgentResult",
     "ConfigurationError",
+    "Guardrail",
+    "GuardrailBlockedError",
+    "GuardrailLogEntry",
     "MaxTurnsExceededError",
     "MemoryProvider",
     "T0AgentsError",
+    "T0AgentsFatalError",
     "ToolProvider",
 ]
