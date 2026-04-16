@@ -27,6 +27,11 @@ dependencies = [
 
 [project.optional-dependencies]
 memory-sqlite = ["aiosqlite>=0.20.0"]
+serve = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.0",
+]
 
 [project.urls]
 Repository = "https://github.com/sproutfi/t0-agents"
