@@ -128,9 +128,13 @@ Exported from `from t0_agents import …`
 | `AgentResult` | dataclass | `core/types.py` | What `run_agent` / `Agent.run()` returns. |
 | `ToolProvider` | Protocol | `core/types.py` | Structural type for tool discovery + execution. |
 | `MemoryProvider` | Protocol | `core/types.py` | Repository-style memory interface (load + save + search). |
+| `Guardrail` | Protocol | `core/types.py` | Hook surface for declarative guardrails (before/after run/tool). |
+| `GuardrailLogEntry` | dataclass | `core/types.py` | One guardrail hook activation recorded on `AgentResult.guardrail_log`. |
 | `T0AgentsError` | exception | `core/exceptions.py` | Base exception for the library. |
+| `T0AgentsFatalError` | exception | `core/exceptions.py` | Marker base for exceptions the agent loop must propagate. |
 | `ConfigurationError` | exception | `core/exceptions.py` | Invalid config or construction parameters. |
 | `MaxTurnsExceededError` | exception | `core/exceptions.py` | Raised when `max_turns` is exhausted. |
+| `GuardrailBlockedError` | exception | `core/exceptions.py` | Hard-abort from a guardrail (`T0AgentsFatalError` subclass). |
 | `run_agent` | async fn | `mcp/loop.py` | The full agent loop: discover → infer → execute → repeat. |
 | `ToolChoice` | re-export | from `tensorzero` | Directive type for forcing / suppressing tool use. |
 
@@ -164,6 +168,23 @@ Exported from `from t0_agents.memory import …`
 | `InMemoryMemory` | class | `memory/in_memory.py` | Ephemeral, dict-backed backend. |
 | `SqliteMemory` | class | `memory/sqlite.py` | Persistent backend behind `[memory-sqlite]` extra. `None` when `aiosqlite` is absent. |
 
+### Guardrail symbols (`t0_agents.guardrails`)
+
+Exported from `from t0_agents.guardrails import …`
+([`src/t0_agents/guardrails/__init__.py`](../../src/t0_agents/guardrails/__init__.py)):
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `Guardrail` | Protocol | `core/types.py` | Re-exported from `core/types.py`. Hook surface for policy declarations. |
+| `GuardrailContext` | dataclass | `guardrails/base.py` | Mutable per-run state threaded through hooks. |
+| `GuardrailLogEntry` | dataclass | `core/types.py` | Re-exported; one hook activation on `AgentResult.guardrail_log`. |
+| `GuardedToolProvider` | class | `guardrails/runtime.py` | Wraps the caller's `ToolProvider` and fires hooks around every `call_tool`. |
+| `ApprovalHandler` | TypeAlias | `guardrails/approval.py` | Structural alias for FastMCP's `ElicitationHandler` signature. |
+| `require_approval` | fn | `guardrails/approval.py` | Interactive approval gate; takes a handler reusing the FastMCP elicitation signature. |
+| `max_cost` | fn | `guardrails/limits.py` | Cumulative cost ceiling per `Agent.run()`. Fatal when exceeded. |
+| `max_tool_calls` | fn | `guardrails/limits.py` | Per-run tool-call cap. Fatal when exceeded. |
+| `block_tools` | fn | `guardrails/validators.py` | Soft deny-list for tool names (does NOT filter `list_tools`). |
+
 ### `run_agent` — full signature
 
 Copied verbatim from
@@ -185,6 +206,7 @@ async def run_agent(
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
     system_arguments: dict[str, Any] | None = None,
+    on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
 ) -> AgentResult:
 ```
 
@@ -203,6 +225,7 @@ async def run_agent(
 | `tags` | no | `None` | Free-form `Dict[str, str]` forwarded to `t0.inference()` for observability. |
 | `namespace` | no | `None` | TensorZero namespace for experimentation routing. Falls back to function default when `None`. |
 | `system_arguments` | no | `None` | Template arguments injected into `input.system.arguments` on every inference call. Used by the memory subsystem for the `system_template` strategy. |
+| `on_inference` | no | `None` | Optional async callback invoked with every `ChatInferenceResponse`, BEFORE tool execution on that turn. Used by the guardrails subsystem to accumulate `response.usage.cost` into `GuardrailContext.cost_so_far` so `max_cost` can abort mid-run. `None` preserves Phase-B byte-identity. |
 
 ### `AgentResult`
 
@@ -219,6 +242,7 @@ class AgentResult:
     inference_ids: list[str] = field(default_factory=list)
     turns: int = 0
     response_source: Literal["text", "thought"] = "text"
+    guardrail_log: list[GuardrailLogEntry] = field(default_factory=list)
 ```
 
 - `response` is joined from `Text` blocks of the terminating turn. If the
@@ -934,6 +958,15 @@ guides cover these in more depth; the list here is for quick orientation.
   calls. Used internally by the memory `"system_template"` strategy but
   available to any caller.
   [`loop.py`](../../src/t0_agents/mcp/loop.py).
+- **Inference observability hook.** `run_agent(on_inference=)` — optional
+  async callback invoked with every `ChatInferenceResponse`, BEFORE tool
+  execution. `None` preserves today's behaviour; used internally by
+  `Agent.run()` when guardrails are configured, to accumulate
+  `response.usage.cost` into `GuardrailContext.cost_so_far`.
+- **Guardrails.** `AgentConfig.guardrails` — list of `Guardrail` instances
+  composed on the agent. Empty (the default) disables the
+  `GuardedToolProvider` wrapper entirely so behaviour is byte-identical to
+  Phase B. See [`../guardrails.md`](../guardrails.md).
 
 ### What is **not** caller-controlled today
 

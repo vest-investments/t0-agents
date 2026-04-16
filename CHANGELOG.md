@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — Unreleased
+
+### Added
+
+- **Guardrail subsystem** (`from t0_agents.guardrails import require_approval,
+  max_cost, max_tool_calls, block_tools`) — declarative policy layer on top
+  of `Agent`. Milestone M3: Trusted Agent.
+- **`require_approval(tools=..., handler=...)`** — interactive approval gate
+  riding FastMCP's `elicitation_handler` signature. Developers can reuse
+  the exact handler they already pass to `Client(elicitation_handler=...)`.
+- **`max_cost(per_episode=...)`** — cumulative cost ceiling per run. Hard
+  aborts via `GuardrailBlockedError` when `response.usage.cost` crosses
+  the cap.
+- **`max_tool_calls(per_run=...)`** — per-run tool-call cap; counter
+  incremented pre-dispatch (race-safe under `parallel_tools=True`).
+- **`block_tools(names)`** — soft deny-list for tool names. Enforcement
+  is at call time; does NOT filter `list_tools()`.
+- **`Guardrail` Protocol** (`runtime_checkable`) — implement four optional
+  hooks (`before_run`, `before_tool`, `after_tool`, `after_run`) to bring
+  your own guardrail. Returning `str` from `before_tool` soft-blocks;
+  raising `GuardrailBlockedError` hard-aborts.
+- **`GuardrailContext`** — mutable per-run state (counter, cost, extra).
+  Constructed inside `Agent.run()` so each run gets a fresh context.
+- **`GuardrailLogEntry`** — one hook activation appended to
+  `AgentResult.guardrail_log`. Attached to the result even on fatal abort
+  via the `try/finally` around `run_agent`.
+- **`GuardedToolProvider`** — the wrapper `Agent.run()` installs around
+  the caller's `ToolProvider` when `config.guardrails` is non-empty.
+  Exposed for advanced composition; normal users don't instantiate it.
+- **`GuardrailBlockedError`** — hard-abort marker. Inherits from new
+  `T0AgentsFatalError` base, which `_execute_single_tool_call` re-raises
+  past its broad `except Exception` so fatal blocks propagate cleanly.
+- **`T0AgentsFatalError`** — new base class for exceptions the agent
+  loop must propagate (versus stringify into a tool error).
+- **`on_inference` keyword argument on `run_agent`** —
+  `Callable[[ChatInferenceResponse], Awaitable[None]] | None = None`.
+  Fires after every `t0.inference()` response, BEFORE tool execution.
+  `None` (the default) preserves behaviour byte-for-byte. Used internally
+  by `Agent.run()` to track cumulative cost for `max_cost`.
+- **`AgentResult.guardrail_log`** — new field (default empty list)
+  carrying per-hook activations for audit and manual feedback emission.
+- Example `examples/10_guardrails/` demonstrating all four built-ins
+  composed on one agent with a CLI approval handler.
+- Public documentation at `docs/guardrails.md`.
+
+### Changed
+
+- `AgentConfig` gained a `guardrails: list[Guardrail]` field (default
+  empty). When empty, `Agent.run()` forwards the raw `tool_provider` and
+  passes `on_inference=None` — byte-identical to Phase B.
+
 ## [0.3.0] — Unreleased
 
 ### Added
