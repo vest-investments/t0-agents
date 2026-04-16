@@ -127,6 +127,7 @@ Exported from `from t0_agents import …`
 | `AgentConfig` | dataclass | `core/config.py` | Configuration for `Agent` (name, function, knobs). |
 | `AgentResult` | dataclass | `core/types.py` | What `run_agent` / `Agent.run()` returns. |
 | `ToolProvider` | Protocol | `core/types.py` | Structural type for tool discovery + execution. |
+| `MemoryProvider` | Protocol | `core/types.py` | Repository-style memory interface (load + save + search). |
 | `T0AgentsError` | exception | `core/exceptions.py` | Base exception for the library. |
 | `ConfigurationError` | exception | `core/exceptions.py` | Invalid config or construction parameters. |
 | `MaxTurnsExceededError` | exception | `core/exceptions.py` | Raised when `max_turns` is exhausted. |
@@ -150,6 +151,19 @@ for callers who want finer-grained access to the adapter and executor layers:
 | `auto_approve_handler` | async fn | `mcp/elicitation.py:10-26` | Test handler: approve binary approvals, decline structured input. |
 | `auto_decline_handler` | async fn | `mcp/elicitation.py:29-40` | Test handler: decline everything. |
 
+### Memory symbols (`t0_agents.memory`)
+
+Exported from `from t0_agents.memory import …`
+([`src/t0_agents/memory/__init__.py`](../../src/t0_agents/memory/__init__.py)):
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `MemoryProvider` | Protocol | `core/types.py` | Re-exported from `core/types.py`. Repository interface for memory backends. |
+| `MemoryRecord` | dataclass | `memory/base.py` | One stored interaction (episode_id, user_message, agent_response, turns, …). |
+| `render_memory_summary` | fn | `memory/base.py` | Render `list[MemoryRecord]` into a text summary for prompt injection. |
+| `InMemoryMemory` | class | `memory/in_memory.py` | Ephemeral, dict-backed backend. |
+| `SqliteMemory` | class | `memory/sqlite.py` | Persistent backend behind `[memory-sqlite]` extra. `None` when `aiosqlite` is absent. |
+
 ### `run_agent` — full signature
 
 Copied verbatim from
@@ -170,6 +184,7 @@ async def run_agent(
     tool_choice: ToolChoice | None = None,
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
+    system_arguments: dict[str, Any] | None = None,
 ) -> AgentResult:
 ```
 
@@ -187,6 +202,7 @@ async def run_agent(
 | `tool_choice` | no | `None` | Forwarded on every inference call. |
 | `tags` | no | `None` | Free-form `Dict[str, str]` forwarded to `t0.inference()` for observability. |
 | `namespace` | no | `None` | TensorZero namespace for experimentation routing. Falls back to function default when `None`. |
+| `system_arguments` | no | `None` | Template arguments injected into `input.system.arguments` on every inference call. Used by the memory subsystem for the `system_template` strategy. |
 
 ### `AgentResult`
 
@@ -903,13 +919,29 @@ guides cover these in more depth; the list here is for quick orientation.
 - **Namespace.** `AgentConfig.namespace` / `run_agent(namespace=)` —
   TensorZero namespace for experimentation routing. Falls back to function
   default when `None`.
+- **Memory backend.** `AgentConfig.memory` — optional `MemoryProvider`
+  instance. When set, the `Agent` hydrates memory before each run and persists
+  a `MemoryRecord` after. Ships `InMemoryMemory` (ephemeral) and
+  `SqliteMemory` (persistent, `[memory-sqlite]` extra).
+  [`memory/`](../../src/t0_agents/memory/).
+- **Memory injection strategy.** `AgentConfig.memory_strategy` — controls how
+  loaded context enters the prompt. `"auto"` (default) resolves to
+  `"prepended_message"`. `"system_template"` passes via
+  `input.system.arguments.memory_context`.
+  [`core/config.py`](../../src/t0_agents/core/config.py).
+- **System template arguments.** `run_agent(system_arguments=)` — forwards
+  template arguments to `input.system.arguments` in TensorZero inference
+  calls. Used internally by the memory `"system_template"` strategy but
+  available to any caller.
+  [`loop.py`](../../src/t0_agents/mcp/loop.py).
 
 ### What is **not** caller-controlled today
 
 Stated as facts about the current surface, not recommendations for change.
 
 - **System prompt** lives in `tensorzero.toml` variants. `run_agent` takes
-  no `system_message` argument.
+  no `system_message` argument (but `system_arguments` can pass template
+  variables to a system template that declares them).
 - **`tool_timeout`** is global for a run. There is no per-tool timeout.
 - **`RECOVERABLE_INFERENCE_PATTERNS`** is a module-level constant at
   `loop.py:47-49`.
