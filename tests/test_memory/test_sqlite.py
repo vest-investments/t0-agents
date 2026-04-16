@@ -90,6 +90,14 @@ class TestSqliteMemory:
         results = await mem.search("match", limit=3)
         assert len(results) == 3
 
+    async def test_search_returns_most_recent_first(self, tmp_path: Path) -> None:
+        mem = SqliteMemory(str(tmp_path / "test.db"))
+        for i in range(5):
+            await mem.save(_record(episode_id=f"ep-{i}", user=f"match {i}"))
+        results = await mem.search("match", limit=3)
+        # Most recently inserted rows come first.
+        assert [r.user_message for r in results] == ["match 4", "match 3", "match 2"]
+
     async def test_concurrent_saves(self, tmp_path: Path) -> None:
         mem = SqliteMemory(str(tmp_path / "test.db"))
         records = [_record(user=f"msg-{i}") for i in range(5)]

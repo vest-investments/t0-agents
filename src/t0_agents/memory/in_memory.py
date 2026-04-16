@@ -31,13 +31,14 @@ class InMemoryMemory:
         *,
         limit: int = 5,
     ) -> list[MemoryRecord]:
-        """Case-insensitive substring search across all records."""
+        """Case-insensitive substring search, most recent matches first."""
         q = query.lower()
+        all_records = [r for records in self._store.values() for r in records]
+        all_records.sort(key=lambda r: r.created_at, reverse=True)
         results: list[MemoryRecord] = []
-        for records in self._store.values():
-            for r in records:
-                if q in r.user_message.lower() or q in r.agent_response.lower():
-                    results.append(r)
-                    if len(results) >= limit:
-                        return results
+        for r in all_records:
+            if q in r.user_message.lower() or q in r.agent_response.lower():
+                results.append(r)
+                if len(results) >= limit:
+                    break
         return results

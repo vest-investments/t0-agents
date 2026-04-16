@@ -92,7 +92,7 @@ class SqliteMemory:
         *,
         limit: int = 5,
     ) -> list[MemoryRecord]:
-        """Case-insensitive substring search across all records."""
+        """Case-insensitive substring search, most recent matches first."""
         pattern = f"%{query}%"
         async with aiosqlite.connect(self._db_path) as db:
             await self._ensure_table(db)
@@ -102,7 +102,7 @@ class SqliteMemory:
                 "FROM memory_records "
                 "WHERE user_message LIKE ? COLLATE NOCASE "
                 "OR agent_response LIKE ? COLLATE NOCASE "
-                "ORDER BY id ASC LIMIT ?",
+                "ORDER BY id DESC LIMIT ?",
                 (pattern, pattern, limit),
             )
             rows = await cursor.fetchall()

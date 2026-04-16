@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from t0_agents.memory.base import MemoryRecord
 from t0_agents.memory.in_memory import InMemoryMemory
@@ -80,6 +81,20 @@ class TestInMemoryMemory:
             await mem.save(_record(user=f"match {i}"))
         results = await mem.search("match", limit=3)
         assert len(results) == 3
+
+    async def test_search_returns_most_recent_first(self) -> None:
+        mem = InMemoryMemory()
+        base = datetime(2026, 1, 1, tzinfo=UTC)
+        for i in range(5):
+            await mem.save(MemoryRecord(
+                episode_id=f"ep-{i}",
+                user_message=f"match {i}",
+                agent_response="r",
+                turns=1,
+                created_at=base + timedelta(minutes=i),
+            ))
+        results = await mem.search("match", limit=3)
+        assert [r.user_message for r in results] == ["match 4", "match 3", "match 2"]
 
     async def test_concurrent_saves(self) -> None:
         mem = InMemoryMemory()

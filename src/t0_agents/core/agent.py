@@ -133,9 +133,11 @@ class Agent:
         )
 
         # --- 4. Save memory ---
-        if self._config.memory is not None:
+        # Skip when episode_id is missing so we never persist records under an
+        # empty-string key (which would collide across runs and be unretrievable).
+        if self._config.memory is not None and result.episode_id:
             record = MemoryRecord(
-                episode_id=result.episode_id or "",
+                episode_id=result.episode_id,
                 user_message=user_message,
                 agent_response=result.response,
                 turns=result.turns,
