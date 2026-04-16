@@ -7,7 +7,7 @@ from t0_agents.core.exceptions import (
     MaxTurnsExceededError,
     T0AgentsError,
 )
-from t0_agents.core.types import AgentResult, ToolProvider
+from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
 
 __all__ = [
     "Agent",
@@ -15,6 +15,7 @@ __all__ = [
     "AgentResult",
     "ConfigurationError",
     "MaxTurnsExceededError",
+    "MemoryProvider",
     "T0AgentsError",
     "ToolProvider",
 ]

@@ -28,6 +28,26 @@ class ToolProvider(Protocol):
     ) -> Any: ...
 
 
+@runtime_checkable
+class MemoryProvider(Protocol):
+    """Repository-style memory interface.
+
+    The ``Agent`` calls ``load`` before every run and ``save`` after.
+    ``search`` is optional for the core loop but required by the protocol
+    so that custom backends expose a uniform query surface.
+
+    Implementations return ``MemoryRecord`` instances (defined in
+    ``t0_agents.memory.base``).  The protocol uses ``Any`` to avoid a
+    circular import between ``core/`` and ``memory/``.
+    """
+
+    async def load(self, episode_id: str) -> list[Any]: ...
+
+    async def save(self, record: Any) -> None: ...
+
+    async def search(self, query: str, *, limit: int = 5) -> list[Any]: ...
+
+
 @dataclass
 class AgentResult:
     """Result of an agent run."""
