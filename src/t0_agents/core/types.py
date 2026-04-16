@@ -48,6 +48,58 @@ class MemoryProvider(Protocol):
     async def search(self, query: str, *, limit: int = 5) -> list[Any]: ...
 
 
+@runtime_checkable
+class Guardrail(Protocol):
+    """Hook surface invoked by ``Agent.run()`` and ``GuardedToolProvider``.
+
+    Four lifecycle hooks fire around each run and each tool call.  All
+    implementations expose a human-readable ``name`` for logging and for
+    ``GuardrailLogEntry.guardrail_name``.  The protocol uses ``Any`` for
+    context and tool-call arguments to avoid a circular import between
+    ``core/`` and ``guardrails/`` — the concrete types live in
+    ``t0_agents.guardrails.base.GuardrailContext`` and
+    ``tensorzero.ToolCall``.
+
+    Return semantics of ``before_tool``:
+
+    - ``None`` → pass through; the inner ``call_tool`` runs.
+    - ``str``  → short-circuit; the string becomes the tool result the
+      LLM sees next turn (wrapped in a single ``"ERROR: "`` prefix by the
+      existing adapter serializer).
+    - Raising ``GuardrailBlockedError`` (or any ``T0AgentsFatalError``) →
+      hard-abort the run; the exception propagates past the loop.
+    """
+
+    name: str
+
+    async def before_run(self, ctx: Any) -> None: ...
+
+    async def before_tool(self, ctx: Any, tool_call: Any) -> str | None: ...
+
+    async def after_tool(
+        self, ctx: Any, tool_call: Any, result_str: str
+    ) -> None: ...
+
+    async def after_run(self, ctx: Any, result: Any) -> None: ...
+
+
+@dataclass(slots=True)
+class GuardrailLogEntry:
+    """One guardrail hook activation recorded during ``Agent.run()``.
+
+    Populated by ``GuardedToolProvider`` (for ``before_tool`` / ``after_tool``)
+    and by ``Agent.run`` itself (for ``before_run`` / ``after_run``).  Attached
+    to :class:`AgentResult.guardrail_log` after a successful run so callers
+    can emit per-outcome ``t0.feedback(...)`` manually (T0 Q5 resolution).
+    """
+
+    guardrail_name: str
+    hook: Literal["before_run", "before_tool", "after_tool", "after_run"]
+    kind: Literal["pass", "rejection", "block", "modification"]
+    tool_name: str | None = None
+    detail: str = ""
+
+
 @dataclass
 class AgentResult:
     """Result of an agent run."""
@@ -57,3 +109,4 @@ class AgentResult:
     inference_ids: list[str] = field(default_factory=list)
     turns: int = 0
     response_source: Literal["text", "thought"] = "text"
+    guardrail_log: list[GuardrailLogEntry] = field(default_factory=list)

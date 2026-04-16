@@ -409,8 +409,8 @@ class TestRecoverableInferenceError:
 
         assert exc_info.value.status_code == 500
 
-    async def test_non_400_error_re_raised(self) -> None:
-        """Non-400 TensorZeroError with matching text is still re-raised."""
+    async def test_503_with_matching_text_re_raised(self) -> None:
+        """503 Service Unavailable is NOT recoverable even with matching text."""
         error = TensorZeroError(
             status_code=503, text="not in request.tools",
         )
@@ -426,6 +426,37 @@ class TestRecoverableInferenceError:
             )
 
         assert exc_info.value.status_code == 503
+
+    async def test_502_bad_gateway_recovered(self) -> None:
+        """502 Bad Gateway with matching text IS recoverable.
+
+        TensorZero v2026.4.0 wraps provider-level 400 tool-validation
+        failures as gateway-level 502s.  The loop must treat them the
+        same as direct 400s to preserve the ``<|channel|>``-artifact
+        recovery path.
+        """
+        error = TensorZeroError(
+            status_code=502,
+            text=(
+                'All variants failed with errors: gpt_oss_20: All model providers '
+                'failed to infer with errors: groq: Error 400 Bad Request from groq '
+                'client: tool call validation failed: attempted to call tool '
+                "'add<|channel|>commentary' which was not in request.tools"
+            ),
+        )
+        r2 = FakeChatResponse(content=[Text(text="done")])
+        t0 = FakeT0([error, r2])
+        mcp = FakeMCPClient()
+
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], mcp),
+            "test",
+            "agent",
+        )
+
+        assert result.response == "done"
+        assert result.turns == 2
 
     async def test_error_logged_as_warning(self, caplog: Any) -> None:
         """Caught TensorZeroError is logged at WARNING level."""

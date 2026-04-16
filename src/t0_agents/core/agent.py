@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
 
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
+from tensorzero.types import ChatInferenceResponse
 
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import ConfigurationError
-from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
+from t0_agents.core.exceptions import ConfigurationError, T0AgentsFatalError
+from t0_agents.core.types import (
+    AgentResult,
+    GuardrailLogEntry,
+    MemoryProvider,
+    ToolProvider,
+)
+from t0_agents.guardrails.base import GuardrailContext
+from t0_agents.guardrails.runtime import GuardedToolProvider
 from t0_agents.mcp.loop import run_agent
 from t0_agents.memory.base import MemoryRecord, render_memory_summary
 
@@ -19,6 +28,27 @@ logger = logging.getLogger(__name__)
 # Default tool timeout used when AgentConfig.tool_timeout is None.
 # Matches run_agent's own default so behaviour is identical.
 _DEFAULT_TOOL_TIMEOUT: float = 30.0
+
+
+def _make_cost_tracker(
+    ctx: GuardrailContext,
+) -> Callable[[ChatInferenceResponse], Awaitable[None]]:
+    """Build the ``on_inference`` closure that mutates a run's guardrail context.
+
+    Treats ``response.usage is None`` and ``response.usage.cost is None`` as
+    zero so the guardrail still sees a monotonically-increasing cost even
+    when the provider omits pricing (e.g. a locally-hosted model).  Also
+    increments ``ctx.turn`` so developer-defined guardrails can key behaviour
+    on turn count without re-implementing the counter.
+    """
+
+    async def _on_inference(response: ChatInferenceResponse) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            ctx.cost_so_far += usage.cost or 0.0
+        ctx.turn += 1
+
+    return _on_inference
 
 
 class Agent:
@@ -78,7 +108,11 @@ class Agent:
 
         When ``config.memory`` is set, memory records are loaded before the
         loop (if *episode_id* is provided) and a new record is persisted
-        after the loop completes.
+        after the loop completes.  When ``config.guardrails`` is non-empty,
+        the tool provider is wrapped in a :class:`GuardedToolProvider` that
+        fires every hook around every ``call_tool`` and tracks per-run
+        counters on a fresh :class:`GuardrailContext`; the resulting
+        :class:`AgentResult` carries a populated ``guardrail_log``.
 
         Args:
             user_message: The user's query as a plain string.
@@ -87,10 +121,12 @@ class Agent:
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
-            text of the terminating turn, episode metadata, and turn count.
+            text of the terminating turn, episode metadata, turn count,
+            and (when guardrails are configured) the per-hook audit log.
 
         Raises:
             MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
+            GuardrailBlockedError: If any guardrail hard-aborts the run.
         """
         # --- 1. Load memory ---
         memory_records: list[MemoryRecord] = []
@@ -110,29 +146,105 @@ class Agent:
             user_message, memory_records,
         )
 
-        # --- 3. Delegate to run_agent ---
+        # --- 3. Set up guardrails (Phase C) ---
+        # Empty-list case: preserve Phase B byte-identity by forwarding the
+        # raw tool_provider and leaving on_inference at None so run_agent's
+        # code path is unchanged.
+        guard_ctx: GuardrailContext | None = None
+        guard_log: list[GuardrailLogEntry] = []
+        tool_provider: ToolProvider = self._tool_provider
+        on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
+
+        if self._config.guardrails:
+            guard_ctx = GuardrailContext(
+                agent_name=self._config.name,
+                function_name=self._config.function_name,
+                user_message=user_message,
+            )
+            tool_provider = GuardedToolProvider(
+                self._tool_provider,
+                list(self._config.guardrails),
+                guard_ctx,
+                guard_log,
+            )
+            on_inference = _make_cost_tracker(guard_ctx)
+
+        # --- 4. Delegate to run_agent ---
+        # ``before_run`` lives inside the try so a fatal abort still runs
+        # ``after_run`` via the finally block — docs/guardrails.md promises
+        # after_run fires even when GuardrailBlockedError propagates.
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
             else _DEFAULT_TOOL_TIMEOUT
         )
-        result = await run_agent(
-            self._t0,
-            cast(Client[Any], self._tool_provider),
-            effective_message,
-            self._config.function_name,
-            episode_id=episode_id,
-            max_turns=self._config.max_turns,
-            tool_timeout=tool_timeout,
-            parallel_tools=self._config.parallel_tools,
-            dryrun=self._config.dryrun,
-            tool_choice=self._config.tool_choice,
-            tags=self._config.tags,
-            namespace=self._config.namespace,
-            **extra_kwargs,
-        )
+        result: AgentResult | None = None
+        try:
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.before_run(guard_ctx)
+                    except T0AgentsFatalError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r before_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="before_run",
+                                kind="pass",
+                            )
+                        )
 
-        # --- 4. Save memory ---
+            result = await run_agent(
+                self._t0,
+                cast(Client[Any], tool_provider),
+                effective_message,
+                self._config.function_name,
+                episode_id=episode_id,
+                max_turns=self._config.max_turns,
+                tool_timeout=tool_timeout,
+                parallel_tools=self._config.parallel_tools,
+                dryrun=self._config.dryrun,
+                tool_choice=self._config.tool_choice,
+                tags=self._config.tags,
+                namespace=self._config.namespace,
+                on_inference=on_inference,
+                **extra_kwargs,
+            )
+        finally:
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.after_run(guard_ctx, result)
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r after_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="after_run",
+                                kind="pass",
+                            )
+                        )
+                if result is not None:
+                    result.guardrail_log = list(guard_log)
+
+        # Control reaches here only when ``run_agent`` returned normally
+        # (no exception propagated past the ``try``).  ``result`` is always
+        # populated at this point; the narrowing keeps mypy strict happy.
+        assert result is not None
+
+        # --- 5. Save memory ---
         # Skip when episode_id is missing so we never persist records under an
         # empty-string key (which would collide across runs and be unretrievable).
         if self._config.memory is not None and result.episode_id:
