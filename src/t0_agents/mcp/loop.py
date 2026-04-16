@@ -196,6 +196,8 @@ async def run_agent(
     parallel_tools: bool = False,
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
+    tags: dict[str, str] | None = None,
+    namespace: str | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -237,6 +239,12 @@ async def run_agent(
             ``t0.inference()`` call. Accepts ``"auto"``, ``"required"``,
             ``"off"``, or ``{"specific": "<tool_name>"}`` to force a particular
             tool. ``None`` (the default) lets the model decide freely.
+        tags: Free-form ``Dict[str, str]`` forwarded to every
+            ``t0.inference()`` call for observability. ``None`` (the default)
+            omits the parameter.
+        namespace: TensorZero namespace forwarded to every ``t0.inference()``
+            call for experimentation routing. Falls back to the function's
+            default namespace when ``None``.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -271,6 +279,8 @@ async def run_agent(
                 additional_tools=t0_tools,
                 dryrun=dryrun,
                 tool_choice=tool_choice,
+                tags=tags,
+                namespace=namespace,
             )
         except TensorZeroError as e:
             if (

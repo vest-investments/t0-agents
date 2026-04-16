@@ -32,6 +32,7 @@ from t0_agents.mcp import (
     has_tool_calls,
     run_agent,
 )
+from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
 
 # --- Fixture builders -------------------------------------------------------
@@ -97,56 +98,6 @@ def _mcp_tool(name: str = "add") -> MCPTool:
 def _mcp_error(message: str = "boom", code: int = -32000) -> McpError:
     """Build an McpError. -32000 is the default tool-timeout code per FastMCP."""
     return McpError(ErrorData(code=code, message=message))
-
-
-class FakeMCPClient:
-    """Stand-in for ``fastmcp.Client``.
-
-    ``call_results`` maps tool name → either a ``CallToolResult`` (returned) or
-    an ``Exception`` (raised). For tests that need to script per-call ordering
-    independently, use ``call_outcomes`` (a list popped in order).
-    """
-
-    def __init__(
-        self,
-        *,
-        tools: list[MCPTool] | None = None,
-        call_results: dict[str, CallToolResult | Exception] | None = None,
-        call_outcomes: list[CallToolResult | Exception] | None = None,
-        side_effect: Any = None,
-    ) -> None:
-        self._tools = tools or [_mcp_tool("add")]
-        self._call_results = call_results or {}
-        self._call_outcomes = list(call_outcomes) if call_outcomes else None
-        self._side_effect = side_effect
-        self.call_tool_invocations: list[
-            tuple[str | None, dict[str, Any] | None, float | None]
-        ] = []
-
-    async def list_tools(self) -> list[MCPTool]:
-        return self._tools
-
-    async def call_tool(
-        self,
-        name: str | None,
-        arguments: dict[str, Any] | None = None,
-        *,
-        timeout: float | None = None,
-        **_: Any,
-    ) -> CallToolResult:
-        self.call_tool_invocations.append((name, arguments, timeout))
-        if self._side_effect is not None:
-            await self._side_effect(name)
-        if self._call_outcomes is not None:
-            outcome: CallToolResult | Exception = self._call_outcomes.pop(0)
-        else:
-            key = name or ""
-            if key not in self._call_results:
-                raise AssertionError(f"FakeMCPClient: no canned result for {name!r}")
-            outcome = self._call_results[key]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
 
 
 # --- TestHasToolCalls -------------------------------------------------------
@@ -646,3 +597,59 @@ class TestRunAgent:
         for call in t0.calls:
             tools = call["additional_tools"]
             assert {t["name"] for t in tools} == {"add", "greet"}
+
+    async def test_tags_kwarg_forwards_to_inference(self) -> None:
+        """tags dict reaches every t0.inference call."""
+        t0 = FakeT0([
+            FakeChatResponse(content=[_tool_call()]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "go",
+            "agent",
+            tags={"env": "ci"},
+        )
+        for call in t0.calls:
+            assert call["tags"] == {"env": "ci"}
+
+    async def test_namespace_kwarg_forwards_to_inference(self) -> None:
+        """namespace string reaches every t0.inference call."""
+        t0 = FakeT0([
+            FakeChatResponse(content=[_tool_call()]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "go",
+            "agent",
+            namespace="staging",
+        )
+        for call in t0.calls:
+            assert call["namespace"] == "staging"
+
+    async def test_tags_none_by_default(self) -> None:
+        """When tags not passed, None reaches t0.inference."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+        )
+        assert t0.calls[0]["tags"] is None
+
+    async def test_namespace_none_by_default(self) -> None:
+        """When namespace not passed, None reaches t0.inference."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+        )
+        assert t0.calls[0]["namespace"] is None
