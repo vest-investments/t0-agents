@@ -18,6 +18,7 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, cast
 
 from fastmcp import Client
@@ -34,19 +35,29 @@ from tensorzero import (
 )
 from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
-from t0_agents.core.exceptions import MaxTurnsExceededError
+from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
 from t0_agents.core.types import AgentResult
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
 
 logger = logging.getLogger(__name__)
 
 # Patterns in TensorZeroError.text that indicate a recoverable inference
-# failure.  When a match is found the loop injects a corrective user message
-# and retries instead of propagating the exception.  Extend this list to
-# handle similar artifacts from other models / providers.
+# failure.  When a match is found AND the status code is in
+# ``RECOVERABLE_INFERENCE_STATUS_CODES``, the loop injects a corrective
+# user message and retries instead of propagating the exception.  Extend
+# either list to handle similar artifacts from other models / providers.
 RECOVERABLE_INFERENCE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"not in request\.tools"),
 ]
+
+# HTTP status codes that TensorZero may use when wrapping a provider-side
+# validation failure.  ``400`` is the direct passthrough; ``502`` is what
+# v2026.4.0 returns when an upstream provider (e.g. Groq) rejects the
+# request with 400 — the gateway classifies the whole request as
+# "upstream failed" and responds with a gateway-level Bad Gateway.
+# ``503`` is intentionally excluded: Service Unavailable is a
+# rate-limit / outage signal, not a format issue.
+RECOVERABLE_INFERENCE_STATUS_CODES: frozenset[int] = frozenset({400, 502})
 
 
 def has_tool_calls(content_blocks: list[Any]) -> bool:
@@ -111,6 +122,12 @@ async def _execute_single_tool_call(
         mcp_result = await mcp_client.call_tool(
             block.name, block.arguments, timeout=timeout
         )
+    except T0AgentsFatalError:
+        # Guardrail-level hard block (or any future fatal marker) must
+        # propagate past the belt-and-braces ``except Exception`` below,
+        # so ``Agent.run()`` surfaces the policy violation verbatim
+        # rather than stringifying it into a ToolResult.
+        raise
     except ToolError as e:
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (ToolError): %s", name, e)
@@ -199,6 +216,7 @@ async def run_agent(
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
     system_arguments: dict[str, Any] | None = None,
+    on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -252,6 +270,13 @@ async def run_agent(
             system-template variants. ``None`` (the default) omits the
             ``system`` key from the input dict entirely, preserving
             existing behaviour.
+        on_inference: Optional async callback invoked with every
+            ``ChatInferenceResponse`` after it is received and cast,
+            BEFORE the turn's tool calls are dispatched. Used by the
+            guardrails subsystem to update ``GuardrailContext.cost_so_far``
+            from ``response.usage.cost`` so ``max_cost`` can abort the
+            run at the next tool call. ``None`` (the default) is a no-op
+            that preserves today's behaviour byte-for-byte.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -294,7 +319,7 @@ async def run_agent(
             )
         except TensorZeroError as e:
             if (
-                e.status_code == 400
+                e.status_code in RECOVERABLE_INFERENCE_STATUS_CODES
                 and e.text
                 and any(p.search(e.text) for p in RECOVERABLE_INFERENCE_PATTERNS)
             ):
@@ -320,6 +345,12 @@ async def run_agent(
         # call run_agent against a JSON function, so cast to narrow for mypy.
         # We cannot isinstance-check here because unit tests use duck-typed fakes.
         response = cast(ChatInferenceResponse, raw)
+
+        # Post-inference observability hook (Phase C).  Fires BEFORE tool
+        # execution so guardrails like ``max_cost`` can block the next
+        # tool call based on cumulative usage from this turn.
+        if on_inference is not None:
+            await on_inference(response)
 
         episode_id = str(response.episode_id)
         inference_ids.append(str(response.inference_id))
