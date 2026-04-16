@@ -130,6 +130,8 @@ Exported from `from t0_agents import …`
 | `MemoryProvider` | Protocol | `core/types.py` | Repository-style memory interface (load + save + search). |
 | `Guardrail` | Protocol | `core/types.py` | Hook surface for declarative guardrails (before/after run/tool). |
 | `GuardrailLogEntry` | dataclass | `core/types.py` | One guardrail hook activation recorded on `AgentResult.guardrail_log`. |
+| `ElicitationForwarder` | class | `core/elicitation_forwarder.py` | Future-based bridge for remote elicitation (Phase D skeleton; Phase E completes). Default handler declines. |
+| `ElicitationRequest` | dataclass | `core/elicitation_forwarder.py` | One pending elicitation keyed by `elicitation_id`; Phase E uses it to pipe to a WS resolver. |
 | `T0AgentsError` | exception | `core/exceptions.py` | Base exception for the library. |
 | `T0AgentsFatalError` | exception | `core/exceptions.py` | Marker base for exceptions the agent loop must propagate. |
 | `ConfigurationError` | exception | `core/exceptions.py` | Invalid config or construction parameters. |
@@ -137,6 +139,14 @@ Exported from `from t0_agents import …`
 | `GuardrailBlockedError` | exception | `core/exceptions.py` | Hard-abort from a guardrail (`T0AgentsFatalError` subclass). |
 | `run_agent` | async fn | `mcp/loop.py` | The full agent loop: discover → infer → execute → repeat. |
 | `ToolChoice` | re-export | from `tensorzero` | Directive type for forcing / suppressing tool use. |
+
+### Agent methods
+
+- `Agent.warmup()` — async lifespan hook.  Default is a no-op; the
+  HTTP serving layer calls it inside FastAPI's lifespan so deployments
+  can front-load readiness probes by subclassing `Agent`.  Added in
+  Phase D; no TensorZero SDK health API exists as of v2026.4.0, so no
+  active probe is shipped by default.
 
 ### Mid-level symbols (`t0_agents.mcp`)
 
@@ -184,6 +194,32 @@ Exported from `from t0_agents.guardrails import …`
 | `max_cost` | fn | `guardrails/limits.py` | Cumulative cost ceiling per `Agent.run()`. Fatal when exceeded. |
 | `max_tool_calls` | fn | `guardrails/limits.py` | Per-run tool-call cap. Fatal when exceeded. |
 | `block_tools` | fn | `guardrails/validators.py` | Soft deny-list for tool names (does NOT filter `list_tools`). |
+
+### Serving symbols (`t0_agents.serve`)
+
+Exported from `from t0_agents.serve import …` — gated by the `[serve]`
+extra (`pip install 't0-agents[serve]'`).  The submodule raises a
+`T0AgentsError` at import time when `fastapi` / `uvicorn` are missing,
+so the error is actionable rather than a raw `ImportError`.
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `create_app` | fn | `serve/app.py` | Wrap an `Agent` in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info`. |
+| `mount_agent` | fn | `serve/app.py` | Mount a per-agent sub-app under a URL prefix on an existing FastAPI app. |
+| `SessionFactory` | class | `serve/session.py` | Builds `(Client, Agent)` pairs whose lifetime is a caller's session (one HTTP request in Phase D, one SSE stream / WS conn in Phase E). |
+| `ClientFactory` | TypeAlias | `serve/session.py` | `Callable[[], Client[Any]]` — 0-arg callable that mints a fresh `fastmcp.Client`. |
+
+The public route contract lives in Pydantic models at
+`src/t0_agents/serve/protocol.py`:
+
+| Model | Shape |
+| --- | --- |
+| `ChatRequest` | `message`, optional `episode_id`, optional `tags`. |
+| `ChatResponse` | Mirrors `AgentResult`; `guardrail_log: list[dict]` via `dataclasses.asdict`. |
+| `FeedbackRequest` | `metric_name`, `value`, plus optional `inference_id` / `episode_id` / `tags` / `dryrun` — matches the six kwargs on `AsyncTensorZeroGateway.feedback`. |
+| `FeedbackResponse` | `feedback_id: str`. |
+| `HealthResponse` | `gateway`, `tool_provider` — free-form strings (`"ok"`, `"down"`, `"per-session"`). |
+| `InfoResponse` | Redacted `AgentConfig` snapshot: name, function_name, namespace, tags, `has_memory`, `guardrails` (names only). |
 
 ### `run_agent` — full signature
 
@@ -967,6 +1003,22 @@ guides cover these in more depth; the list here is for quick orientation.
   composed on the agent. Empty (the default) disables the
   `GuardedToolProvider` wrapper entirely so behaviour is byte-identical to
   Phase B. See [`../guardrails.md`](../guardrails.md).
+- **HTTP serving knobs.** `t0_agents.serve.create_app(agent, *, client_factory, share_client, deployment_label)`:
+  - `client_factory`: zero-arg callable that mints a fresh
+    `fastmcp.Client` per session.  Default mode; honours the FastMCP
+    Q3 per-session mandate.
+  - `share_client=True`: reuses `agent._tool_provider` across every
+    session — caller owns the Client lifecycle.  Mutually exclusive
+    with `client_factory`; raises `ConfigurationError` on either
+    collision or omission.
+  - `deployment_label`: merged into `AgentConfig.tags` as
+    `t0_agents.deployment=<label>` before every inference.
+  See [`serve/app.py`](../../src/t0_agents/serve/app.py) and the
+  public guide at [`../serving.md`](../serving.md).
+- **Lifespan readiness probe.** `Agent.warmup()` — async no-op by
+  default; override in a subclass to front-load checks before the
+  first request.  Called by `t0_agents.serve.build_lifespan` during
+  FastAPI startup.
 
 ### What is **not** caller-controlled today
 
