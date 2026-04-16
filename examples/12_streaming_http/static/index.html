@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>t0-agents · streaming demo</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>t0-agents streaming demo</h1>
+    <p>WebSocket client — live deltas, tool spinners, elicitation modals.</p>
+    <p class="hint">
+      Try: <code>What is 2 + 3?</code> · <code>List my tasks.</code> ·
+      <code>Delete task T-103.</code> · <code>Create a new task.</code>
+    </p>
+  </header>
+
+  <main id="chat-log" aria-live="polite"></main>
+
+  <footer>
+    <form id="composer">
+      <input type="text" id="message" autocomplete="off"
+             placeholder="Send a message…" required>
+      <button type="submit">Send</button>
+    </form>
+    <div id="status">Connecting…</div>
+  </footer>
+
+  <!-- Elicitation modal (hidden by default) -->
+  <dialog id="elicit-modal">
+    <form id="elicit-form" method="dialog">
+      <h2 id="elicit-title">Approval required</h2>
+      <p id="elicit-message"></p>
+      <div id="elicit-fields"></div>
+      <menu>
+        <button type="button" data-action="decline">Decline</button>
+        <button type="button" data-action="accept">Accept</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
