@@ -198,6 +198,7 @@ async def run_agent(
     tool_choice: ToolChoice | None = None,
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
+    system_arguments: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -245,6 +246,12 @@ async def run_agent(
         namespace: TensorZero namespace forwarded to every ``t0.inference()``
             call for experimentation routing. Falls back to the function's
             default namespace when ``None``.
+        system_arguments: Template arguments injected into
+            ``input.system.arguments`` on every ``t0.inference()`` call.
+            Used by the memory subsystem to pass ``memory_context`` to
+            system-template variants. ``None`` (the default) omits the
+            ``system`` key from the input dict entirely, preserving
+            existing behaviour.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -272,10 +279,13 @@ async def run_agent(
         # from <|channel|> artifacts) and inject a corrective user message so
         # the LLM can retry on the next turn.
         try:
+            input_dict: dict[str, Any] = {"messages": messages}
+            if system_arguments is not None:
+                input_dict["system"] = {"arguments": system_arguments}
             raw = await t0.inference(
                 function_name=function_name,
                 episode_id=episode_id,
-                input={"messages": messages},
+                input=input_dict,
                 additional_tools=t0_tools,
                 dryrun=dryrun,
                 tool_choice=tool_choice,
