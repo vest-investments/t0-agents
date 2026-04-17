@@ -25,6 +25,7 @@ predictable t0-agents exception.
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
@@ -48,6 +49,8 @@ from t0_agents.core.types import ToolProvider
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
 
+
+logger = logging.getLogger(__name__)
 
 #: Tag key carried on every sub-agent inference so ClickHouse can
 #: reconstruct the delegation tree via ``tags[PARENT_EPISODE_ID_TAG]``.
@@ -99,9 +102,16 @@ def update_parent_episode_id(episode_id: str) -> None:
     episode id on the first inference response.  Without a refresh,
     every sub-agent invocation during that same orchestrator run would
     tag ``t0_agents.parent_episode_id=unknown`` even after the id is
-    known.  This helper replaces the value stored for the duration of
-    the enclosing :func:`bind_parent_episode_id` context; the outer
-    context still owns the reset on exit.
+    known.
+
+    Must be called inside an enclosing :func:`bind_parent_episode_id`
+    context.  The returned :class:`~contextvars.Token` is intentionally
+    discarded: :meth:`ContextVar.reset` on the outer bind's token
+    reverts the ContextVar to its pre-bind value regardless of how
+    many intermediate ``set`` calls landed in between, so the outer
+    :func:`bind_parent_episode_id` still owns cleanup on exit.  This
+    is a documented Python semantic (``contextvars`` module docs), not
+    a quirk of this module.
     """
     _PARENT_EPISODE_ID.set(episode_id)
 
@@ -149,7 +159,12 @@ def install_sub_agents(parent: Agent) -> None:
     # silently replace an existing tool with a log warning instead of
     # raising.  We need the eager failure, so enumerate the existing
     # tools synchronously — ``LocalProvider._list_tools`` is async-only,
-    # so we read the underlying ``_components`` dict directly.
+    # so we read the underlying ``_components`` dict directly.  No
+    # synchronous public API exposes this; a future FastMCP rename of
+    # ``_components`` would make the pre-check silently no-op, so we
+    # log a warning to keep that failure mode loud.  The ValueError
+    # catch on ``add_tool`` below is the second line of defence when
+    # the server is configured with ``on_duplicate="error"``.
     existing_names: set[str] = set()
     local_provider = getattr(server, "local_provider", None)
     components = getattr(local_provider, "_components", None)
@@ -157,6 +172,15 @@ def install_sub_agents(parent: Agent) -> None:
         existing_names = {
             c.name for c in components.values() if isinstance(c, _FastMCPTool)
         }
+    else:
+        logger.warning(
+            "fastmcp.FastMCP.local_provider._components not found "
+            "(local_provider=%r); sub-agent tool-name collision "
+            "pre-check skipped. Pin fastmcp or file a bug if this "
+            "persists — collisions will only surface if the server "
+            "uses on_duplicate='error'.",
+            local_provider,
+        )
 
     for sub_agent in sub_agents:
         tool_name = default_tool_name(sub_agent)
