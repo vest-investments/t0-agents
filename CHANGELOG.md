@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — Unreleased
+
+### Added
+
+- **Multi-agent composition** (`from t0_agents import agent_as_tool,
+  SubAgentError`; `from t0_agents.compose import install_sub_agents,
+  assert_unique_names, default_tool_name`).  Milestone M7: Composed
+  Agents.  No new dependencies — built on top of the existing
+  `core/` + `mcp/` surfaces and FastMCP's public runtime-registration
+  APIs (`Tool.from_function(...)` + `server.add_tool(tool)`).
+- **`AgentConfig.sub_agents: list[Agent]`** — declarative
+  delegation.  When non-empty, `Agent.__init__` registers each entry
+  as a `{sub_agent.config.name}_ask` tool on the orchestrator's
+  in-process FastMCP server via
+  `t0_agents.compose.install_sub_agents`.  Empty (the default)
+  preserves Phase A byte-identity.  Requires a `fastmcp.Client`
+  backed by an in-process `FastMCPTransport`; remote MCP transports
+  raise `ConfigurationError` at construction time, as do duplicate
+  sub-agent names and collisions with pre-existing tools.
+- **`SubAgentError`** (`from t0_agents import SubAgentError`) —
+  non-fatal wrapper for errors raised inside a delegated sub-agent.
+  The generated tool handler in `t0_agents.compose.delegation`
+  re-raises `T0AgentsFatalError` subclasses unchanged (so a
+  `GuardrailBlockedError` in a sub-agent reaches the orchestrator's
+  caller with its original type) and wraps everything else in
+  `SubAgentError` with the original exception preserved as
+  `__cause__`, so the orchestrator LLM sees a predictable tool
+  error it can decide how to handle.
+- **`t0_agents.compose.bind_parent_episode_id`** +
+  **`get_parent_episode_id`** — `ContextVar`-based plumbing used by
+  `Agent.run` / `Agent.stream` to surface the orchestrator's episode
+  id to sub-agent tool handlers.  Sub-agents tag every inference
+  with `t0_agents.parent_episode_id=<orchestrator-episode>` (or
+  `"unknown"` when the orchestrator's first inference has not yet
+  populated the id) so ClickHouse can reconstruct the delegation
+  tree.
+- **Public doc** [`docs/multi-agent.md`](docs/multi-agent.md)
+  covering the why, the public API, the error model, episode
+  propagation, and the in-process / stable-schema caveats.
+- **Example** [`examples/14_multi_agent/`](examples/14_multi_agent/)
+  ships a researcher + writer + orchestrator trio with its own
+  `docker-compose.yml`, `config/tensorzero.toml` (three functions:
+  `research`, `writing`, `orchestrator`), and both a `main.py`
+  entrypoint and an `orchestrator_factory` for
+  `t0-agents run examples.14_multi_agent.agents:orchestrator_factory`.
+
 ## [0.7.0] — Unreleased
 
 ### Added

@@ -137,6 +137,8 @@ Exported from `from t0_agents import …`
 | `ConfigurationError` | exception | `core/exceptions.py` | Invalid config or construction parameters. |
 | `MaxTurnsExceededError` | exception | `core/exceptions.py` | Raised when `max_turns` is exhausted. |
 | `GuardrailBlockedError` | exception | `core/exceptions.py` | Hard-abort from a guardrail (`T0AgentsFatalError` subclass). |
+| `SubAgentError` | exception | `core/exceptions.py` | Wraps a non-fatal error raised by a delegated sub-agent; fatal sub-agent errors propagate unchanged. Phase G. |
+| `agent_as_tool` | fn | `compose/delegation.py` | Wrap an `Agent` as a FastMCP `Tool` so an orchestrator can delegate to it. Phase G. |
 | `run_agent` | async fn | `mcp/loop.py` | The full agent loop: discover → infer → execute → repeat. |
 | `ToolChoice` | re-export | from `tensorzero` | Directive type for forcing / suppressing tool use. |
 | `AgentEvent` | TypeAlias | `stream/events.py` | Union of every streaming-event variant (see below). Phase E. |
@@ -228,6 +230,19 @@ Phase F / Milestone M6.
 | `TUIRenderer` | class | `cli/tui.py` | Rich `Live` + `Panel` renderer for `AsyncIterator[AgentEvent]`. Exposes `consume(stream)`, `pause()` / `resume()`, and `last_episode_id`. |
 | `rich_elicitation_handler` | fn | `cli/elicit_tui.py` | Default FastMCP elicitation handler that renders prompts via Rich. Equivalent to `make_rich_elicitation_handler()()`. |
 | `make_rich_elicitation_handler` | fn | `cli/elicit_tui.py` | Build a handler bound to a specific `TUIRenderer` / `Console`; pauses / resumes the Live region around each prompt. |
+
+### Composition symbols (`t0_agents.compose`)
+
+Exported from `from t0_agents.compose import …`
+([`src/t0_agents/compose/__init__.py`](../../src/t0_agents/compose/__init__.py)).
+Phase G / Milestone M7.  No extras required.
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `agent_as_tool` | fn | `compose/delegation.py` | Wrap a sub-`Agent` as a FastMCP `Tool` whose handler invokes `sub_agent.run(message)`. Returns a `Tool` ready for `server.add_tool`. |
+| `install_sub_agents` | fn | `compose/orchestrator.py` | Register every entry in `AgentConfig.sub_agents` on the orchestrator's in-process FastMCP server.  Called by `Agent.__init__`; re-exported for callers that want to compose outside the declarative path. |
+| `assert_unique_names` | fn | `compose/routing.py` | Raise `ConfigurationError` on `config.name` collisions across a list of sub-agents. |
+| `default_tool_name` | fn | `compose/routing.py` | Return the default `{sub_agent.config.name}_ask` tool name. |
 
 | Symbol | Kind | File:line | Summary |
 | --- | --- | --- | --- |
@@ -1033,6 +1048,19 @@ guides cover these in more depth; the list here is for quick orientation.
   composed on the agent. Empty (the default) disables the
   `GuardedToolProvider` wrapper entirely so behaviour is byte-identical to
   Phase B. See [`../guardrails.md`](../guardrails.md).
+- **Sub-agents.** `AgentConfig.sub_agents` — list of `Agent` instances
+  exposed as MCP tools on the orchestrator's in-process FastMCP
+  server via `compose.install_sub_agents` at `Agent.__init__` time.
+  Each sub-agent becomes `f"{sub_agent.config.name}_ask"`.  Requires
+  the orchestrator's `tool_provider` to be a `fastmcp.Client` backed
+  by a `FastMCPTransport`; remote transports raise
+  `ConfigurationError`.  Duplicate sub-agent names and collisions
+  with pre-existing tools also raise `ConfigurationError`, at
+  construction time.  Empty (the default) preserves Phase A
+  byte-identity.  Sub-agent errors come out as `SubAgentError` unless
+  they're `T0AgentsFatalError` subclasses (those propagate unchanged
+  so hard-block contracts hold end-to-end).  Phase G / Milestone M7.
+  See [`../multi-agent.md`](../multi-agent.md).
 - **HTTP serving knobs.** `t0_agents.serve.create_app(agent, *, client_factory, share_client, deployment_label)`:
   - `client_factory`: zero-arg callable that mints a fresh
     `fastmcp.Client` per session.  Default mode; honours the FastMCP
