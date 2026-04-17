@@ -122,7 +122,10 @@ class MockStreamingGateway:
                 "Use MockGateway for non-streaming tests."
             )
 
-        blocks = self._turns.popleft() if self._turns else []
+        # Parity with ``MockGateway.script``: emit an empty Text turn when
+        # the script is exhausted so the agent loop terminates with an empty
+        # assistant message rather than one with no content blocks at all.
+        blocks = self._turns.popleft() if self._turns else [Text(text="")]
         episode_id = self._episode_id
         inference_id = uuid4()
 

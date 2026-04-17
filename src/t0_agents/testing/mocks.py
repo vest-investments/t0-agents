@@ -18,6 +18,7 @@ caught early.
 from __future__ import annotations
 
 import asyncio
+import copy
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -197,8 +198,16 @@ class MockGateway:
     # --- Gateway surface (duck-typed) --------------------------------------
 
     async def inference(self, **kwargs: Any) -> ChatInferenceResponse:
-        """Record the call and return the next scripted response."""
-        self.calls.append(dict(kwargs))
+        """Record the call and return the next scripted response.
+
+        ``kwargs`` are deep-copied before being appended to :attr:`calls`
+        so the recording is a true snapshot of the state the caller
+        passed on that turn.  Agent loops typically mutate
+        ``input["messages"]`` in place across turns; without the deep
+        copy every recorded entry would end up pointing at the same
+        mutating list.
+        """
+        self.calls.append(copy.deepcopy(kwargs))
         result = self._source(**kwargs)
         if isinstance(result, ChatInferenceResponse):
             response: ChatInferenceResponse = result
@@ -237,11 +246,15 @@ class RecordingGateway:
         self.feedback_calls: list[dict[str, Any]] = []
 
     async def inference(self, **kwargs: Any) -> ChatInferenceResponse:
-        self.calls.append(dict(kwargs))
+        # One deep copy is used for both ``.calls`` and ``_captured`` so the
+        # two records stay in sync and neither can be mutated by the loop's
+        # in-place ``messages.append`` after the call returns.
+        kwargs_snapshot = copy.deepcopy(kwargs)
+        self.calls.append(kwargs_snapshot)
         raw = await self._real.inference(**kwargs)
         response = cast(ChatInferenceResponse, raw)
         self._captured.append(
-            _RecordedInference(kwargs=dict(kwargs), response=response)
+            _RecordedInference(kwargs=kwargs_snapshot, response=response)
         )
         self.responses.append(response)
         return response
@@ -357,6 +370,12 @@ class MockToolProvider:
         else:
             sync_handler = cast(Callable[[dict[str, Any]], Any], handler)
             result = sync_handler(dict(arguments))
+        # Pass-through when the handler already built a full result (e.g. to
+        # exercise the ``is_error=True`` branch of the production serializer).
+        # Wrapping it again would nest the ``CallToolResult`` inside ``.data``
+        # and break ``serialize_tool_result``.
+        if isinstance(result, CallToolResult):
+            return result
         return CallToolResult(
             content=[],
             structured_content=None,

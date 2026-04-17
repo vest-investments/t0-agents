@@ -86,6 +86,28 @@ class TestScriptMode:
 
         assert gateway.responses == [r1, r2]
 
+    async def test_calls_are_snapshot_at_call_time(self) -> None:
+        """Recorded kwargs are frozen at call time, even if the caller mutates inputs.
+
+        The real agent loop reuses the same ``messages`` list across turns
+        and mutates it in place.  A shallow recording would make every
+        ``calls[i]["input"]["messages"]`` point at the same list in its
+        final state — the deep copy keeps each entry faithful to what was
+        passed on that turn.
+        """
+        gateway = MockGateway.script(
+            [[Text(text="one")], [Text(text="two")]]
+        )
+        messages: list[Any] = [{"role": "user", "content": "first"}]
+        await gateway.inference(function_name="f", input={"messages": messages})
+        messages.append({"role": "assistant", "content": "reply"})
+        messages.append({"role": "user", "content": "third"})
+        await gateway.inference(function_name="f", input={"messages": messages})
+
+        assert len(gateway.calls[0]["input"]["messages"]) == 1
+        assert gateway.calls[0]["input"]["messages"][0]["content"] == "first"
+        assert len(gateway.calls[1]["input"]["messages"]) == 3
+
 
 class TestCannedMode:
     async def test_callable_receives_kwargs(self) -> None:
@@ -146,6 +168,25 @@ class TestRecordingMode:
         assert isinstance(r1.content[0], ToolCall)
         assert isinstance(r2.content[0], Text)
         assert r2.content[0].text == "done"
+
+    async def test_captured_kwargs_snapshot_at_call_time(self) -> None:
+        """Recording mode also freezes kwargs — mutating the caller list after
+        the inference must not contaminate ``captured[i].kwargs``.
+        """
+        real = MockGateway.script(
+            [[Text(text="one")], [Text(text="two")]]
+        )
+        recorder = MockGateway.recording(real)
+
+        messages: list[Any] = [{"role": "user", "content": "first"}]
+        await recorder.inference(function_name="f", input={"messages": messages})
+        messages.append({"role": "user", "content": "second"})
+        await recorder.inference(function_name="f", input={"messages": messages})
+
+        captured = recorder.captured
+        assert len(captured[0].kwargs["input"]["messages"]) == 1
+        assert len(captured[1].kwargs["input"]["messages"]) == 2
+        assert len(recorder.calls[0]["input"]["messages"]) == 1
 
     async def test_replay_after_exhaustion_yields_empty_text(self) -> None:
         real = MockGateway.script([[Text(text="only")]])

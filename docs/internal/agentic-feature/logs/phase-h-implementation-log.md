@@ -78,6 +78,69 @@ construction time.  Same contract, cheaper maintenance: if
 construction and points straight at the drift instead of surfacing a
 confusing downstream error.
 
+### D5: Deep-copy kwargs in `MockGateway` and `RecordingGateway` recording
+
+**Spec (§4.1)** does not specify copy semantics for the call log.  The
+initial implementation used `dict(kwargs)` (shallow) matching the
+then-expected simplicity.
+
+**Actual:** both gateways now deep-copy kwargs at call time before
+appending to `self.calls` (and `_captured` on `RecordingGateway`).
+
+**Reason:** `src/t0_agents/mcp/loop.py:293-415` reuses the same
+`messages: list[Message]` across turns and mutates it in place with
+`messages.append(...)` after each inference.  With a shallow recording,
+every `gateway.calls[i]["input"]["messages"]` entry ended up pointing
+at the same list in its final state — so a user who wrote
+`assert len(gateway.calls[0]["input"]["messages"]) == 1` in a
+multi-turn test would see an unexplainable failure.  Deep-copying is
+cheap at test scale and aligns the recording with the intuitive
+contract "the call log is a snapshot of what the loop passed."
+
+**Impact:** Gemini code-review follow-up on PR #10.  Locked in with
+`test_calls_are_snapshot_at_call_time` (script mode) and
+`test_captured_kwargs_snapshot_at_call_time` (recording mode).
+
+### D6: `MockToolProvider.call_tool` passes `CallToolResult` through untouched
+
+**Actual:** when a handler returns a fully-built
+`fastmcp.client.client.CallToolResult`, the mock returns it verbatim
+instead of nesting it inside a fresh wrapper's `.data` field.
+
+**Reason:** Gemini code-review follow-up on PR #10.  The only way a
+test could exercise the production serializer's `is_error=True` branch
+(`src/t0_agents/mcp/adapter.py:64-69`) was by returning a prebuilt
+`CallToolResult`.  Without pass-through, that object was wrapped a
+second time and `serialize_tool_result` JSON-dumped it instead of
+surfacing the `"ERROR: ..."` string the LLM expects.  Pass-through is
+backward-compatible: handlers that return anything else continue to be
+wrapped as before.
+
+**Impact:** Locked in with
+`test_handler_returning_calltoolresult_passes_through` in
+`tests/test_testing/test_mock_tool_provider.py`, which asserts both
+identity (`result is prebuilt`) and serializer parity
+(`serialize_tool_result(result) == "ERROR: tool failed"`).
+
+### D7: `MockStreamingGateway` exhaustion yields an empty `Text` block
+
+**Actual:** `MockStreamingGateway.inference(stream=True)` emits
+`[Text(text="")]` when the scripted turns are exhausted, not `[]`.
+
+**Reason:** Gemini code-review follow-up on PR #10.  The streaming
+mock's prior empty-list behaviour technically terminated the agent
+loop (`_final_text([])` returns `""`, `DoneEvent` fires), but it
+diverged from `MockGateway.script`'s documented contract
+(`src/t0_agents/testing/mocks.py:120-121`) which promises an empty
+`Text` turn to keep assistant-history shape consistent between
+streaming and non-streaming tests.  Inconsistency would have surfaced
+as a "why does my history have `content=[]` in streaming mode but
+`content=[Text(text="")]` without streaming?" footgun for any user
+asserting on conversation history.
+
+**Impact:** Locked in with `test_exhausted_script_yields_empty_text`
+in `tests/test_testing/test_streaming_mocks.py`.
+
 ### D4: Added `MockGateway.responses` list (parallel to `.calls`)
 
 **Spec (§4.1)** defines `self.calls: list[dict]` for recording

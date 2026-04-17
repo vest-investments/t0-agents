@@ -105,3 +105,21 @@ class TestMockStreamingGateway:
         chunk = chunks[0].content[0]
         assert isinstance(chunk, ToolCallChunk)
         assert chunk.raw_name == "add"
+
+    async def test_exhausted_script_yields_empty_text(self) -> None:
+        """Parity with MockGateway.script: an empty ``Text`` chunk on exhaustion.
+
+        Guarantees the streaming agent loop sees an assistant turn with one
+        empty text block (terminating cleanly) rather than an empty content
+        list that diverges from the non-streaming mock's documented contract.
+        """
+        from tensorzero.types import TextChunk
+
+        gateway = MockStreamingGateway([])
+
+        stream_iter = await gateway.inference(stream=True, function_name="f")
+        chunks = [c async for c in stream_iter]
+
+        assert len(chunks[0].content) == 1
+        assert isinstance(chunks[0].content[0], TextChunk)
+        assert chunks[0].content[0].text == ""

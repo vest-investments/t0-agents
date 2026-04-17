@@ -99,6 +99,35 @@ class TestCallTool:
         with pytest.raises(RuntimeError, match="tool is offline"):
             await provider.call_tool("flaky", {})
 
+    async def test_handler_returning_calltoolresult_passes_through(self) -> None:
+        """A handler may build its own ``CallToolResult`` — e.g. to simulate
+        ``is_error=True`` the way FastMCP's ``raise_on_error=False`` does.
+
+        Without pass-through, the mock would wrap the inner result inside the
+        outer ``.data`` field and break the production serializer, which
+        would then JSON-dump the inner object instead of surfacing the
+        ``"ERROR: ..."`` string the LLM expects on the next turn.
+        """
+        from fastmcp.client.client import CallToolResult
+        from mcp.types import TextContent
+
+        from t0_agents.mcp.adapter import serialize_tool_result
+
+        prebuilt = CallToolResult(
+            content=[TextContent(type="text", text="tool failed")],
+            structured_content=None,
+            meta=None,
+            data=None,
+            is_error=True,
+        )
+        provider = MockToolProvider({"flaky": lambda _args: prebuilt})
+
+        result = await provider.call_tool("flaky", {})
+
+        assert result is prebuilt
+        assert result.is_error is True
+        assert serialize_tool_result(result) == "ERROR: tool failed"
+
 
 class TestSerializerCompatibility:
     """Exercise the adapter's serialize_tool_result on mock output."""
