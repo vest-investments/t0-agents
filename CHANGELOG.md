@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] — Unreleased
+
+### Added
+
+- **CLI** (`from t0_agents.cli import TUIRenderer, rich_elicitation_handler,
+  make_rich_elicitation_handler, load_agent_factory`) — Typer + Rich
+  terminal UI. Milestone M6: TUI Agent. Ships behind the new `[cli]`
+  extra (`pip install 't0-agents[cli]'`), which pulls `typer>=0.12.0`,
+  `rich>=13.7.0`, plus the streaming + serving deps (`fastapi`,
+  `uvicorn[standard]`, `pydantic`, `sse-starlette`).
+- **`t0-agents` entry-point script** wired to `t0_agents.cli.app:main`.
+  Exposes three subcommands:
+  - `t0-agents run <module:attr>` — interactive streaming REPL with
+    live deltas, tool-call spinners, and Rich-rendered elicitation
+    prompts. `--verbose` surfaces reasoning content.
+  - `t0-agents serve <module:attr>` — wraps
+    `t0_agents.serve.create_app(..., share_client=True)` in uvicorn.
+    Phase D non-streaming routes by default (`POST /chat`, `/feedback`,
+    `/health`, `/info`); opt in to SSE + WS with `--streaming`. WS
+    elicitation is incompatible with shared-Client mode (FastMCP Q3),
+    so `--streaming` is only useful for tools that never call
+    `ctx.elicit` — for full browser elicitation, call `create_app`
+    directly with a `client_factory` + `elicitation_client_factory`
+    (see `examples/12_streaming_http/agent_app.py`). `--host`,
+    `--port`, `--deployment` flags.
+  - `t0-agents info <module:attr>` — prints a Rich `Table` of the
+    loaded `AgentConfig`.
+- **Agent factory convention** — every subcommand's ``<module:attr>``
+  argument must resolve to a zero-argument callable returning an async
+  context manager yielding an :class:`Agent` (idiomatically
+  `@asynccontextmanager async def assistant(): ...`). The loader raises
+  `typer.BadParameter` for bare `Agent` instances with an inline snippet
+  pointing users at the factory pattern, and for malformed specs /
+  missing modules / missing attributes.
+- **`TUIRenderer`** — Rich `Live` + `Panel` renderer that folds
+  `AsyncIterator[AgentEvent]` into a live terminal frame. Exposes
+  `pause()` / `resume()` so an elicitation handler can stop Live while
+  it runs a prompt, and `last_episode_id` / `last_result` so the REPL
+  can thread continuity across turns.
+- **`rich_elicitation_handler`** + **`make_rich_elicitation_handler`** —
+  FastMCP-compatible elicitation handler rendered through Rich prompts.
+  Dispatches on the FastMCP Q5 schema subset: primitives + enum + const,
+  description and default preserved, scalar-wrap (`{"value": ...}`)
+  supported. Coerces enum answers back to the original Python type. Fails
+  soft to `Prompt.ask(str)` for unknown types (non-FastMCP servers).
+  Returns `ElicitResult(action="cancel", content=None)` on
+  `KeyboardInterrupt`.
+- **`load_agent_factory`** (`t0_agents.cli.loader`) — public resolver
+  that distinguishes "malformed spec", "missing module", "missing
+  attribute", "resolved to a bare Agent instance", and "resolved to a
+  non-callable" so the error path is actionable.
+- Example `examples/13_tui/` — runnable demo with a FastMCP server
+  (`add`, `set_reminder` with `ctx.elicit(response_type=Reminder)`),
+  a `@asynccontextmanager` factory, and a README walkthrough of the
+  three subcommands.
+- Public documentation at `docs/cli.md` covering install, the three
+  commands, the factory convention, custom renderers, elicitation
+  semantics, and troubleshooting.
+
+### Changed
+
+- Phase F does not modify `core/`, `mcp/`, `stream/`, `serve/`,
+  `memory/`, or `guardrails/`. `run_agent`, `AgentResult`, `Agent`,
+  and every existing public symbol are byte-identical to 0.6.0
+  (contract §2.1, §6.1–§6.3). Pre-existing offline tests remain
+  green (363 passed across Phase A–F).
+
 ## [0.6.0] — Unreleased
 
 ### Added
