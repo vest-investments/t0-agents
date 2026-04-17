@@ -154,6 +154,81 @@ are now true end-to-end.  Four new unit tests in
 + one helper test lock the behaviour for both `Agent.run` and
 `Agent.stream`.
 
+### D5: FastMCP in-process transport snapshots ContextVars into its server sub-task — inline dispatch wrapper required
+
+**Observed.** After shipping D4 (the `on_inference` refresh wrapper),
+a live ClickHouse spot-check on the Phase G example still showed
+every sub-agent inference tagged ``parent_episode_id='unknown'``:
+
+```
+┌─function_name─┬─rows─┬─parents─────┐
+│ orchestrator  │   12 │ []          │
+│ writing       │    9 │ ['unknown'] │
+│ research      │    7 │ ['unknown'] │
+└───────────────┴──────┴─────────────┘
+```
+
+Source tracing found the root cause.
+`fastmcp/client/transports/memory.py::FastMCPTransport.connect_session`
+spawns the FastMCP server on an anyio sub-task via
+``tg.start_soon(...)``:
+
+```python
+async with anyio.create_task_group() as tg:
+    tg.start_soon(
+        lambda: self.server._mcp_server.run(...),
+    )
+```
+
+`start_soon` snapshots the current ``contextvars.Context`` at task-
+creation time, which is ``async with Client(server):`` entry in
+``main.py`` — strictly **before** :meth:`Agent.run` has the chance
+to bind the parent-episode id.  The server's tool-handler in
+:mod:`t0_agents.compose.delegation` therefore reads a stale
+``None`` from ``_PARENT_EPISODE_ID`` regardless of what the
+orchestrator's task does mid-run.  D4's ``on_inference`` refresh
+correctly updates the ContextVar inside the orchestrator's task
+(``TestParentEpisodeIdRefresh`` proves it), but the update never
+reaches the server sub-task's snapshotted context.
+
+This is a fundamental constraint of anyio/asyncio task isolation,
+not a bug we can fix with more ContextVar plumbing.
+
+**Implementation.** Add a private ``_OrchestrationToolProvider`` in
+``src/t0_agents/compose/orchestrator.py`` that wraps the
+orchestrator's ``tool_provider`` and dispatches sub-agent tool calls
+**inline** — staying in the orchestrator's asyncio task so
+``get_parent_episode_id()`` reads the live binding.  Non-sub-agent
+tool calls fall through to the inner provider unchanged.
+:meth:`Agent.run` and :meth:`Agent.stream` now wrap ``tool_provider``
+with this provider *inside* the :class:`GuardedToolProvider` layer,
+so orchestrator-level guardrails (e.g. ``max_tool_calls``) still
+observe every delegation.  ``install_sub_agents`` continues to
+register each sub-agent on the FastMCP server so ``list_tools``
+surfaces them to the LLM and external callers (who genuinely have
+no orchestrator context) fall back to ``"unknown"`` via the
+server-side handler.
+
+``Agent.__init__`` caches ``self._sub_agents_by_tool_name: dict[str,
+Agent]`` once at construction to avoid rebuilding the mapping per
+run.
+
+**Reason.** Keeps the fix inside ``core/agent.py`` + ``compose/``
+(invariant §2.1: ``mcp/`` stays standalone).  Preserves the D4
+``on_inference`` wrapper for public-API consistency — callers that
+use ``get_parent_episode_id`` in their own same-task code still see
+the live binding.  No change to the server-side delegation handler
+contract: it remains the fallback path for external callers.
+
+**Impact.** No contract amendment.  §3.2 / §5.2 are now end-to-end
+correct for orchestrator-driven sub-agent calls — the primary use
+case.  The example's ClickHouse spot-check post-fix returns the
+orchestrator's real episode id as the ``parent`` for every
+sub-agent row.  Test suite grew from 392 → 399 passes
+(+6 unit tests for the wrapper, +1 end-to-end regression using
+scripted ``FakeT0`` + real ``FastMCP.Client`` to reproduce the
+user-reported failure mode).
+
 ### D3: `mypy --strict` rejects `FastMCP.add_tool(tool: Tool | ...)` when the concrete type is `Tool`
 
 **Observed.** Passing a `fastmcp.tools.Tool` to
@@ -236,12 +311,15 @@ $ uv run mypy src/
 Success: no issues found in 45 source files
 
 $ uv run pytest -m "not integration"
-392 passed, 42 deselected in 2.46s
+399 passed, 42 deselected in 2.50s
 ```
 
 (After D4 the suite grew from 387 → 392: one helper test for
 `update_parent_episode_id` + four refresh-wrapper tests in
-`TestParentEpisodeIdRefresh`.)
+`TestParentEpisodeIdRefresh`.  After D5 it grew again from
+392 → 399: six unit tests for `_OrchestrationToolProvider` + one
+scripted-T0 end-to-end regression test in
+`TestParentEpisodeIdEndToEnd`.)
 
 Integration verification (`uv run pytest -m integration
 tests/test_compose/` + `python -m examples.14_multi_agent.main`)

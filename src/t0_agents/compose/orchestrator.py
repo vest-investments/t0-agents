@@ -30,12 +30,20 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 
 from fastmcp import Client
+from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import FastMCPTransport
 from fastmcp.tools import Tool as _FastMCPTool
+from mcp.types import TextContent
+from mcp.types import Tool as MCPTool
 
 from t0_agents.compose.delegation import agent_as_tool
 from t0_agents.compose.routing import assert_unique_names, default_tool_name
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.exceptions import (
+    ConfigurationError,
+    SubAgentError,
+    T0AgentsFatalError,
+)
+from t0_agents.core.types import ToolProvider
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
@@ -176,3 +184,108 @@ def install_sub_agents(parent: Agent) -> None:
                 f"on the orchestrator's FastMCP server: {exc}"
             ) from exc
         existing_names.add(tool_name)
+
+
+class _OrchestrationToolProvider:
+    """Dispatch sub-agent tool calls in the orchestrator's asyncio task.
+
+    FastMCP's in-process transport
+    (``fastmcp/client/transports/memory.py::FastMCPTransport.connect_session``)
+    runs the server in an anyio sub-task spawned by ``tg.start_soon``
+    at ``async with Client(server):`` entry.  That sub-task snapshots
+    the ``contextvars.Context`` at creation time, which happens
+    **before** :meth:`Agent.run` can bind the parent-episode id via
+    :func:`bind_parent_episode_id` / update it via the on-inference
+    refresh hook.  A :class:`~contextvars.ContextVar`-only handoff
+    therefore reads the pre-run default (``None``) inside the
+    server-side handler, and every sub-agent inference tags
+    ``t0_agents.parent_episode_id=unknown`` regardless of fixes in
+    the orchestrator's task — confirmed against a live ClickHouse
+    spot-check where all 16 sub-agent rows came back with
+    ``parent=['unknown']``.
+
+    This wrapper sits between :func:`~t0_agents.mcp.loop.run_agent`
+    and the orchestrator's :class:`fastmcp.Client`.  When the tool
+    name matches a registered sub-agent, the call is dispatched
+    inline — same asyncio task as :meth:`Agent.run` — so
+    :func:`get_parent_episode_id` reads the live binding set by the
+    ``on_inference`` refresh wrapper.  All other tool calls fall
+    through to the inner provider unchanged, preserving the MCP
+    semantics for non-delegation tools.  The server-side handler in
+    :mod:`t0_agents.compose.delegation` remains installed on the
+    FastMCP server as a fallback for external callers that connect
+    directly (those genuinely have no orchestrator context and
+    correctly surface the ``"unknown"`` tag).
+    """
+
+    def __init__(
+        self,
+        inner: ToolProvider,
+        sub_agents: dict[str, Agent],
+    ) -> None:
+        self._inner = inner
+        self._sub_agents = sub_agents
+
+    async def list_tools(self) -> list[MCPTool]:
+        return cast(list[MCPTool], await self._inner.list_tools())
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+        **kwargs: Any,
+    ) -> CallToolResult:
+        sub_agent = self._sub_agents.get(name or "")
+        if sub_agent is None:
+            return cast(
+                CallToolResult,
+                await self._inner.call_tool(
+                    name, arguments or {}, timeout=timeout, **kwargs,
+                ),
+            )
+
+        args = arguments or {}
+        message = args.get("message")
+        if not isinstance(message, str):
+            # Mirror FastMCP's schema-validation error surface so the
+            # orchestrator LLM sees a consistent tool-error payload and
+            # can retry with the right argument shape.
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=(
+                            f"sub-agent tool {name!r} requires a "
+                            f"'message: str' argument; got {args!r}"
+                        ),
+                    ),
+                ],
+                structured_content=None,
+                meta=None,
+                data=None,
+                is_error=True,
+            )
+
+        parent_episode_id = get_parent_episode_id() or "unknown"
+        delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
+        try:
+            result = await sub_agent.run(message, tags=delegation_tags)
+        except T0AgentsFatalError:
+            # Hybrid-fatal: T0AgentsFatalError subclasses (e.g.
+            # GuardrailBlockedError raised by the sub-agent's own stack)
+            # propagate unchanged so hard blocks reach the caller of
+            # Agent.run with their original type.
+            raise
+        except Exception as exc:
+            raise SubAgentError(
+                f"Sub-agent {sub_agent.config.name!r} failed: {exc}"
+            ) from exc
+        return CallToolResult(
+            content=[TextContent(type="text", text=result.response)],
+            structured_content=None,
+            meta=None,
+            data=None,
+            is_error=False,
+        )

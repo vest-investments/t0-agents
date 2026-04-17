@@ -119,12 +119,14 @@ WHERE tags['t0_agents.parent_episode_id'] = '<orchestrator-episode-id>'
 
 On a fresh orchestrator run (called without `episode_id=`), the tag
 picks up the gateway-allocated episode id as soon as the first
-inference lands — `Agent.run` / `Agent.stream` refresh the ContextVar
-from inside the `on_inference` hook before any sub-agent tool call
-dispatches, so every delegated inference already carries the real
-parent episode id.  The `"unknown"` fallback only surfaces when a
-sub-agent is invoked outside an orchestrator context (for example
-when the user calls it directly).
+inference lands.  `Agent.run` / `Agent.stream` dispatch sub-agent
+tool calls inline — staying in the orchestrator's asyncio task
+rather than crossing into FastMCP's server sub-task — so every
+delegated inference carries the real parent episode id, not the
+stale pre-run default.  The `"unknown"` fallback only surfaces when
+a sub-agent is invoked outside an orchestrator context (for example
+when the user connects to the orchestrator's MCP server from
+another process and calls the `{name}_ask` tool directly).
 
 ## Error model
 

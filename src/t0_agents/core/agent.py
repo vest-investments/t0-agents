@@ -100,10 +100,21 @@ class Agent:
         # orchestrator's in-process FastMCP server.  No-op when
         # config.sub_agents is empty, preserving Phase A byte-identity
         # for single-agent constructions.
+        self._sub_agents_by_tool_name: dict[str, Agent] = {}
         if config.sub_agents:
             from t0_agents.compose.orchestrator import install_sub_agents
+            from t0_agents.compose.routing import default_tool_name
 
             install_sub_agents(self)
+            # Cache the tool-name -> sub-agent map so ``Agent.run`` /
+            # ``Agent.stream`` can wrap ``tool_provider`` with
+            # ``_OrchestrationToolProvider`` cheaply per run.  The
+            # orchestration wrapper needs this mapping to dispatch
+            # sub-agent calls inline without crossing FastMCP's
+            # transport task boundary.
+            self._sub_agents_by_tool_name = {
+                default_tool_name(sub): sub for sub in config.sub_agents
+            }
 
     @property
     def config(self) -> AgentConfig:
@@ -193,6 +204,24 @@ class Agent:
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
+        if self._config.sub_agents:
+            # Wrap before guardrails so orchestrator-level guardrails
+            # still observe sub-agent delegations, while the inline
+            # dispatch keeps the parent-episode ContextVar visible (the
+            # FastMCP in-process transport otherwise snapshots an empty
+            # context into its server sub-task before Agent.run can bind
+            # anything).
+            from t0_agents.compose.orchestrator import (
+                _OrchestrationToolProvider,
+            )
+
+            tool_provider = cast(
+                ToolProvider,
+                _OrchestrationToolProvider(
+                    tool_provider, self._sub_agents_by_tool_name,
+                ),
+            )
+
         if self._config.guardrails:
             guard_ctx = GuardrailContext(
                 agent_name=self._config.name,
@@ -200,7 +229,7 @@ class Agent:
                 user_message=user_message,
             )
             tool_provider = GuardedToolProvider(
-                self._tool_provider,
+                tool_provider,
                 list(self._config.guardrails),
                 guard_ctx,
                 guard_log,
@@ -399,6 +428,22 @@ class Agent:
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
+        if self._config.sub_agents:
+            # Mirror Agent.run: orchestration wrapping sits inside the
+            # guardrail wrapper so the streaming loop's tool dispatch
+            # hits the inline sub-agent path and keeps the parent-
+            # episode ContextVar visible to ``get_parent_episode_id``.
+            from t0_agents.compose.orchestrator import (
+                _OrchestrationToolProvider,
+            )
+
+            tool_provider = cast(
+                ToolProvider,
+                _OrchestrationToolProvider(
+                    tool_provider, self._sub_agents_by_tool_name,
+                ),
+            )
+
         if self._config.guardrails:
             guard_ctx = GuardrailContext(
                 agent_name=self._config.name,
@@ -406,7 +451,7 @@ class Agent:
                 user_message=user_message,
             )
             tool_provider = GuardedToolProvider(
-                self._tool_provider,
+                tool_provider,
                 list(self._config.guardrails),
                 guard_ctx,
                 guard_log,
