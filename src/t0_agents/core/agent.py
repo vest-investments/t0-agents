@@ -246,9 +246,31 @@ class Agent:
                     # ClickHouse correlation.
                     from t0_agents.compose.orchestrator import (
                         bind_parent_episode_id,
+                        update_parent_episode_id,
                     )
 
                     stack.enter_context(bind_parent_episode_id(episode_id))
+
+                    if episode_id is None:
+                        # Fresh orchestrator episode: TensorZero only
+                        # allocates the real id on the first inference.
+                        # Wrap on_inference so the ContextVar is
+                        # refreshed before the turn's tool calls
+                        # dispatch — otherwise every sub-agent
+                        # invocation during this run tags
+                        # t0_agents.parent_episode_id=unknown for the
+                        # entire orchestrator run.
+                        base_on_inference = on_inference
+
+                        async def _refresh_parent_episode_id(
+                            response: ChatInferenceResponse,
+                        ) -> None:
+                            if response.episode_id:
+                                update_parent_episode_id(str(response.episode_id))
+                            if base_on_inference is not None:
+                                await base_on_inference(response)
+
+                        on_inference = _refresh_parent_episode_id
                 result = await run_agent(
                     self._t0,
                     cast(Client[Any], tool_provider),
@@ -434,9 +456,32 @@ class Agent:
                     # ContextVar.
                     from t0_agents.compose.orchestrator import (
                         bind_parent_episode_id,
+                        update_parent_episode_id,
                     )
 
                     stack.enter_context(bind_parent_episode_id(episode_id))
+
+                    if episode_id is None:
+                        # Mirror Agent.run: refresh the parent-episode
+                        # ContextVar on the first inference so
+                        # mid-stream sub-agent delegations correlate
+                        # against the orchestrator's real episode id
+                        # instead of the "unknown" fallback.  The
+                        # streaming runner fires on_inference after
+                        # final_usage_chunk.episode_id is populated and
+                        # before tool dispatch, so the refresh lands in
+                        # time for every sub-agent call in this turn.
+                        base_on_inference = on_inference
+
+                        async def _refresh_parent_episode_id(
+                            response: ChatInferenceResponse,
+                        ) -> None:
+                            if response.episode_id:
+                                update_parent_episode_id(str(response.episode_id))
+                            if base_on_inference is not None:
+                                await base_on_inference(response)
+
+                        on_inference = _refresh_parent_episode_id
                 async for event in streamer.stream(
                     self._t0,
                     cast(Client[Any], tool_provider),

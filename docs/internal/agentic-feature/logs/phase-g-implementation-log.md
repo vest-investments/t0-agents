@@ -96,6 +96,64 @@ readers don't make the same assumption.
 tool-name collisions raise `ConfigurationError` at construction
 time") is satisfied.
 
+### D4: Parent-episode `ContextVar` must refresh on the first inference for fresh orchestrator runs
+
+**Observed.** Gemini flagged on PR #9 (two symmetric inline comments on
+`src/t0_agents/core/agent.py:251` / `:439`, plus a summary review):
+
+> The current implementation binds the `episode_id` to the `ContextVar`
+> only once at the start of the run. If `episode_id` is `None` (which
+> is common for fresh episodes), sub-agents called during the run will
+> see `"unknown"` as their parent episode ID for the entire duration
+> of the orchestrator's run, even after the first inference has
+> populated the actual episode ID.
+
+Reproduction matches the reading: `Agent.run` / `Agent.stream` enter
+`bind_parent_episode_id(episode_id)` exactly once before delegating to
+`run_agent` / `StreamingAgentLoop.stream`.  With `episode_id=None` the
+`ContextVar` holds `None` for the entire orchestrator run;
+`mcp/loop.py:355` / `stream/runner.py:168` do capture the real
+episode id from the first response but only into a local, never into
+the ContextVar.  `compose/delegation.py:65` therefore falls back to
+the `"unknown"` sentinel for every sub-agent call.
+
+Contract §5.2 ("sub-agents tag every inference with the orchestrator's
+episode id via `t0_agents.parent_episode_id`") was therefore only
+honoured for callers that passed an explicit `episode_id`.  The test
+suite did not catch this: `TestParentEpisodeContextVar` exercises
+ContextVar mechanics in isolation, and the two integration tests in
+`tests/test_compose/test_integration.py` assert *episode isolation*
+between orchestrator and sub-agent but never inspect the actual
+`parent_episode_id` tag value.
+
+**Implementation.**
+`src/t0_agents/compose/orchestrator.py` gains a public helper
+`update_parent_episode_id(episode_id: str) -> None` that replaces
+the value stored by the enclosing `bind_parent_episode_id` context
+without disturbing its reset-on-exit `Token`.  `Agent.run` and
+`Agent.stream` now wrap their existing `on_inference` callback when
+`sub_agents` are configured and `episode_id is None`: the wrapper
+calls `update_parent_episode_id(str(response.episode_id))` on every
+fired inference (idempotent within one episode) before delegating to
+whatever `on_inference` was previously in place — guardrail cost
+tracking stays composed.  With an explicit `episode_id` no wrapping
+happens, preserving the Phase A byte-identity for the explicit-id
+path.
+
+**Reason.** Keeping the fix in `core/agent.py` + `compose/` upholds
+the invariant §2.1 ("`mcp/` stays standalone").  Exposing a public
+`update_parent_episode_id` rather than importing the private
+`_PARENT_EPISODE_ID` symbol keeps `compose/orchestrator.py` the sole
+custodian of the ContextVar machinery and documents *why* a callable
+outside `bind_parent_episode_id` is allowed to mutate it.
+
+**Impact.** No contract amendment.  The §3.2 / §5.2 guarantees
+("sub-agents tag every inference with the orchestrator's episode id")
+are now true end-to-end.  Four new unit tests in
+`tests/test_compose/test_orchestrator.py::TestParentEpisodeIdRefresh`
++ one helper test lock the behaviour for both `Agent.run` and
+`Agent.stream`.
+
 ### D3: `mypy --strict` rejects `FastMCP.add_tool(tool: Tool | ...)` when the concrete type is `Tool`
 
 **Observed.** Passing a `fastmcp.tools.Tool` to
@@ -178,8 +236,12 @@ $ uv run mypy src/
 Success: no issues found in 45 source files
 
 $ uv run pytest -m "not integration"
-387 passed, 42 deselected in 2.56s
+392 passed, 42 deselected in 2.46s
 ```
+
+(After D4 the suite grew from 387 → 392: one helper test for
+`update_parent_episode_id` + four refresh-wrapper tests in
+`TestParentEpisodeIdRefresh`.)
 
 Integration verification (`uv run pytest -m integration
 tests/test_compose/` + `python -m examples.14_multi_agent.main`)

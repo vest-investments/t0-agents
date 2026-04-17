@@ -14,7 +14,9 @@ Covers:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from fastmcp import Client, FastMCP
@@ -25,13 +27,15 @@ from t0_agents.compose.orchestrator import (
     bind_parent_episode_id,
     get_parent_episode_id,
     install_sub_agents,
+    update_parent_episode_id,
 )
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
-from t0_agents.core.types import ToolProvider
+from t0_agents.core.types import AgentResult, ToolProvider
+from t0_agents.stream.events import AgentEvent, DoneEvent
 from tests._fake_mcp import FakeMCPClient
-from tests._fake_t0 import FakeT0
+from tests._fake_t0 import FakeChatResponse, FakeT0
 
 
 def _build_agent(
@@ -83,6 +87,17 @@ class TestParentEpisodeContextVar:
             with bind_parent_episode_id("inner"):
                 assert get_parent_episode_id() == "inner"
             assert get_parent_episode_id() == "outer"
+        assert get_parent_episode_id() is None
+
+    def test_update_overwrites_bound_value(self) -> None:
+        # Agent.run / Agent.stream enter bind_parent_episode_id(None) for
+        # fresh orchestrator runs; update_parent_episode_id replaces the
+        # stored value once the gateway allocates a real episode id.  The
+        # outer reset-on-exit still restores the default.
+        with bind_parent_episode_id(None):
+            assert get_parent_episode_id() is None
+            update_parent_episode_id("ep-refreshed")
+            assert get_parent_episode_id() == "ep-refreshed"
         assert get_parent_episode_id() is None
 
 
@@ -225,3 +240,167 @@ class TestInstallSubAgentsHappyPath:
 
         assert _list_tool_names(server_a) == {"researcher_ask"}
         assert _list_tool_names(server_b) == {"writer_ask"}
+
+
+# ---------------------------------------------------------------------------
+# Agent.run / Agent.stream refresh the parent-episode ContextVar
+# ---------------------------------------------------------------------------
+
+
+class TestParentEpisodeIdRefresh:
+    """Regression: when the orchestrator starts a fresh episode
+    (``episode_id=None``), the ``t0_agents.parent_episode_id`` tag on
+    sub-agent inferences must reflect the gateway-allocated episode id
+    as soon as it is known — not stay on the ``"unknown"`` fallback for
+    the duration of the run.
+
+    Covered by wrapping ``on_inference`` in :meth:`Agent.run` and
+    :meth:`Agent.stream` so the first response refreshes the ContextVar
+    via :func:`update_parent_episode_id`.  Flagged by Gemini on PR #9.
+    """
+
+    _EPISODE = UUID("11111111-2222-3333-4444-555555555555")
+
+    @staticmethod
+    def _orchestrator_with_sub_agent() -> Agent:
+        server = FastMCP("orch")
+        client: Client[Any] = Client(server)
+        researcher = _build_agent("researcher")
+        return _build_agent(
+            "orch",
+            tool_provider=cast(ToolProvider, client),
+            sub_agents=[researcher],
+        )
+
+    async def test_run_refreshes_context_var_on_first_inference(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: list[str | None] = []
+
+        async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentResult:
+            on_inf = kwargs.get("on_inference")
+            assert on_inf is not None, (
+                "Agent.run must install a refresh wrapper when "
+                "sub_agents are configured and episode_id is None"
+            )
+            await on_inf(
+                FakeChatResponse(
+                    content=[],
+                    episode_id=TestParentEpisodeIdRefresh._EPISODE,
+                ),
+            )
+            observed.append(get_parent_episode_id())
+            return AgentResult(
+                response="done",
+                episode_id=str(TestParentEpisodeIdRefresh._EPISODE),
+                inference_ids=["i-1"],
+                turns=1,
+            )
+
+        monkeypatch.setattr("t0_agents.core.agent.run_agent", fake_run_agent)
+
+        orch = self._orchestrator_with_sub_agent()
+        result = await orch.run("delegate", episode_id=None)
+
+        assert observed == [str(self._EPISODE)]
+        assert result.episode_id == str(self._EPISODE)
+
+    async def test_run_does_not_install_wrapper_when_episode_id_provided(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # An explicit episode_id means the initial bind already holds
+        # the right value; the refresh wrapper must NOT be installed
+        # so callers who never configured guardrails / on_inference
+        # keep the byte-identity Phase A behaviour.
+        captured: list[Any] = []
+
+        async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentResult:
+            captured.append(kwargs.get("on_inference"))
+            return AgentResult(
+                response="done",
+                episode_id="ep-explicit",
+                inference_ids=["i-1"],
+                turns=1,
+            )
+
+        monkeypatch.setattr("t0_agents.core.agent.run_agent", fake_run_agent)
+
+        orch = self._orchestrator_with_sub_agent()
+        await orch.run("delegate", episode_id="ep-explicit")
+
+        assert captured == [None]
+
+    async def test_stream_refreshes_context_var_on_first_inference(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observed: list[str | None] = []
+
+        async def fake_stream(
+            _self: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> AsyncIterator[AgentEvent]:
+            on_inf = kwargs.get("on_inference")
+            assert on_inf is not None, (
+                "Agent.stream must install a refresh wrapper when "
+                "sub_agents are configured and episode_id is None"
+            )
+            await on_inf(
+                FakeChatResponse(
+                    content=[],
+                    episode_id=TestParentEpisodeIdRefresh._EPISODE,
+                ),
+            )
+            observed.append(get_parent_episode_id())
+            yield DoneEvent(
+                result=AgentResult(
+                    response="done",
+                    episode_id=str(TestParentEpisodeIdRefresh._EPISODE),
+                    inference_ids=["i-1"],
+                    turns=1,
+                ),
+            )
+
+        monkeypatch.setattr(
+            "t0_agents.stream.runner.StreamingAgentLoop.stream",
+            fake_stream,
+        )
+
+        orch = self._orchestrator_with_sub_agent()
+        events: list[AgentEvent] = []
+        async for event in orch.stream("delegate", episode_id=None):
+            events.append(event)
+
+        assert observed == [str(self._EPISODE)]
+        assert any(isinstance(e, DoneEvent) for e in events)
+
+    async def test_stream_does_not_install_wrapper_when_episode_id_provided(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: list[Any] = []
+
+        async def fake_stream(
+            _self: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> AsyncIterator[AgentEvent]:
+            captured.append(kwargs.get("on_inference"))
+            yield DoneEvent(
+                result=AgentResult(
+                    response="done",
+                    episode_id="ep-explicit",
+                    inference_ids=["i-1"],
+                    turns=1,
+                ),
+            )
+
+        monkeypatch.setattr(
+            "t0_agents.stream.runner.StreamingAgentLoop.stream",
+            fake_stream,
+        )
+
+        orch = self._orchestrator_with_sub_agent()
+        async for _ in orch.stream("delegate", episode_id="ep-explicit"):
+            pass
+
+        assert captured == [None]

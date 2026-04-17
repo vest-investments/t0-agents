@@ -117,11 +117,14 @@ FROM tensorzero.ChatInference
 WHERE tags['t0_agents.parent_episode_id'] = '<orchestrator-episode-id>'
 ```
 
-When the orchestrator's own episode id isn't yet known (for example
-the very first inference of a fresh orchestrator run, called without
-`episode_id=`), the tag value falls back to `"unknown"`.  Once the
-first inference lands and populates the episode id, it remains stable
-through the rest of the run.
+On a fresh orchestrator run (called without `episode_id=`), the tag
+picks up the gateway-allocated episode id as soon as the first
+inference lands — `Agent.run` / `Agent.stream` refresh the ContextVar
+from inside the `on_inference` hook before any sub-agent tool call
+dispatches, so every delegated inference already carries the real
+parent episode id.  The `"unknown"` fallback only surfaces when a
+sub-agent is invoked outside an orchestrator context (for example
+when the user calls it directly).
 
 ## Error model
 

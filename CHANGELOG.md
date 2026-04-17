@@ -33,13 +33,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `__cause__`, so the orchestrator LLM sees a predictable tool
   error it can decide how to handle.
 - **`t0_agents.compose.bind_parent_episode_id`** +
-  **`get_parent_episode_id`** — `ContextVar`-based plumbing used by
-  `Agent.run` / `Agent.stream` to surface the orchestrator's episode
-  id to sub-agent tool handlers.  Sub-agents tag every inference
-  with `t0_agents.parent_episode_id=<orchestrator-episode>` (or
-  `"unknown"` when the orchestrator's first inference has not yet
-  populated the id) so ClickHouse can reconstruct the delegation
-  tree.
+  **`get_parent_episode_id`** +
+  **`update_parent_episode_id`** — `ContextVar`-based plumbing used
+  by `Agent.run` / `Agent.stream` to surface the orchestrator's
+  episode id to sub-agent tool handlers.  Sub-agents tag every
+  inference with
+  `t0_agents.parent_episode_id=<orchestrator-episode>` so ClickHouse
+  can reconstruct the delegation tree.  For runs that start a fresh
+  episode (``episode_id=None``), the orchestrator refreshes the
+  binding as soon as TensorZero returns the allocated id on the
+  first inference, so sub-agents invoked later in the run carry the
+  real parent episode id instead of the `"unknown"` fallback.
 - **Public doc** [`docs/multi-agent.md`](docs/multi-agent.md)
   covering the why, the public API, the error model, episode
   propagation, and the in-process / stable-schema caveats.

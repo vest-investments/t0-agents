@@ -82,6 +82,22 @@ def bind_parent_episode_id(episode_id: str | None) -> Iterator[None]:
         _PARENT_EPISODE_ID.reset(token)
 
 
+def update_parent_episode_id(episode_id: str) -> None:
+    """Overwrite the currently-bound parent-episode id in place.
+
+    :meth:`Agent.run` / :meth:`Agent.stream` enter
+    :func:`bind_parent_episode_id` at run start, but pass ``None`` when
+    the caller did not supply one — TensorZero only allocates the real
+    episode id on the first inference response.  Without a refresh,
+    every sub-agent invocation during that same orchestrator run would
+    tag ``t0_agents.parent_episode_id=unknown`` even after the id is
+    known.  This helper replaces the value stored for the duration of
+    the enclosing :func:`bind_parent_episode_id` context; the outer
+    context still owns the reset on exit.
+    """
+    _PARENT_EPISODE_ID.set(episode_id)
+
+
 def install_sub_agents(parent: Agent) -> None:
     """Register each sub-agent as a tool on the orchestrator's server.
 
