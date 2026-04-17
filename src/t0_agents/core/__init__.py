@@ -10,6 +10,7 @@ from t0_agents.core.exceptions import (
     ConfigurationError,
     GuardrailBlockedError,
     MaxTurnsExceededError,
+    SubAgentError,
     T0AgentsError,
     T0AgentsFatalError,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "GuardrailLogEntry",
     "MaxTurnsExceededError",
     "MemoryProvider",
+    "SubAgentError",
     "T0AgentsError",
     "T0AgentsFatalError",
     "ToolProvider",

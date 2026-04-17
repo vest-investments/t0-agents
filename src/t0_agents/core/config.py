@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from tensorzero import ToolChoice
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import Guardrail, MemoryProvider
+
+if TYPE_CHECKING:
+    from t0_agents.core.agent import Agent
 
 _VALID_MEMORY_STRATEGIES = frozenset({"auto", "system_template", "prepended_message"})
 
@@ -46,6 +49,15 @@ class AgentConfig:
             propagates ``GuardrailBlockedError`` as a hard abort.  An empty
             list (the default) disables the wrapper entirely so behaviour
             remains byte-identical to the non-guardrail code path.
+        sub_agents: Optional list of :class:`Agent` instances to expose
+            as MCP tools on the orchestrator's FastMCP server.  When
+            non-empty, ``Agent.__init__`` installs each sub-agent as a
+            tool named ``f"{sub_agent.config.name}_ask"`` and raises
+            :class:`ConfigurationError` on name collisions.  Requires
+            the orchestrator's ``tool_provider`` to be a
+            ``fastmcp.Client`` wrapping an in-process ``FastMCP``
+            instance.  The default empty list preserves Phase A
+            byte-identity for single-agent configurations.
     """
 
     # Identity
@@ -70,6 +82,9 @@ class AgentConfig:
     # Guardrails (Phase C)
     guardrails: list[Guardrail] = field(default_factory=list)
 
+    # Multi-agent composition (Phase G)
+    sub_agents: list[Agent] = field(default_factory=list)
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ConfigurationError("AgentConfig.name must be a non-empty string")
@@ -91,3 +106,14 @@ class AgentConfig:
                 f"AgentConfig.memory_strategy must be one of "
                 f"{sorted(_VALID_MEMORY_STRATEGIES)}, got {self.memory_strategy!r}"
             )
+        if self.sub_agents:
+            # Lazy import to dodge the core.agent ↔ core.config cycle;
+            # this only fires when the user opts in to Phase G composition.
+            from t0_agents.core.agent import Agent as _Agent
+
+            for idx, sa in enumerate(self.sub_agents):
+                if not isinstance(sa, _Agent):
+                    raise ConfigurationError(
+                        f"AgentConfig.sub_agents[{idx}] must be an Agent "
+                        f"instance, got {type(sa).__name__}"
+                    )

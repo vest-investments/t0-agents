@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal, cast
@@ -94,6 +95,15 @@ class Agent:
             config.function_name,
             config.max_turns,
         )
+
+        # Phase G: register each sub-agent as an MCP tool on the
+        # orchestrator's in-process FastMCP server.  No-op when
+        # config.sub_agents is empty, preserving Phase A byte-identity
+        # for single-agent constructions.
+        if config.sub_agents:
+            from t0_agents.compose.orchestrator import install_sub_agents
+
+            install_sub_agents(self)
 
     @property
     def config(self) -> AgentConfig:
@@ -229,22 +239,32 @@ class Agent:
                             )
                         )
 
-            result = await run_agent(
-                self._t0,
-                cast(Client[Any], tool_provider),
-                effective_message,
-                self._config.function_name,
-                episode_id=episode_id,
-                max_turns=self._config.max_turns,
-                tool_timeout=tool_timeout,
-                parallel_tools=self._config.parallel_tools,
-                dryrun=self._config.dryrun,
-                tool_choice=self._config.tool_choice,
-                tags=self._merge_tags(tags),
-                namespace=self._config.namespace,
-                on_inference=on_inference,
-                **extra_kwargs,
-            )
+            with contextlib.ExitStack() as stack:
+                if self._config.sub_agents:
+                    # Bind the orchestrator's episode id so sub-agent
+                    # tool handlers tag their inferences with it for
+                    # ClickHouse correlation.
+                    from t0_agents.compose.orchestrator import (
+                        bind_parent_episode_id,
+                    )
+
+                    stack.enter_context(bind_parent_episode_id(episode_id))
+                result = await run_agent(
+                    self._t0,
+                    cast(Client[Any], tool_provider),
+                    effective_message,
+                    self._config.function_name,
+                    episode_id=episode_id,
+                    max_turns=self._config.max_turns,
+                    tool_timeout=tool_timeout,
+                    parallel_tools=self._config.parallel_tools,
+                    dryrun=self._config.dryrun,
+                    tool_choice=self._config.tool_choice,
+                    tags=self._merge_tags(tags),
+                    namespace=self._config.namespace,
+                    on_inference=on_inference,
+                    **extra_kwargs,
+                )
         finally:
             if guard_ctx is not None:
                 for guardrail in self._config.guardrails:
@@ -407,28 +427,38 @@ class Agent:
         streamer = StreamingAgentLoop()
         done_result: AgentResult | None = None
         try:
-            async for event in streamer.stream(
-                self._t0,
-                cast(Client[Any], tool_provider),
-                effective_message,
-                self._config.function_name,
-                episode_id=episode_id,
-                max_turns=self._config.max_turns,
-                tool_timeout=tool_timeout,
-                parallel_tools=self._config.parallel_tools,
-                dryrun=self._config.dryrun,
-                tool_choice=self._config.tool_choice,
-                tags=self._merge_tags(tags),
-                namespace=self._config.namespace,
-                on_inference=on_inference,
-                **extra_kwargs,
-            ):
-                if isinstance(event, DoneEvent):
-                    done_result = event.result
-                    # Don't yield DoneEvent yet — finally block populates
-                    # guardrail_log and persists memory first.
-                    break
-                yield event
+            with contextlib.ExitStack() as stack:
+                if self._config.sub_agents:
+                    # Same binding as Agent.run — sub-agents invoked
+                    # from a streaming orchestrator see the same
+                    # ContextVar.
+                    from t0_agents.compose.orchestrator import (
+                        bind_parent_episode_id,
+                    )
+
+                    stack.enter_context(bind_parent_episode_id(episode_id))
+                async for event in streamer.stream(
+                    self._t0,
+                    cast(Client[Any], tool_provider),
+                    effective_message,
+                    self._config.function_name,
+                    episode_id=episode_id,
+                    max_turns=self._config.max_turns,
+                    tool_timeout=tool_timeout,
+                    parallel_tools=self._config.parallel_tools,
+                    dryrun=self._config.dryrun,
+                    tool_choice=self._config.tool_choice,
+                    tags=self._merge_tags(tags),
+                    namespace=self._config.namespace,
+                    on_inference=on_inference,
+                    **extra_kwargs,
+                ):
+                    if isinstance(event, DoneEvent):
+                        done_result = event.result
+                        # Don't yield DoneEvent yet — finally block populates
+                        # guardrail_log and persists memory first.
+                        break
+                    yield event
         finally:
             # --- 6. after_run hooks (fire even on error, parity with run()) ---
             if guard_ctx is not None:
