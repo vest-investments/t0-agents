@@ -4,6 +4,7 @@ import logging
 
 from tensorzero import ToolChoice
 
+from t0_agents.compose import agent_as_tool
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.elicitation_forwarder import (
@@ -14,6 +15,7 @@ from t0_agents.core.exceptions import (
     ConfigurationError,
     GuardrailBlockedError,
     MaxTurnsExceededError,
+    SubAgentError,
     T0AgentsError,
     T0AgentsFatalError,
 )
@@ -57,6 +59,7 @@ __all__ = [
     "MaxTurnsExceededError",
     "MemoryProvider",
     "StreamingAgentLoop",
+    "SubAgentError",
     "T0AgentsError",
     "T0AgentsFatalError",
     "TextDeltaEvent",
@@ -70,6 +73,7 @@ __all__ = [
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",
+    "agent_as_tool",
     "run_agent",
 ]
 

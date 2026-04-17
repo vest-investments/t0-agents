@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal, cast
@@ -95,6 +96,26 @@ class Agent:
             config.max_turns,
         )
 
+        # Phase G: register each sub-agent as an MCP tool on the
+        # orchestrator's in-process FastMCP server.  No-op when
+        # config.sub_agents is empty, preserving Phase A byte-identity
+        # for single-agent constructions.
+        self._sub_agents_by_tool_name: dict[str, Agent] = {}
+        if config.sub_agents:
+            from t0_agents.compose.orchestrator import install_sub_agents
+            from t0_agents.compose.routing import default_tool_name
+
+            install_sub_agents(self)
+            # Cache the tool-name -> sub-agent map so ``Agent.run`` /
+            # ``Agent.stream`` can wrap ``tool_provider`` with
+            # ``_OrchestrationToolProvider`` cheaply per run.  The
+            # orchestration wrapper needs this mapping to dispatch
+            # sub-agent calls inline without crossing FastMCP's
+            # transport task boundary.
+            self._sub_agents_by_tool_name = {
+                default_tool_name(sub): sub for sub in config.sub_agents
+            }
+
     @property
     def config(self) -> AgentConfig:
         """Read-only access to the agent's configuration."""
@@ -183,6 +204,24 @@ class Agent:
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
+        if self._config.sub_agents:
+            # Wrap before guardrails so orchestrator-level guardrails
+            # still observe sub-agent delegations, while the inline
+            # dispatch keeps the parent-episode ContextVar visible (the
+            # FastMCP in-process transport otherwise snapshots an empty
+            # context into its server sub-task before Agent.run can bind
+            # anything).
+            from t0_agents.compose.orchestrator import (
+                _OrchestrationToolProvider,
+            )
+
+            tool_provider = cast(
+                ToolProvider,
+                _OrchestrationToolProvider(
+                    tool_provider, self._sub_agents_by_tool_name,
+                ),
+            )
+
         if self._config.guardrails:
             guard_ctx = GuardrailContext(
                 agent_name=self._config.name,
@@ -190,7 +229,7 @@ class Agent:
                 user_message=user_message,
             )
             tool_provider = GuardedToolProvider(
-                self._tool_provider,
+                tool_provider,
                 list(self._config.guardrails),
                 guard_ctx,
                 guard_log,
@@ -229,22 +268,54 @@ class Agent:
                             )
                         )
 
-            result = await run_agent(
-                self._t0,
-                cast(Client[Any], tool_provider),
-                effective_message,
-                self._config.function_name,
-                episode_id=episode_id,
-                max_turns=self._config.max_turns,
-                tool_timeout=tool_timeout,
-                parallel_tools=self._config.parallel_tools,
-                dryrun=self._config.dryrun,
-                tool_choice=self._config.tool_choice,
-                tags=self._merge_tags(tags),
-                namespace=self._config.namespace,
-                on_inference=on_inference,
-                **extra_kwargs,
-            )
+            with contextlib.ExitStack() as stack:
+                if self._config.sub_agents:
+                    # Bind the orchestrator's episode id so sub-agent
+                    # tool handlers tag their inferences with it for
+                    # ClickHouse correlation.
+                    from t0_agents.compose.orchestrator import (
+                        bind_parent_episode_id,
+                        update_parent_episode_id,
+                    )
+
+                    stack.enter_context(bind_parent_episode_id(episode_id))
+
+                    if episode_id is None:
+                        # Fresh orchestrator episode: TensorZero only
+                        # allocates the real id on the first inference.
+                        # Wrap on_inference so the ContextVar is
+                        # refreshed before the turn's tool calls
+                        # dispatch — otherwise every sub-agent
+                        # invocation during this run tags
+                        # t0_agents.parent_episode_id=unknown for the
+                        # entire orchestrator run.
+                        base_on_inference = on_inference
+
+                        async def _refresh_parent_episode_id(
+                            response: ChatInferenceResponse,
+                        ) -> None:
+                            if response.episode_id:
+                                update_parent_episode_id(str(response.episode_id))
+                            if base_on_inference is not None:
+                                await base_on_inference(response)
+
+                        on_inference = _refresh_parent_episode_id
+                result = await run_agent(
+                    self._t0,
+                    cast(Client[Any], tool_provider),
+                    effective_message,
+                    self._config.function_name,
+                    episode_id=episode_id,
+                    max_turns=self._config.max_turns,
+                    tool_timeout=tool_timeout,
+                    parallel_tools=self._config.parallel_tools,
+                    dryrun=self._config.dryrun,
+                    tool_choice=self._config.tool_choice,
+                    tags=self._merge_tags(tags),
+                    namespace=self._config.namespace,
+                    on_inference=on_inference,
+                    **extra_kwargs,
+                )
         finally:
             if guard_ctx is not None:
                 for guardrail in self._config.guardrails:
@@ -357,6 +428,22 @@ class Agent:
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
+        if self._config.sub_agents:
+            # Mirror Agent.run: orchestration wrapping sits inside the
+            # guardrail wrapper so the streaming loop's tool dispatch
+            # hits the inline sub-agent path and keeps the parent-
+            # episode ContextVar visible to ``get_parent_episode_id``.
+            from t0_agents.compose.orchestrator import (
+                _OrchestrationToolProvider,
+            )
+
+            tool_provider = cast(
+                ToolProvider,
+                _OrchestrationToolProvider(
+                    tool_provider, self._sub_agents_by_tool_name,
+                ),
+            )
+
         if self._config.guardrails:
             guard_ctx = GuardrailContext(
                 agent_name=self._config.name,
@@ -364,7 +451,7 @@ class Agent:
                 user_message=user_message,
             )
             tool_provider = GuardedToolProvider(
-                self._tool_provider,
+                tool_provider,
                 list(self._config.guardrails),
                 guard_ctx,
                 guard_log,
@@ -407,28 +494,61 @@ class Agent:
         streamer = StreamingAgentLoop()
         done_result: AgentResult | None = None
         try:
-            async for event in streamer.stream(
-                self._t0,
-                cast(Client[Any], tool_provider),
-                effective_message,
-                self._config.function_name,
-                episode_id=episode_id,
-                max_turns=self._config.max_turns,
-                tool_timeout=tool_timeout,
-                parallel_tools=self._config.parallel_tools,
-                dryrun=self._config.dryrun,
-                tool_choice=self._config.tool_choice,
-                tags=self._merge_tags(tags),
-                namespace=self._config.namespace,
-                on_inference=on_inference,
-                **extra_kwargs,
-            ):
-                if isinstance(event, DoneEvent):
-                    done_result = event.result
-                    # Don't yield DoneEvent yet — finally block populates
-                    # guardrail_log and persists memory first.
-                    break
-                yield event
+            with contextlib.ExitStack() as stack:
+                if self._config.sub_agents:
+                    # Same binding as Agent.run — sub-agents invoked
+                    # from a streaming orchestrator see the same
+                    # ContextVar.
+                    from t0_agents.compose.orchestrator import (
+                        bind_parent_episode_id,
+                        update_parent_episode_id,
+                    )
+
+                    stack.enter_context(bind_parent_episode_id(episode_id))
+
+                    if episode_id is None:
+                        # Mirror Agent.run: refresh the parent-episode
+                        # ContextVar on the first inference so
+                        # mid-stream sub-agent delegations correlate
+                        # against the orchestrator's real episode id
+                        # instead of the "unknown" fallback.  The
+                        # streaming runner fires on_inference after
+                        # final_usage_chunk.episode_id is populated and
+                        # before tool dispatch, so the refresh lands in
+                        # time for every sub-agent call in this turn.
+                        base_on_inference = on_inference
+
+                        async def _refresh_parent_episode_id(
+                            response: ChatInferenceResponse,
+                        ) -> None:
+                            if response.episode_id:
+                                update_parent_episode_id(str(response.episode_id))
+                            if base_on_inference is not None:
+                                await base_on_inference(response)
+
+                        on_inference = _refresh_parent_episode_id
+                async for event in streamer.stream(
+                    self._t0,
+                    cast(Client[Any], tool_provider),
+                    effective_message,
+                    self._config.function_name,
+                    episode_id=episode_id,
+                    max_turns=self._config.max_turns,
+                    tool_timeout=tool_timeout,
+                    parallel_tools=self._config.parallel_tools,
+                    dryrun=self._config.dryrun,
+                    tool_choice=self._config.tool_choice,
+                    tags=self._merge_tags(tags),
+                    namespace=self._config.namespace,
+                    on_inference=on_inference,
+                    **extra_kwargs,
+                ):
+                    if isinstance(event, DoneEvent):
+                        done_result = event.result
+                        # Don't yield DoneEvent yet — finally block populates
+                        # guardrail_log and persists memory first.
+                        break
+                    yield event
         finally:
             # --- 6. after_run hooks (fire even on error, parity with run()) ---
             if guard_ctx is not None:

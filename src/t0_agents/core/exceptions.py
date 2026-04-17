@@ -34,3 +34,17 @@ class GuardrailBlockedError(T0AgentsFatalError):
     turn and propagates out of the agent loop so the caller sees a clear
     policy violation instead of a stringified tool error.
     """
+
+
+class SubAgentError(T0AgentsError):
+    """Wraps a non-fatal error raised by a delegated sub-agent.
+
+    The generated tool handler in ``t0_agents.compose.delegation``
+    catches plain :class:`Exception` and re-raises as ``SubAgentError``
+    so the orchestrator's LLM sees a clean, stringifiable tool error
+    and can choose to retry or re-delegate.  Subclasses of
+    :class:`T0AgentsFatalError` (for example
+    :class:`GuardrailBlockedError` bubbling up from a sub-agent's own
+    guardrail) propagate unchanged so the orchestrator still honours
+    hard-block contracts end-to-end.
+    """
