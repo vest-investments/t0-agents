@@ -1,0 +1,19 @@
+# TensorZero config for the embedded-gateway test in this example.
+#
+# Kept in sync with ``tests/configs/minimal.toml``: one Groq-backed
+# chat function named ``assistant``.  ``GROQ_API_KEY`` must be in the
+# environment when ``RUN_EMBEDDED_TESTS=1`` is set.
+
+[models.gpt_oss_20]
+routing = ["groq"]
+
+[models.gpt_oss_20.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+[functions.assistant]
+type = "chat"
+
+[functions.assistant.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
