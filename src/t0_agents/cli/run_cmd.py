@@ -11,6 +11,7 @@ from rich.prompt import Prompt
 
 from t0_agents.cli.loader import load_agent_factory
 from t0_agents.cli.tui import TUIRenderer
+from t0_agents.core.agent import Agent
 from t0_agents.core.exceptions import T0AgentsFatalError
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ async def _run(spec: str, verbose: bool) -> None:
         raise
 
 
-async def _repl(agent: object, renderer: TUIRenderer, console: Console) -> None:
+async def _repl(agent: Agent, renderer: TUIRenderer, console: Console) -> None:
     episode_id: str | None = None
     while True:
         try:
@@ -97,7 +98,7 @@ async def _repl(agent: object, renderer: TUIRenderer, console: Console) -> None:
         if not user_message.strip():
             continue
         try:
-            stream = agent.stream(  # type: ignore[attr-defined]
+            stream = agent.stream(
                 user_message,
                 episode_id=episode_id,
             )

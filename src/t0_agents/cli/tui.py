@@ -231,12 +231,14 @@ class TUIRenderer:
             case TextEndEvent():
                 pass
             case ToolCallEvent(id=eid, name=name, arguments=arguments):
+                existing = self._tool_calls.get(eid)
+                state = existing["state"] if existing is not None else "pending"
                 if eid not in self._tool_calls:
                     self._tool_order.append(eid)
                 self._tool_calls[eid] = {
                     "name": name,
                     "args": _format_args(arguments),
-                    "state": "pending",
+                    "state": state,
                 }
             case ToolResultEvent(id=eid, name=name, is_error=is_error):
                 existing = self._tool_calls.get(

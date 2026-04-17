@@ -383,6 +383,48 @@ that `tests/test_serve/` already covers.
 left in place as the historical record of the original choice with a
 forward pointer to this entry.
 
+### D11 (post-review polish): Gemini code-review follow-ups
+
+**Flagged by `gemini-code-assist[bot]` in the PR #8 review
+(`pullrequestreview-4125331453`, 4 `medium` comments).**  Two separate
+nits, both aligned with repo invariants (`mypy --strict`; the
+`ToolResultEvent` branch is already tolerant of out-of-order events):
+
+1. *`run_cmd.py` typed `_repl`'s `agent` parameter as `object` and
+   silenced `agent.stream(...)` with a `# type: ignore[attr-defined]`.*
+   The REPL body already uses `.config` and `.warmup()` unchecked, so
+   the loose annotation was covering the full agent surface.  Fix: add
+   `from t0_agents.core.agent import Agent`, annotate
+   `_repl(agent: Agent, …)`, drop the `type: ignore`.  No circular
+   import — `core/agent.py` depends on `mcp/`, `stream/`, `guardrails/`,
+   `memory/`, but not on `cli/`.  The `mcp/`‑standalone invariant in
+   CLAUDE.md is unaffected: `cli/` is a higher‑level consumer on the
+   same side of the import graph as `serve/`.
+
+2. *`tui.py`'s `ToolCallEvent` handler unconditionally wrote
+   `state="pending"`.*  The matching `ToolResultEvent` arm (`tui.py:241`)
+   was already written defensively against out-of-order events (it
+   defaults `args=""`, `state="pending"` if the `id` is unknown), so
+   the asymmetry was a latent bug: if a `ToolCallEvent` ever arrived
+   after its `ToolResultEvent` (re-emit on retry, test fixture,
+   hypothetical future runner), the `✓`/`❌` marker the result set
+   would silently revert to `🔧`.  Fix: fetch `self._tool_calls.get(eid)`
+   first, keep `existing["state"]` when present, otherwise default to
+   `"pending"`.  Symmetric with the result arm, one extra lookup, no
+   behaviour change on the fast path (`ToolCall` → `ToolResult` arrives
+   in order per `stream/runner.py:160,226`).
+
+**Tests.**  Added
+`tests/test_cli/test_tui_renderer.py::test_tool_call_reemission_preserves_result_state`,
+which drives `Call → Result → Call(re-emit) → Done` through the
+renderer and asserts `✓` remains in the panel (and `🔧` is gone).
+Fails on `main`'s `tui.py:233` (panel shows `🔧`); passes with the
+symmetric handler.
+
+**Impact.**  No contract amendment.  Public API unchanged.  Mypy
+strict now covers the REPL body without any `type: ignore` on
+`agent.*`.
+
 ## Resolved Open Questions
 
 No open questions from `02-open-questions.md` were newly answered

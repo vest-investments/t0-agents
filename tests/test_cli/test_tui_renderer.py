@@ -87,6 +87,21 @@ async def test_tool_result_error_marker() -> None:
     assert "❌" in renderer.render_text()
 
 
+async def test_tool_call_reemission_preserves_result_state() -> None:
+    """A re-emitted ToolCallEvent must not reset a prior ✓/❌ marker to 🔧."""
+    renderer = TUIRenderer("assistant", console=_make_console())
+    events: list[AgentEvent] = [
+        ToolCallEvent(id="tc-1", name="add", arguments={"a": 1, "b": 2}),
+        ToolResultEvent(id="tc-1", name="add", result="3", is_error=False),
+        ToolCallEvent(id="tc-1", name="add", arguments={"a": 1, "b": 2}),
+        DoneEvent(result=AgentResult(response="")),
+    ]
+    await renderer.consume(_stream(events))
+    rendered = renderer.render_text()
+    assert "✓" in rendered
+    assert "🔧" not in rendered
+
+
 async def test_done_event_captures_episode_id() -> None:
     renderer = TUIRenderer("assistant", console=_make_console())
     result = AgentResult(response="done", episode_id="episode-xyz")
