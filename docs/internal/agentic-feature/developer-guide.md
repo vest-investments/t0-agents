@@ -213,6 +213,22 @@ extra (`pip install 't0-agents[serve]'`).  The submodule raises a
 `T0AgentsError` at import time when `fastapi` / `uvicorn` are missing,
 so the error is actionable rather than a raw `ImportError`.
 
+### CLI symbols (`t0_agents.cli`)
+
+Exported from `from t0_agents.cli import …` — gated by the `[cli]`
+extra (`pip install 't0-agents[cli]'`).  The submodule raises a
+`T0AgentsError` at import time when `typer` / `rich` are missing.
+Phase F / Milestone M6.
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `main` | fn | `cli/app.py` | Typer entry point; used by the `t0-agents` console script. |
+| `load_agent_factory` | fn | `cli/loader.py` | Resolve `module:attr` to an `AgentFactory`; raises `typer.BadParameter` with actionable messages. |
+| `AgentFactory` | TypeAlias | `cli/loader.py` | `Callable[[], AbstractAsyncContextManager[Agent]]` — zero-arg factory returning an async context manager. |
+| `TUIRenderer` | class | `cli/tui.py` | Rich `Live` + `Panel` renderer for `AsyncIterator[AgentEvent]`. Exposes `consume(stream)`, `pause()` / `resume()`, and `last_episode_id`. |
+| `rich_elicitation_handler` | fn | `cli/elicit_tui.py` | Default FastMCP elicitation handler that renders prompts via Rich. Equivalent to `make_rich_elicitation_handler()()`. |
+| `make_rich_elicitation_handler` | fn | `cli/elicit_tui.py` | Build a handler bound to a specific `TUIRenderer` / `Console`; pauses / resumes the Live region around each prompt. |
+
 | Symbol | Kind | File:line | Summary |
 | --- | --- | --- | --- |
 | `create_app` | fn | `serve/app.py` | Wrap an `Agent` in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info`.  `streaming=True` additionally mounts `GET /chat/stream` (SSE) and `WS /chat/ws`. |
@@ -1058,6 +1074,31 @@ guides cover these in more depth; the list here is for quick orientation.
   WSElicitationRequest, WSErrorFrame` — Pydantic v2 envelopes for
   every incoming and outgoing frame (full shape in
   [`../streaming.md`](../streaming.md)).
+- **CLI — `t0-agents` (Phase F).** Behind the `[cli]` extra:
+  - `t0-agents run <module:attr> [--verbose]` — streaming REPL.
+    `--verbose` renders `ThoughtEvent` / `ThoughtDeltaEvent` inside the
+    panel.
+  - `t0-agents serve <module:attr> [--host HOST] [--port PORT]
+    [--streaming/--no-streaming] [--deployment LABEL]` — uvicorn
+    wrapper. Streaming is **on by default**; `--no-streaming` reverts
+    to the Phase D `POST /chat` surface only. `--deployment` is
+    forwarded to `create_app(deployment_label=...)` and lands as
+    `t0_agents.deployment=<label>` in every inference's tags.
+  - `t0-agents info <module:attr>` — dumps the loaded `AgentConfig` as
+    a Rich `Table`.
+  - All three resolve their `module:attr` argument through
+    `t0_agents.cli.load_agent_factory`, which requires a zero-arg
+    callable returning an async context manager yielding an `Agent`.
+    Bare `Agent` instances are rejected with an actionable error that
+    includes the recommended `@asynccontextmanager` snippet.
+  - `TUIRenderer(agent_name, *, console=None, verbose=False,
+    refresh_per_second=20.0)` is the stock renderer. Swap it for a
+    Textual / custom `Layout` / log sink via any callable that
+    consumes `AsyncIterator[AgentEvent]`.
+  - `rich_elicitation_handler` / `make_rich_elicitation_handler(*,
+    renderer=None, console=None)` are the Phase F entry points into
+    the FastMCP elicitation contract. The factory pauses / resumes
+    the Live region around each prompt when a renderer is supplied.
 
 ### What is **not** caller-controlled today
 
