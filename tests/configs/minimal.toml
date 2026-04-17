@@ -1,0 +1,24 @@
+# Minimal TensorZero configuration for embedded-gateway tests.
+#
+# Declares one chat function ``assistant`` backed by a small, cheap model
+# on Groq so RUN_EMBEDDED_TESTS=1 runs don't rack up provider bills.  The
+# embedded gateway needs neither ClickHouse nor Postgres — observability
+# rows are ephemeral, which is fine for tests.
+#
+# Provider API keys must be in the environment (``GROQ_API_KEY``) —
+# ``t0_agents.testing.EmbeddedGatewayHelper.from_config`` forwards this
+# file to ``AsyncTensorZeroGateway.build_embedded`` verbatim.
+
+[models.gpt_oss_20]
+routing = ["groq"]
+
+[models.gpt_oss_20.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+[functions.assistant]
+type = "chat"
+
+[functions.assistant.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"

@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] — Unreleased
+
+### Added
+
+- **Agent testing framework** (`from t0_agents.testing import MockGateway,
+  MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
+  Milestone M8: Testable Agents.  Ships from the base distribution — no
+  new extra, no new dependency.  Two complementary paths:
+  - **`MockGateway`** — duck-typed `AsyncTensorZeroGateway` with three
+    construction modes.  `script(turns)` pops a pre-scripted content
+    list per `inference()` call; `canned(fn)` delegates to a callable
+    receiving the full kwargs; `recording(real_gateway)` forwards to a
+    real gateway and captures `(kwargs, response)` pairs that
+    `.replay()` converts into a deterministic replay `MockGateway`.
+    Records `.calls` (kwargs) and `.responses`
+    (`ChatInferenceResponse`) in parallel so assertions can inspect
+    both what the loop asked for and what the model decided.
+  - **`MockToolProvider`** — dict-backed `ToolProvider` Protocol
+    implementation.  Sync + async handlers; unknown tool raises
+    `KeyError`; schemas configurable via the `schemas=` constructor
+    kwarg.  Returns a real `fastmcp.CallToolResult` so the production
+    `serialize_tool_result` handles the mock output with the exact same
+    rules as a real tool.
+  - **`EmbeddedGatewayHelper`** — async-context wrappers around
+    `AsyncTensorZeroGateway.build_embedded` (source-validated at
+    `tensorzero.pyi:1016-1035`).  `from_config(path)`,
+    `with_clickhouse(path, url)`, `with_postgres(path, url)` for
+    increasingly-observable integration tests that still don't need
+    Docker.  Resolves the final open question (T0 Q7) in the
+    agentic-feature roadmap.
+- **Assertion helpers** — `assert_tool_called`, `assert_tool_not_called`,
+  `assert_tool_args_equal`, `assert_max_turns`, `assert_response_contains`.
+  The tool-call assertions accept exclusive `gateway=` (inspects what
+  the model emitted) or `tool_provider=` (inspects what actually
+  executed after guardrails + the loop).
+- **Reusable scenarios** (`t0_agents.testing.scenarios`) —
+  `single_tool_happy`, `tool_error_recovery`, `max_turns_exhausted`
+  canned `MockGateway` factories for the three most common loop shapes.
+- **Streaming mocks** (`t0_agents.testing.streaming_mocks`) —
+  `fake_event_stream(events)` wraps an iterable into
+  `AsyncIterator[AgentEvent]` (ideal for testing consumers of
+  `Agent.stream`); `MockStreamingGateway` yields scripted `ChatChunk`s
+  from `inference(stream=True)` for basic streaming round-trip tests.
+- **Pytest fixtures** (`t0_agents.testing.fixtures`) — `mock_t0`,
+  `mock_tool_provider`, `embedded_t0`, `agent_test_factory`.  Registered
+  by adding `pytest_plugins = ["t0_agents.testing.fixtures"]` to a
+  project's `conftest.py`.
+- **`embedded` pytest marker** registered in `pyproject.toml` — opt-in
+  via `RUN_EMBEDDED_TESTS=1` so contributor CI stays fast.
+- **Shape-contract test** at
+  [`tests/test_testing/test_mock_shape.py`](tests/test_testing/test_mock_shape.py)
+  asserts every kwarg the agent loop passes to
+  `AsyncTensorZeroGateway.inference` is accepted by `MockGateway`, that
+  `MockToolProvider` satisfies the runtime-checkable `ToolProvider`
+  Protocol, and that `MockToolProvider.call_tool` returns a real
+  `fastmcp.CallToolResult`.  Fails fast on any future drift between
+  mocks and the real surfaces.
+- **Example** [`examples/15_testing/`](examples/15_testing/) — a
+  three-tool demo agent (`agent.py`) with both `test_agent_unit.py`
+  (runs in < 1 s, no Docker, no API keys) and `test_agent_embedded.py`
+  (opt-in via `RUN_EMBEDDED_TESTS=1`), plus a self-contained
+  `pytest.ini` and `tensorzero.toml`.
+- **Public doc** [`docs/testing.md`](docs/testing.md) — two-mode
+  comparison table, `MockGateway` / `MockToolProvider` guides,
+  assertion reference, scenarios, embedded setup, and a `dryrun=True`
+  comparison.
+- **`CONTRIBUTING.md`** (new) — prerequisites, three test modes
+  (unit / integration / embedded), style gates, single-test commands,
+  and a skeleton for writing a new test with `MockGateway`.
+
+### Changed
+
+- Phase H does not modify `core/`, `mcp/`, `stream/`, `serve/`,
+  `memory/`, `guardrails/`, `compose/`, or `cli/`.  `run_agent`,
+  `AgentResult`, `Agent`, and every pre-existing public symbol are
+  byte-identical to 0.8.0 (contract §2.1, §6.1–§6.3).  All 399 prior
+  offline tests remain green alongside the 56 new `tests/test_testing/`
+  tests — 455 total passing in `-m "not integration and not embedded"`.
+
 ## [0.8.0] — Unreleased
 
 ### Added

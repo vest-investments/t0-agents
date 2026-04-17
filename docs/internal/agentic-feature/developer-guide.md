@@ -266,6 +266,42 @@ The public route contract lives in Pydantic models at
 | `HealthResponse` | `gateway`, `tool_provider` — free-form strings (`"ok"`, `"down"`, `"per-session"`). |
 | `InfoResponse` | Redacted `AgentConfig` snapshot: name, function_name, namespace, tags, `has_memory`, `guardrails` (names only). |
 
+### Testing symbols (`t0_agents.testing`)
+
+Exported from `from t0_agents.testing import …`
+([`src/t0_agents/testing/__init__.py`](../../src/t0_agents/testing/__init__.py)).
+Phase H / Milestone M8.  Ships in the base distribution — no extras required.
+**Test-only:** never import these from a production code path.
+
+| Symbol | Kind | File:line | Summary |
+| --- | --- | --- | --- |
+| `MockGateway` | class | `testing/mocks.py` | Duck-typed `AsyncTensorZeroGateway`. Three constructors: `script(turns)`, `canned(fn)`, `recording(real_gateway)`. Records `.calls` (kwargs) and `.responses` (ChatInferenceResponse) in parallel. |
+| `MockChatResponse` | dataclass | `testing/mocks.py` | Builder for a single `ChatInferenceResponse`-shaped object; `.to_response()` materialises one with caller-supplied or fresh UUIDs. |
+| `MockToolProvider` | class | `testing/mocks.py` | Dict-backed `ToolProvider` Protocol impl. Sync + async handlers; unknown tool raises `KeyError`; schemas configurable. Returns real `fastmcp.CallToolResult` so the production `serialize_tool_result` handles the mock output. |
+| `RecordingGateway` | class | `testing/mocks.py` | Wraps a real gateway; forwards `inference` + captures `(kwargs, response)` pairs. `.replay()` builds a deterministic `MockGateway`. |
+| `ToolHandler` | TypeAlias | `testing/mocks.py` | `Callable[[dict[str, Any]], Any] \| Callable[[dict[str, Any]], Awaitable[Any]]`. |
+| `EmbeddedGatewayHelper` | class | `testing/embedded.py` | Async-context wrappers around `AsyncTensorZeroGateway.build_embedded`. `from_config(path)`, `with_clickhouse(path, url)`, `with_postgres(path, url)`. |
+| `assert_tool_called` | fn | `testing/assertions.py` | Accepts exclusive `gateway=` (inspects `ChatInferenceResponse.content`) or `tool_provider=` (inspects `.calls`). |
+| `assert_tool_not_called` | fn | `testing/assertions.py` | Same exclusive pair as `assert_tool_called`. |
+| `assert_tool_args_equal` | fn | `testing/assertions.py` | Tool-provider-only; compares the most recent call's arguments. |
+| `assert_max_turns` | fn | `testing/assertions.py` | `result.turns <= at_most`. |
+| `assert_response_contains` | fn | `testing/assertions.py` | Case-insensitive substring check on `result.response`. |
+| `scenarios` | module | `testing/scenarios.py` | `single_tool_happy`, `tool_error_recovery`, `max_turns_exhausted` — canned `MockGateway` factories. |
+| `streaming_mocks` | module | `testing/streaming_mocks.py` | `fake_event_stream(events)` wraps an iterable into `AsyncIterator[AgentEvent]`; `MockStreamingGateway` yields scripted `ChatChunk`s from `inference(stream=True)`. |
+| `mock_t0` | pytest fixture | `testing/fixtures.py` | Fresh empty `MockGateway`. |
+| `mock_tool_provider` | pytest fixture | `testing/fixtures.py` | Fresh empty `MockToolProvider`. |
+| `embedded_t0` | pytest fixture | `testing/fixtures.py` | Real `AsyncTensorZeroGateway` via `EmbeddedGatewayHelper.from_config` — parametrize by config path with `indirect=True`. |
+| `agent_test_factory` | pytest fixture | `testing/fixtures.py` | Factory that builds an `Agent` against the sibling fixtures with sensible defaults. |
+
+A shape-contract test at
+[`tests/test_testing/test_mock_shape.py`](../../tests/test_testing/test_mock_shape.py)
+asserts that every kwarg the agent loop passes to
+`t0.inference(...)` is accepted by `MockGateway`, that
+`MockToolProvider` satisfies the runtime-checkable `ToolProvider`
+Protocol, and that `MockToolProvider.call_tool` returns a real
+`fastmcp.CallToolResult`.  Update that test alongside any change to
+`src/t0_agents/mcp/loop.py` that adds a new inference kwarg.
+
 ### `run_agent` — full signature
 
 Copied verbatim from
