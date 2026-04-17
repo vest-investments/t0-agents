@@ -75,13 +75,18 @@ uv run t0-agents serve examples.13_tui.agent:assistant \
 ```
 
 This wraps the same factory in
-[`t0_agents.serve.create_app(streaming=True, share_client=True)`](../../docs/serving.md).
-SSE is available at `GET /chat/stream`, WebSocket at `WS /chat/ws`. The
-CLI's Rich elicitation handler is not wired to the serve path — Phase E's
-browser client (see `examples/12_streaming_http/`) is the canonical
-streaming-HTTP UI.
+[`t0_agents.serve.create_app(share_client=True)`](../../docs/serving.md)
+and runs uvicorn against the Phase D non-streaming routes (`POST /chat`,
+`/feedback`, `/health`, `/info`). Streaming is off by default because
+this factory wires `rich_elicitation_handler` into a shared `Client` —
+that handler talks to the local terminal, so it does not make sense over
+HTTP, and the WS streaming route additionally needs a per-connection
+handler (FastMCP Q3) which shared-Client mode cannot give it.
 
-Use `--no-streaming` to get just the non-streaming `POST /chat` surface.
+For full streaming + browser elicitation, see
+[`examples/12_streaming_http/`](../12_streaming_http/), which wires
+`client_factory` + `elicitation_client_factory` into `create_app`
+directly.
 
 ## Inspect the config
 

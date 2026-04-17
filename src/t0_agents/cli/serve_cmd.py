@@ -22,9 +22,15 @@ def register(app: typer.Typer) -> None:
         host: str = typer.Option("0.0.0.0", help="Host to bind."),
         port: int = typer.Option(8080, help="Port to listen on."),
         streaming: bool = typer.Option(
-            True,
+            False,
             "--streaming/--no-streaming",
-            help="Enable SSE + WebSocket streaming routes (default: on).",
+            help=(
+                "Enable SSE + WebSocket streaming routes (default: off). "
+                "WS elicitation requires a per-session Client, which the "
+                "CLI's shared-Client mode cannot provide; opting in will "
+                "boot the SSE route fine but every WS connection that "
+                "triggers ctx.elicit() will close with a ConfigurationError."
+            ),
         ),
         deployment: str | None = typer.Option(
             None,
@@ -38,7 +44,15 @@ def register(app: typer.Typer) -> None:
         reused across sessions.  This is fine for a single-user dev
         server but not for production multi-tenant elicitation — use
         :func:`t0_agents.serve.create_app` directly with a
-        ``client_factory`` / ``session_provider`` for that.
+        ``client_factory`` / ``session_provider`` for that (see
+        ``examples/12_streaming_http/agent_app.py``).
+
+        ``--streaming`` defaults to ``False`` because the WS elicitation
+        path is structurally incompatible with shared-Client mode
+        (FastMCP Q3 needs one elicitation handler per Client).  Use
+        ``--streaming`` only when the served agent's tools never call
+        ``ctx.elicit`` — then SSE works and WS is only an unused
+        endpoint.
         """
         asyncio.run(_serve(agent_spec, host, port, streaming, deployment))
 

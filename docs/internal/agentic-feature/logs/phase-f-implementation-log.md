@@ -60,34 +60,27 @@ amendment: `Agent` / `AgentConfig` / `AgentResult` / `run_agent` / the
 `mcp/` submodule are byte-identical. `examples/13_tui/agent.py` is the
 canonical reference; same factory works for `run`, `serve`, and `info`.
 
-### D2: `t0-agents serve` defaults `streaming=True`
+### D2: `t0-agents serve` defaults `streaming=False` (corrected post-merge — see D10)
 
 **Spec (§4.5).** Sketched `serve_cmd` as a thin wrap of
 `create_app(agent, deployment_label=deployment)` without a streaming
 flag, implicitly inheriting Phase D's `streaming=False` default.
 
-**Actual.** `t0-agents serve` defaults to
-`streaming=True` with `--no-streaming` available as an opt-out. The
+**Initial choice.** Defaulted to `streaming=True` with `--no-streaming`
+as the opt-out, on the theory that Phase F's purpose was a
+streaming + elicitation demo and pointing the user at the browser
+client in `examples/12_streaming_http/static/index.html` from a single
+`t0-agents serve` command was the most demo-friendly default.  The
 subcommand always uses `share_client=True` so the factory-entered
 `Client` is reused across sessions.
 
-**Reason.** User-selected in the pre-implementation interview: the CLI
-is a streaming + elicitation demo (the user's "fácil integrar t0-agents
-a un TUI" hint). Defaulting to streaming matches that purpose and lets
-the user hit the browser `examples/12_streaming_http/static/index.html`
-against `t0-agents serve` directly. The Phase D default stays
-unchanged — this is a subcommand-level choice, not a library-level
-one.
-
-`share_client=True` is the only sane default because the CLI has no
-way to mint fresh Clients per session without asking the user to
-export a client factory too. It's explicitly not production-safe for
-concurrent elicitation (contract §3.5 / FastMCP Q3), and the CLI
-docstring + `docs/cli.md` both flag that.
-
-**Impact.** `docs/cli.md` documents the default. The cross-cutting
-checklist is satisfied: `create_app`'s signature is unchanged; the
-default we pick is entirely a subcommand choice.
+**Why this was wrong.**  The user's first manual smoke-test against
+the streaming default crashed every WebSocket connection:
+`SessionFactory.session()` raises `ConfigurationError` when shared
+mode is asked for an `elicitation_handler`, and the WS route always
+passes the per-connection forwarder handler.  The combination
+`streaming=True` + `share_client=True` is structurally broken.  See
+**D10** for the post-merge correction.
 
 ### D3: `make_rich_elicitation_handler` factory alongside `rich_elicitation_handler`
 
@@ -337,6 +330,59 @@ correct idiom for piped input.
 **Impact.** Integration tests (`tests/test_cli/test_integration.py`)
 follow the same pattern.
 
+### D10 (post-merge bugfix): `t0-agents serve` defaults `streaming=False`
+
+**Observed by user during manual smoke-test (2026-04-16).** The PR's
+test plan included `uv run t0-agents serve
+examples.13_tui.agent:assistant --port 8080` followed by `GET /health`.
+The server booted, `/health` returned, but the user's first
+`new WebSocket('ws://localhost:8080/chat/ws')` collapsed every
+connection with:
+
+```
+ConfigurationError: Streaming elicitation is incompatible with
+'shared_tool_provider' mode — each caller needs its own elicitation
+handler (FastMCP Q3).  Use 'client_factory' +
+'elicitation_client_factory' or a 'session_provider'.
+```
+
+**Root cause.** The combination *baked in by D2*
+(`streaming=True` + `share_client=True`) is structurally invalid: the
+WS route at `serve/streaming_routes.py:114` always passes a
+per-connection `ElicitationForwarder.handler` to
+`SessionFactory.session(...)`, and shared-mode raises on any non-`None`
+elicitation handler (`serve/session.py:245-252`).  D2's "demo-friendly
+default" only worked for tools that never call `ctx.elicit` — not the
+`set_reminder` tool the example ships.
+
+**Fix.** Default `--streaming` to `False` so the most common path
+(`POST /chat`, `/feedback`, `/health`, `/info`) Just Works against the
+factory's shared `Client`.  `--streaming` remains opt-in and the
+docstring + `docs/cli.md` + `examples/13_tui/README.md` now spell out
+the limitation: streaming serves SSE fine, but every WS connection
+that triggers `ctx.elicit` will close with the original error.  For
+real browser-elicitation streaming the user is pointed at
+`examples/12_streaming_http/agent_app.py`, which wires
+`client_factory` + `elicitation_client_factory` directly into
+`create_app`.
+
+**Why no startup check.**  Adding "raise at `create_app(streaming=True,
+share_client=True)` startup" would be a Phase D/E cross-cutting
+change.  Phase F's surface ends at the CLI; the safer scoped fix is
+to flip the CLI default and document the trade-off.  A future phase
+can promote the check into the library if it ever ships a non-CLI
+caller that hits the same combination.
+
+**Tests.**  Existing `tests/test_cli/test_integration.py` tests serve
+without `--streaming`, so they were already exercising the new
+default.  No new test added — adding one would just re-cover the
+Phase E `create_app(share_client=True, streaming=False)` integration
+that `tests/test_serve/` already covers.
+
+**Impact.**  No contract amendment.  Public API unchanged.  `D2` is
+left in place as the historical record of the original choice with a
+forward pointer to this entry.
+
 ## Resolved Open Questions
 
 No open questions from `02-open-questions.md` were newly answered
@@ -350,9 +396,11 @@ pre-resolved:
   for schemas originating from non-FastMCP MCP servers.
 - **FastMCP Q3 (Client concurrency)** — `t0-agents serve` uses
   `share_client=True` which explicitly violates the
-  per-session-Client-per-elicitation-handler guarantee. This is a
-  documented trade-off for the dev-server use case and called out in
-  `docs/cli.md`.
+  per-session-Client-per-elicitation-handler guarantee.  D10 corrects
+  the original `streaming=True` default to `False` so the dev-server
+  use case stays inside the safe non-streaming subset; opting in to
+  `--streaming` is documented as "SSE-only; WS elicitation will
+  close every connection with `ConfigurationError`".
 - **T0 Q1 (streaming chunks)** — The renderer relies on the stable
   block-ID correlation key: `TextDeltaEvent(id=...)` deltas accumulate
   per id, `ToolCallEvent(id=...)` → `ToolResultEvent(id=...)` pair via

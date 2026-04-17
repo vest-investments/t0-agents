@@ -1080,8 +1080,16 @@ guides cover these in more depth; the list here is for quick orientation.
     panel.
   - `t0-agents serve <module:attr> [--host HOST] [--port PORT]
     [--streaming/--no-streaming] [--deployment LABEL]` — uvicorn
-    wrapper. Streaming is **on by default**; `--no-streaming` reverts
-    to the Phase D `POST /chat` surface only. `--deployment` is
+    wrapper. **Streaming is off by default** because the CLI fixes
+    `share_client=True` and shared-Client mode raises
+    `ConfigurationError` whenever the WS route fires
+    `ctx.elicit()` (FastMCP Q3 — one elicitation handler per Client).
+    `--streaming` boots the SSE + WS routes against the shared Client
+    and is safe only when the served agent's tools never elicit;
+    callers that need browser elicitation should drop the CLI and call
+    `create_app` directly with `client_factory` +
+    `elicitation_client_factory` (see
+    `examples/12_streaming_http/agent_app.py`). `--deployment` is
     forwarded to `create_app(deployment_label=...)` and lands as
     `t0_agents.deployment=<label>` in every inference's tags.
   - `t0-agents info <module:attr>` — dumps the loaded `AgentConfig` as

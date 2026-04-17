@@ -16,7 +16,7 @@ so every subcommand works out of the box.
 | Command | What it does |
 | --- | --- |
 | `t0-agents run <spec>` | Interactive REPL. Live-streams deltas, tool calls, and elicitation prompts in a Rich panel. |
-| `t0-agents serve <spec>` | Wraps the agent in `t0_agents.serve.create_app(..., streaming=True)` and runs uvicorn. |
+| `t0-agents serve <spec>` | Wraps the agent in `t0_agents.serve.create_app(..., share_client=True)` and runs uvicorn (non-streaming by default). |
 | `t0-agents info <spec>` | Prints a tabulated `AgentConfig` — useful before booting the streaming REPL. |
 
 All three take an **agent factory spec** in `module:attr` form — see
@@ -109,20 +109,31 @@ the whole session.
 ```bash
 uv run t0-agents serve my_package.my_agent:assistant \
     --host 127.0.0.1 --port 8080 --deployment my-demo
-uv run t0-agents serve my_package.my_agent:assistant --no-streaming
+uv run t0-agents serve my_package.my_agent:assistant --streaming
 ```
 
-Wraps the factory in `create_app(agent, share_client=True, streaming=True, deployment_label=...)`
-and runs uvicorn. `--streaming` is **on by default** — a dev server that
-offers the full SSE + WebSocket feature set. Disable with
-`--no-streaming` to get just the non-streaming `POST /chat`.
+Wraps the factory in `create_app(agent, share_client=True, streaming=...,
+deployment_label=...)` and runs uvicorn. `--streaming` is **off by
+default** — the subcommand serves the Phase D `POST /chat` /
+`/feedback` / `/health` / `/info` surface against the factory's shared
+`Client`.
 
-Because the CLI uses `share_client=True`, the factory's `Client` is
-reused across every session. That's fine for a single-user dev server
-but not for production multi-tenant use — if elicitation matters and
-you expect concurrency, call `create_app` from your own ASGI app with a
-`client_factory` / `session_provider` instead. See
-[`serving.md`](serving.md) and [`streaming.md`](streaming.md).
+Why `--no-streaming` is the safe default: the CLI uses
+`share_client=True`, which means every request reuses the same
+`Client(mcp)` opened inside your factory. The streaming WebSocket route
+needs a fresh elicitation handler per connection (FastMCP Q3 — one
+handler per Client), and the SessionFactory raises
+`ConfigurationError` whenever shared mode is asked for an elicitation
+handler. Opting in to `--streaming` boots the SSE route fine, but every
+WS connection that fires `ctx.elicit()` will close with that error.
+Use `--streaming` only when the served agent's tools never call
+`ctx.elicit`.
+
+For full streaming + browser elicitation, drop the CLI and call
+`create_app` directly with a `client_factory` plus an
+`elicitation_client_factory` — see
+[`examples/12_streaming_http/agent_app.py`](../examples/12_streaming_http/agent_app.py),
+[`serving.md`](serving.md), and [`streaming.md`](streaming.md).
 
 ## `t0-agents info`
 

@@ -20,9 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     live deltas, tool-call spinners, and Rich-rendered elicitation
     prompts. `--verbose` surfaces reasoning content.
   - `t0-agents serve <module:attr>` — wraps
-    `t0_agents.serve.create_app(..., streaming=True, share_client=True)`
-    in uvicorn. Streaming is **on by default**; opt out with
-    `--no-streaming`. `--host`, `--port`, `--deployment` flags.
+    `t0_agents.serve.create_app(..., share_client=True)` in uvicorn.
+    Phase D non-streaming routes by default (`POST /chat`, `/feedback`,
+    `/health`, `/info`); opt in to SSE + WS with `--streaming`. WS
+    elicitation is incompatible with shared-Client mode (FastMCP Q3),
+    so `--streaming` is only useful for tools that never call
+    `ctx.elicit` — for full browser elicitation, call `create_app`
+    directly with a `client_factory` + `elicitation_client_factory`
+    (see `examples/12_streaming_http/agent_app.py`). `--host`,
+    `--port`, `--deployment` flags.
   - `t0-agents info <module:attr>` — prints a Rich `Table` of the
     loaded `AgentConfig`.
 - **Agent factory convention** — every subcommand's ``<module:attr>``
