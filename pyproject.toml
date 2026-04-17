@@ -62,6 +62,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires T0 Gateway running (deselect with '-m not integration')",
+    "embedded: requires an embedded T0 Gateway and a provider API key; opt-in via RUN_EMBEDDED_TESTS=1 (deselect with '-m not embedded')",
 ]
 
 [tool.ruff]
