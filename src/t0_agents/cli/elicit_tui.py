@@ -4,16 +4,16 @@ The CLI's ``run`` subcommand plugs :func:`rich_elicitation_handler` into
 ``fastmcp.Client(mcp, elicitation_handler=...)`` so a tool that calls
 ``ctx.elicit(...)`` gets its prompt rendered with Rich.
 
-The handler relies on the **FastMCP Q5** schema guarantees (resolved in
-``docs/internal/agentic-feature/02-open-questions.md``): elicitation
-schemas are always a flat ``{"type": "object", "properties": {...}}``
-with primitive field types (``string``, ``integer``, ``number``,
-``boolean``) plus ``enum`` / ``const`` and preserved ``description`` /
-``default``.  Nested objects and arrays of objects are rejected at
-server construction time, so the handler can iterate the top-level
-properties without worrying about recursion.  The one exception —
-unknown ``type`` values from non-FastMCP servers — falls back to
-:class:`~rich.prompt.Prompt` in string mode with a logged warning.
+The handler relies on the strict elicitation-schema subset that FastMCP
+validates at server construction time: elicitation schemas are always a
+flat ``{"type": "object", "properties": {...}}`` with primitive field
+types (``string``, ``integer``, ``number``, ``boolean``) plus ``enum``
+/ ``const`` and preserved ``description`` / ``default``.  Nested
+objects and arrays of objects are rejected server-side, so the handler
+can iterate the top-level properties without worrying about recursion.
+The one exception — unknown ``type`` values from non-FastMCP servers —
+falls back to :class:`~rich.prompt.Prompt` in string mode with a logged
+warning.
 
 Pair with :class:`~t0_agents.cli.tui.TUIRenderer` when a Live region is
 active: :func:`make_rich_elicitation_handler` takes an optional

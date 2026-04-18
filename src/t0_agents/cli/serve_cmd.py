@@ -48,8 +48,9 @@ def register(app: typer.Typer) -> None:
         ``examples/12_streaming_http/agent_app.py``).
 
         ``--streaming`` defaults to ``False`` because the WS elicitation
-        path is structurally incompatible with shared-Client mode
-        (FastMCP Q3 needs one elicitation handler per Client).  Use
+        path is structurally incompatible with shared-Client mode: one
+        elicitation handler is allowed per ``Client``, so a shared
+        ``Client`` cannot demultiplex per-connection handlers.  Use
         ``--streaming`` only when the served agent's tools never call
         ``ctx.elicit`` — then SSE works and WS is only an unused
         endpoint.

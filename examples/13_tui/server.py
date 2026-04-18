@@ -31,8 +31,9 @@ def add(a: int, b: int) -> int:
 class ReminderConfirmation:
     """Structured elicitation payload for :func:`set_reminder`.
 
-    Kept flat (primitive + ``Literal``/``enum``) so the Phase F Rich
-    handler can render each field with the appropriate prompt type.
+    Kept flat (primitive + ``Literal``/``enum``) so the Rich
+    elicitation handler can render each field with the appropriate
+    prompt type.
     """
 
     confirm: Annotated[

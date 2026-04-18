@@ -1,4 +1,4 @@
-"""Agent factory for the Phase F TUI demo.
+"""Agent factory for the TUI demo.
 
 Invoked via:
 

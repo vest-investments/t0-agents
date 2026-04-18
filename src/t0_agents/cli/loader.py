@@ -1,6 +1,6 @@
 """Resolve ``module:attr`` specs to Agent factories.
 
-The Phase F CLI treats every subcommand's primary argument as a
+The CLI treats every subcommand's primary argument as a
 ``module:attr`` reference to an **async-context-manager factory** for an
 :class:`~t0_agents.core.agent.Agent` — idiomatically a zero-argument
 callable decorated with :func:`contextlib.asynccontextmanager`.
