@@ -53,8 +53,3 @@ Public API: `from t0_agents import run_agent`
 - `tests/test_mcp/test_adapter.py` — Unit tests for the tools and results adapter
 - `tests/test_mcp/test_integration.py` — Integration tests for the full MCP bridge; module-level `pytestmark = pytest.mark.integration`
 - Integration tests marked with `@pytest.mark.integration` require `docker compose up` to be running
-
-## Design Documentation
-
-- `docs/internal/implementation-plan/` — Versioned design docs: integration contract, validation checklist, meta-plan, implementation reference patterns. Historical context for contributors.
-- `docs/internal/phase-0/` through `docs/internal/phase-7/` — Per-phase guides and implementation logs that record decisions and divergences from the plan.

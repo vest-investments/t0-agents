@@ -200,7 +200,5 @@ your change is user-visible.
 - User-facing docs live under `docs/`. Kebab-case filenames,
   GitHub-flavoured Markdown. Add a new page for a new public feature;
   extend an existing page for an enhancement.
-- Internal design docs live under `docs/internal/`. Phase-specific
-  notes go to `docs/internal/agentic-feature/`.
 
 Thanks for helping t0-agents get better.
