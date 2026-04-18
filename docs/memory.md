@@ -1,23 +1,516 @@
 # Memory
 
-The memory subsystem gives an `Agent` the ability to remember state
-between `.run()` calls — within a single process (in-memory) or across
-processes (persistent via SQLite or a custom backend).
+The `run_agent` loop is stateless: every `Agent.run()` call starts with a fresh message history, and continuity is carried only by the optional `episode_id` argument. To let an agent *remember* earlier turns — conversations with the same user last week, facts it learned in a previous process, decisions it made before a redeploy — wire a `MemoryProvider` into `AgentConfig`.
+
+Cross-run persistence for an `Agent`, keyed by TensorZero's episode id.
+
+The memory subsystem lets an `Agent` remember earlier turns — both within
+a single process (ephemeral, dict-backed) and across processes
+(persistent, via SQLite or a custom backend). Configuration is a single
+field on `AgentConfig`; the `Agent` handles load + save automatically
+around every `.run()` / `.stream()` call.
+
+```python
+from t0_agents import Agent, AgentConfig, MemoryProvider
+from t0_agents.memory import (
+    InMemoryMemory,
+    SqliteMemory,
+    MemoryRecord,
+    render_memory_summary,
+)
+```
+
+---
 
 ## Installation
 
+`InMemoryMemory`, `MemoryRecord`, and `render_memory_summary` ship with
+the base distribution. `SqliteMemory` lives behind an opt-in extra
+because it pulls [`aiosqlite`](https://pypi.org/project/aiosqlite/):
+
 ```bash
-# InMemoryMemory ships with the base package
+# Base (InMemoryMemory only)
 pip install t0-agents
 
-# SqliteMemory requires the memory-sqlite extra
+# With SQLite persistence
 pip install 't0-agents[memory-sqlite]'
+
+# Or with uv
+uv pip install 't0-agents[memory-sqlite]'
 ```
 
-## Quick start
+The store primitives themselves do not require Docker or a running
+TensorZero gateway — you can exercise them in plain `asyncio`. The
+Docker-required `Agent` flow is introduced in the second quickstart
+below.
+
+---
+
+## Quickstart — store primitive (no Docker)
+
+Exercise `InMemoryMemory` on its own to see the shape of a record, what
+`render_memory_summary` returns, and how `search` ranks matches. Runs
+in under a second with no external dependencies.
 
 ```python
+import asyncio
+
+from t0_agents.memory import (
+    InMemoryMemory,
+    MemoryRecord,
+    render_memory_summary,
+)
+
+
+async def main() -> None:
+    store = InMemoryMemory()
+
+    await store.save(MemoryRecord(
+        episode_id="demo",
+        user_message="My name is Alice.",
+        agent_response="Nice to meet you, Alice.",
+        turns=1,
+    ))
+    await store.save(MemoryRecord(
+        episode_id="demo",
+        user_message="My favourite colour is teal.",
+        agent_response="Got it — teal.",
+        turns=1,
+    ))
+
+    records = await store.load("demo")
+    print(f"Records: {len(records)}")
+    print(render_memory_summary(records))
+
+    hits = await store.search("colour")
+    print(f"\nSearch 'colour' → {len(hits)} match(es)")
+
+
+asyncio.run(main())
+```
+
+Output:
+
+```
+Records: 2
+Previous conversation (2 turns):
+- User: My name is Alice.
+  Assistant: Nice to meet you, Alice.
+- User: My favourite colour is teal.
+  Assistant: Got it — teal.
+
+Search 'colour' → 1 match(es)
+```
+
+Swap `InMemoryMemory()` for `SqliteMemory("./memory.db")` and the same
+script now writes to disk — every method signature is identical because
+both classes satisfy the `MemoryProvider` Protocol.
+
+---
+
+## Quickstart — `Agent` with memory (Docker required)
+
+The real value shows up when memory wraps an agent loop. Boot the
+TensorZero gateway, then run two `agent.run()` calls on the same
+`episode_id` — the second one sees the first turn as context.
+
+```bash
+# Boot the gateway (from the repo root); requires GROQ_API_KEY in .env
+docker compose up -d
+```
+
+```python
+import asyncio
+from collections.abc import Awaitable
+from typing import cast
+
+from fastmcp import Client, FastMCP
+from tensorzero import AsyncTensorZeroGateway
+
 from t0_agents import Agent, AgentConfig
+from t0_agents.memory import SqliteMemory
+
+
+mcp = FastMCP("demo")
+
+
+async def main() -> None:
+    gateway = cast(
+        Awaitable[AsyncTensorZeroGateway],
+        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
+    )
+    client: Client[object] = Client(mcp)
+
+    async with await gateway as t0, client:
+        agent = Agent(
+            AgentConfig(
+                name="assistant",
+                function_name="agent",
+                memory=SqliteMemory("./agent_memory.db"),
+            ),
+            t0=t0,
+            tool_provider=client,
+        )
+
+        # Turn 1 — fresh episode
+        r1 = await agent.run("My name is Alice. Please remember that.")
+        print(f"Episode: {r1.episode_id}")
+        print(f"Reply:   {r1.response}\n")
+
+        # Turn 2 — reuse the episode id so memory loads the first turn
+        r2 = await agent.run(
+            "What is my name?",
+            episode_id=r1.episode_id,
+        )
+        print(f"Reply:   {r2.response}")
+
+
+asyncio.run(main())
+```
+
+The second call injects the first exchange into the prompt before the
+LLM sees the new question, so the model can answer `"Alice"` even
+though the gateway itself is stateless. After the run returns, the
+record is committed to `./agent_memory.db` — restart the process and
+the same `episode_id` still loads it.
+
+A complete runnable version, with both `InMemoryMemory` and
+`SqliteMemory` exercised in one script and a simulated process
+restart, lives at
+[`examples/09_memory/`](../examples/09_memory/).
+
+---
+
+## Concepts
+
+### Memory is a lifecycle, not a tool
+
+The LLM does not see `MemoryProvider` as a callable tool. Memory is
+infrastructure the `Agent` hides around `run_agent`: it hydrates state
+into the prompt before inference and persists the outcome after.
+Because memory wraps the call rather than participating in it, you can
+add, remove, or swap backends without touching the `tensorzero.toml`
+configuration or any tool schemas.
+
+### Lifecycle of one `agent.run()`
+
+```
+agent.run(message, episode_id=<id or None>)
+   │
+   ├─ 1. Load          memory.load(episode_id)  ─►  List[MemoryRecord]
+   │                   (skipped when episode_id is None)
+   │
+   ├─ 2. Inject        render_memory_summary(records)
+   │                   │
+   │                   ├─ strategy "prepended_message":
+   │                   │    summary prepended to the user message
+   │                   │
+   │                   └─ strategy "system_template":
+   │                        summary passed via
+   │                        input.system.arguments.memory_context
+   │
+   ├─ 3. Run           run_agent(...)        ← regular loop, no memory knowledge
+   │
+   └─ 4. Save          memory.save(MemoryRecord(
+                         episode_id        = result.episode_id,
+                         user_message      = original user_message,
+                         agent_response    = result.response,
+                         turns             = result.turns,
+                         inference_ids     = result.inference_ids,
+                       ))
+                       (skipped when result.episode_id is falsy —
+                        never persists under an empty key)
+```
+
+`Agent.stream()` runs the same four phases around the streaming loop;
+load and save sit at the outer edge, so every consumer of an
+`AsyncIterator[AgentEvent]` sees memory hydrated into the prompt and
+persisted after `DoneEvent`.
+
+### Why two injection strategies ship
+
+TensorZero offers two code paths for feeding context into an inference:
+
+- **`input.system.arguments`** — the variant's MiniJinja system
+  template is rendered with a `memory_context` variable. Requires you
+  to edit `tensorzero.toml`, but keeps memory out of the message
+  history (the template is a server-side concern).
+- **`tensorzero.RawText` content blocks** — inject memory as part of
+  the first user message. No TOML changes; works with any variant,
+  including off-the-shelf ones you did not author.
+
+The `memory_strategy` field picks between the two so you can start
+with the no-config `"prepended_message"` path and upgrade to a
+template when you want memory separated from the conversation.
+
+### `"auto"` resolves to `"prepended_message"` today
+
+The default `"auto"` currently resolves to `"prepended_message"`
+because the TensorZero SDK does not yet expose an API to introspect a
+function's active variant at runtime. When that API lands, `"auto"`
+will prefer `"system_template"` whenever the variant declares a
+`memory_context` system property and fall back to the message path
+otherwise. Callers who want `"system_template"` today set it
+explicitly.
+
+### Persistence is per run, not per session
+
+TensorZero has no explicit "close an episode" API — episodes are
+defined implicitly by inferences that share an `episode_id`. The
+`Agent` therefore writes a record on every `.run()` / `.stream()` call
+that produces a truthy `episode_id`, rather than waiting for an
+end-of-session signal that never comes. The side effect: memory is
+always current, and each turn is independently recoverable if the
+process crashes.
+
+### Failure is non-fatal
+
+If `memory.load()` raises, the `Agent` logs a warning and runs with an
+empty context. If `memory.save()` raises, the `Agent` logs a warning
+and returns the unchanged `AgentResult`. Memory is a *side effect* of
+a run, not an output: losing a write must not invalidate an otherwise
+successful inference. If you want hard failure on persistence errors,
+wrap your backend and raise a `T0AgentsFatalError` subclass (see
+[Error handling](#error-handling)).
+
+### `search` is a seam, not a built-in retriever
+
+`MemoryProvider.search(query, *, limit)` is part of the Protocol, but
+the core loop never calls it. It exists so that custom backends — a
+vector store, Elasticsearch, Redis with RediSearch, a local embeddings
+index — expose a uniform query surface, and your application code can
+run retrieval on the same object it hands the `Agent`. This library
+does not ship a retriever; see
+[Bringing your own backend](#bringing-your-own-backend) below for the
+Advanced tier.
+
+---
+
+## API reference
+
+### `MemoryProvider` (Protocol)
+
+```python
+@runtime_checkable
+class MemoryProvider(Protocol):
+    async def load(self, episode_id: str) -> list[Any]: ...
+    async def save(self, record: Any) -> None: ...
+    async def search(self, query: str, *, limit: int = 5) -> list[Any]: ...
+```
+
+`@runtime_checkable`, so `isinstance(obj, MemoryProvider)` works
+without inheritance. The `Agent` itself calls `isinstance` at
+construction time and raises `ConfigurationError` if `config.memory`
+does not satisfy the Protocol.
+
+| Method | Purpose | Called by the `Agent`? |
+|---|---|---|
+| `load` | Return every record for an episode, oldest first. | Yes, before each run when an `episode_id` was supplied. |
+| `save` | Append a new record. | Yes, after each run with a truthy `result.episode_id`. |
+| `search` | Query across episodes. | No — this is a Protocol slot for callers and custom retrievers. |
+
+The Protocol types the record as `Any` to keep `core/` free of a
+dependency on `memory/`; concrete backends return and accept
+`MemoryRecord` instances.
+
+### `MemoryRecord`
+
+```python
+@dataclass
+class MemoryRecord:
+    episode_id: str
+    user_message: str
+    agent_response: str
+    turns: int
+    inference_ids: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    extra: dict[str, Any] = field(default_factory=dict)
+```
+
+| Field | Meaning |
+|---|---|
+| `episode_id` | TensorZero episode id. Primary grouping key. |
+| `user_message` | The unmodified user input. Never the injected variant. |
+| `agent_response` | The agent's final reply for that turn. |
+| `turns` | Number of inference turns that produced `agent_response`. |
+| `inference_ids` | TensorZero inference ids for cross-reference with ClickHouse. |
+| `created_at` | Timezone-aware UTC datetime. Populated at construction if omitted. |
+| `extra` | Free-form dict for application metadata (labels, tags, traces). |
+
+### `render_memory_summary`
+
+```python
+def render_memory_summary(
+    records: list[MemoryRecord],
+    *,
+    max_records: int = 10,
+) -> str
+```
+
+Turns records into a plain-text summary suitable for prompt injection.
+Returns `""` when `records` is empty, so callers can concatenate without
+a branch. When `len(records) > max_records`, keeps the most recent
+`max_records` entries and includes the total turn count in the header.
+
+### `InMemoryMemory`
+
+```python
+class InMemoryMemory:
+    def __init__(self) -> None: ...
+    async def load(self, episode_id: str) -> list[MemoryRecord]: ...
+    async def save(self, record: MemoryRecord) -> None: ...
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]: ...
+```
+
+Dict-backed, ephemeral. One process, no persistence, no locking —
+concurrent `save` calls against the *same* episode are not protected by
+any explicit synchronisation. Because Python lists are thread-safe for
+single `append` operations under the GIL and the store is only touched
+from asyncio tasks running on one event loop, the typical single-process
+agent pattern is safe in practice. If you spawn threads that call
+`save` concurrently, pick a backend with a real lock.
+
+`search` performs a case-insensitive substring match across
+`user_message` and `agent_response`, ordered most-recent-first, and
+returns up to `limit` results.
+
+### `SqliteMemory`
+
+Requires the `memory-sqlite` extra. If the import fails, the symbol is
+`None` at `t0_agents.memory.SqliteMemory` rather than raising, so your
+module can import conditionally.
+
+```python
+class SqliteMemory:
+    def __init__(self, db_path: str) -> None: ...
+    async def load(self, episode_id: str) -> list[MemoryRecord]: ...
+    async def save(self, record: MemoryRecord) -> None: ...
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]: ...
+```
+
+Each method opens its own `aiosqlite` connection and closes it in an
+`async with` block. That means concurrent `Agent.run()` calls on the
+same process do not contend on a shared connection object; SQLite's own
+file-level locking handles the cross-call coordination.
+
+Table and index are created on first use via a cached `CREATE TABLE IF
+NOT EXISTS` path. The schema:
+
+```sql
+CREATE TABLE memory_records (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id     TEXT    NOT NULL,
+    user_message   TEXT    NOT NULL,
+    agent_response TEXT    NOT NULL,
+    turns          INTEGER NOT NULL,
+    inference_ids  TEXT    NOT NULL,      -- JSON-encoded list[str]
+    extra          TEXT    NOT NULL DEFAULT '{}',  -- JSON-encoded dict
+    created_at     TEXT    NOT NULL       -- ISO-8601 timestamp
+);
+CREATE INDEX idx_memory_episode ON memory_records(episode_id);
+```
+
+`load` returns rows ordered by `id ASC` (insertion order). `search`
+orders by `id DESC` (most recent first) and uses SQLite's
+`LIKE ... COLLATE NOCASE` for case-insensitive matching.
+
+### `AgentConfig` fields
+
+```python
+@dataclass(slots=True)
+class AgentConfig:
+    # …
+    memory: MemoryProvider | None = None
+    memory_strategy: Literal[
+        "auto", "system_template", "prepended_message",
+    ] = "auto"
+    # …
+```
+
+| Field | Type | Default | Behaviour |
+|---|---|---|---|
+| `memory` | `MemoryProvider \| None` | `None` | When `None`, the `Agent` skips load and save entirely. When set, `Agent.__init__` validates the instance against the Protocol and raises `ConfigurationError` on mismatch. |
+| `memory_strategy` | `Literal["auto", "system_template", "prepended_message"]` | `"auto"` | How loaded records are injected. Validated at `AgentConfig.__post_init__`; an invalid value raises `ConfigurationError` before the `Agent` is constructed. |
+
+---
+
+## Memory injection strategies
+
+| Strategy | How memory reaches the LLM | When to use |
+|---|---|---|
+| `"auto"` (default) | Currently resolves to `"prepended_message"`. | You haven't decided yet, or you want the framework to pick the right path once TensorZero exposes variant introspection. |
+| `"prepended_message"` | Text summary is prepended to the user message, separated by `---`. | Works with any TensorZero function or variant. No TOML changes required. |
+| `"system_template"` | Summary is passed to the gateway as `input.system.arguments.memory_context`. | Your variant declares a MiniJinja system template with a `memory_context` variable. Keeps memory out of the message history. |
+
+### Using `"system_template"`
+
+Declare a system template on the variant:
+
+```toml
+# tensorzero.toml
+[functions.assistant.variants.with_memory]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/assistant/with_memory/system.minijinja"
+```
+
+```jinja
+{# functions/assistant/with_memory/system.minijinja #}
+You are a helpful assistant.
+{% if memory_context %}
+
+Previous conversation:
+{{ memory_context }}
+{% endif %}
+```
+
+Then set the strategy explicitly:
+
+```python
+AgentConfig(
+    name="assistant",
+    function_name="assistant",
+    memory=SqliteMemory("./memory.db"),
+    memory_strategy="system_template",
+)
+```
+
+The `Agent` will call
+`run_agent(..., system_arguments={"memory_context": <summary>})` on
+every run with loaded records. When no records match the
+`episode_id`, no injection happens at all — neither the template
+nor the user message is modified.
+
+---
+
+## Built-in backends
+
+### `InMemoryMemory` — ephemeral
+
+Ideal for tests, prototypes, and single-process scripts where losing
+state at process exit is fine.
+
+```python
+from t0_agents.memory import InMemoryMemory
+
+agent = Agent(
+    AgentConfig(name="assistant", function_name="agent", memory=InMemoryMemory()),
+    t0=t0,
+    tool_provider=client,
+)
+```
+
+### `SqliteMemory` — persistent, single-node
+
+The right default for single-process deployments and local development
+where "survive a restart" matters but "coordinate across nodes" does
+not.
+
+```python
 from t0_agents.memory import SqliteMemory
 
 agent = Agent(
@@ -29,100 +522,70 @@ agent = Agent(
     t0=t0,
     tool_provider=client,
 )
-
-# Session 1
-r1 = await agent.run("Remind me to call John tomorrow at 3pm.")
-
-# Session 2 — pass the episode_id to load prior context
-r2 = await agent.run(
-    "What was I supposed to do today?",
-    episode_id=r1.episode_id,
-)
 ```
 
-## What is `MemoryProvider`?
+The DB file and table are created automatically on first write.
 
-`MemoryProvider` is a `@runtime_checkable` Protocol defined in
-`t0_agents.core.types`. Any object implementing these three async
-methods satisfies it:
+---
+
+## Bringing your own backend
+
+Any object that satisfies `MemoryProvider` qualifies. The three tiers
+below walk from a ten-line in-process dict to a production-grade Redis
+client to a RAG alternative driven by MCP Resources.
+
+### Easy — minimal custom store
+
+If you want memory isolated per `Agent` instance but keyed differently
+(for example, partitioned by tenant), implement the three methods
+directly against an `asyncio.Lock`-guarded dict. `InMemoryMemory`
+itself is a 40-line reference at
+[`src/t0_agents/memory/in_memory.py`](../src/t0_agents/memory/in_memory.py).
+For a runnable no-Docker walkthrough of the store primitives on their
+own, see [`examples/09_memory/easy.py`](../examples/09_memory/easy.py).
 
 ```python
-class MemoryProvider(Protocol):
-    async def load(self, episode_id: str) -> list[MemoryRecord]: ...
-    async def save(self, record: MemoryRecord) -> None: ...
-    async def search(self, query: str, *, limit: int = 5) -> list[MemoryRecord]: ...
+import asyncio
+from collections import defaultdict
+
+from t0_agents.memory import MemoryRecord
+
+
+class DictMemory:
+    def __init__(self) -> None:
+        self._store: dict[str, list[MemoryRecord]] = defaultdict(list)
+        self._lock = asyncio.Lock()
+
+    async def load(self, episode_id: str) -> list[MemoryRecord]:
+        async with self._lock:
+            return list(self._store[episode_id])
+
+    async def save(self, record: MemoryRecord) -> None:
+        async with self._lock:
+            self._store[record.episode_id].append(record)
+
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]:
+        q = query.lower()
+        results: list[MemoryRecord] = []
+        async with self._lock:
+            for records in self._store.values():
+                for r in records:
+                    hay = f"{r.user_message}\n{r.agent_response}".lower()
+                    if q in hay:
+                        results.append(r)
+                        if len(results) >= limit:
+                            return results
+        return results
 ```
 
-The `Agent` calls `load` before every run (if an `episode_id` is
-provided) and `save` after. `search` is not called by the core loop
-but is part of the protocol so custom backends expose a uniform query
-surface.
+### Intermediate — Redis backend
 
-## Built-in backends
-
-### `InMemoryMemory`
-
-Dict-backed, ephemeral. Useful for tests and single-process applications.
-
-```python
-from t0_agents.memory import InMemoryMemory
-
-mem = InMemoryMemory()
-agent = Agent(AgentConfig(..., memory=mem), t0=t0, tool_provider=client)
-```
-
-### `SqliteMemory`
-
-Persistent, file-backed via `aiosqlite`. Requires the `memory-sqlite`
-extra.
-
-```python
-from t0_agents.memory import SqliteMemory
-
-mem = SqliteMemory("./agent_memory.db")
-agent = Agent(AgentConfig(..., memory=mem), t0=t0, tool_provider=client)
-```
-
-The database file and table are created automatically on first use.
-
-## Memory injection strategies
-
-The `memory_strategy` field on `AgentConfig` controls how loaded memory
-records are injected into the LLM prompt:
-
-| Strategy | Behaviour |
-|----------|-----------|
-| `"auto"` (default) | Resolves to `"prepended_message"`. |
-| `"prepended_message"` | Prepends a text summary to the user message. Works with any TensorZero function/variant. |
-| `"system_template"` | Passes memory via `input.system.arguments.memory_context`. Requires a MiniJinja system template with a `memory_context` variable in `tensorzero.toml`. |
-
-### When to use `"system_template"`
-
-If your variant declares a system template:
-
-```toml
-[functions.assistant.variants.with_memory]
-type = "chat_completion"
-model = "gpt_oss_20"
-templates.system.path = "functions/assistant/with_memory/system.minijinja"
-```
-
-```jinja
-{# system.minijinja #}
-You are a helpful assistant.
-{% if memory_context %}
-
-Previous conversation:
-{{ memory_context }}
-{% endif %}
-```
-
-Then set `memory_strategy="system_template"` to inject memory through
-the template rather than the user message.
-
-## Writing your own backend
-
-Implement the three methods of `MemoryProvider`. Here's a Redis sketch:
+A Redis implementation fits in under 50 lines once you pick a
+serialisation format. This one stores records as JSON in per-episode
+lists and scans for search matches — swap in RediSearch for production
+scale.
 
 ```python
 import json
@@ -130,7 +593,7 @@ from datetime import UTC, datetime
 
 import redis.asyncio as redis
 
-from t0_agents.memory import MemoryProvider, MemoryRecord
+from t0_agents.memory import MemoryRecord
 
 
 class RedisMemory:
@@ -154,7 +617,7 @@ class RedisMemory:
         await self._redis.rpush(f"memory:{record.episode_id}", data)
 
     async def search(
-        self, query: str, *, limit: int = 5
+        self, query: str, *, limit: int = 5,
     ) -> list[MemoryRecord]:
         # Simplified: scan all keys. For production, use RediSearch.
         results: list[MemoryRecord] = []
@@ -162,7 +625,8 @@ class RedisMemory:
             raw = await self._redis.lrange(key, 0, -1)
             for item in raw:
                 rec = self._deserialize(item)
-                if query.lower() in rec.user_message.lower():
+                hay = f"{rec.user_message}\n{rec.agent_response}".lower()
+                if query.lower() in hay:
                     results.append(rec)
                     if len(results) >= limit:
                         return results
@@ -177,22 +641,246 @@ class RedisMemory:
             agent_response=d["agent_response"],
             turns=d["turns"],
             inference_ids=d["inference_ids"],
-            created_at=datetime.fromisoformat(d["created_at"]),
+            created_at=datetime.fromisoformat(d["created_at"]).replace(
+                tzinfo=UTC,
+            ),
             extra=d.get("extra", {}),
         )
 ```
 
-## Bringing your own RAG via MCP Resources
+### Advanced — RAG via a vector store
 
-For RAG-style memory (semantic search over a knowledge base), consider
-exposing your retriever as an MCP Resource rather than a
-`MemoryProvider`. The LLM reads memory through MCP primitives
-(`list_resources`, `read_resource`) instead of framework-injected
-context. See the [FastMCP Resources docs](https://gofastmcp.com/servers/resources.md)
-for details.
+For retrieval-augmented memory, drive `search` with your vector
+retriever and leave `load` / `save` for transactional history.
+
+```python
+from t0_agents.memory import MemoryRecord, SqliteMemory
+
+
+class RagMemory:
+    """SQLite for history; vector store for semantic search."""
+
+    def __init__(self, db_path: str, retriever) -> None:
+        self._history = SqliteMemory(db_path)
+        self._retriever = retriever  # any object with .query(text, k)
+
+    async def load(self, episode_id: str) -> list[MemoryRecord]:
+        return await self._history.load(episode_id)
+
+    async def save(self, record: MemoryRecord) -> None:
+        await self._history.save(record)
+        await self._retriever.index(
+            text=f"{record.user_message}\n{record.agent_response}",
+            metadata={"episode_id": record.episode_id},
+        )
+
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]:
+        hits = await self._retriever.query(query, k=limit)
+        records: list[MemoryRecord] = []
+        for hit in hits:
+            ep_records = await self._history.load(hit.metadata["episode_id"])
+            records.extend(ep_records)
+        return records[:limit]
+```
+
+This pattern keeps the library vendor-neutral — pick your own
+embeddings and vector store — while giving the `Agent` a familiar
+`MemoryProvider` seam to call into.
+
+For a runnable no-Docker example of a custom `MemoryProvider` written
+from scratch — implementing per-tenant namespacing and per-episode LRU
+eviction in under 70 lines — see
+[`examples/09_memory/advanced.py`](../examples/09_memory/advanced.py).
+
+### Advanced — memory as MCP Resources
+
+If the memory you care about is a knowledge base the *LLM* should
+read (not context the framework should inject), expose it as MCP
+Resources or as MCP tools instead of plugging it into
+`MemoryProvider`. The runnable example at
+[`examples/09_memory/server.py`](../examples/09_memory/server.py)
+ships a FastMCP server with `remember(key, value)` / `recall(key)`
+tools the LLM invokes explicitly — a different pattern, useful when
+you want the model in control of what it stores and retrieves.
+
+See the
+[FastMCP Resources docs](https://gofastmcp.com/servers/resources)
+for the resource-based variant.
+
+---
 
 ## Error handling
 
-Memory operations are non-fatal. If `load` or `save` raises an
-exception, the `Agent` logs a warning and continues. The run result is
-still valid even if memory persistence failed.
+Persistence failures are non-fatal by design. The `Agent` wraps both
+calls in a `try / except Exception`, logs a warning, and continues.
+
+| Failure | Effect | Log level | Can I observe it? |
+|---|---|---|---|
+| `memory.load` raises | Run proceeds with an empty context. | `WARNING` (with traceback). | Yes — `logging.getLogger("t0_agents")` or a child logger. |
+| `memory.save` raises | `AgentResult` is still returned unchanged. | `WARNING` (with traceback). | Yes — same logger. |
+
+If you want hard failure instead, wrap your backend and raise
+`T0AgentsFatalError` (or a subclass you define). Any exception
+subclassed from `T0AgentsFatalError` propagates past the `Agent`'s
+non-fatal handler — this is the same contract guardrails use for
+hard aborts.
+
+```python
+from t0_agents import T0AgentsFatalError
+from t0_agents.memory import MemoryRecord, MemoryProvider
+
+
+class MemoryUnavailable(T0AgentsFatalError):
+    pass
+
+
+class StrictBackend:
+    def __init__(self, inner: MemoryProvider) -> None:
+        self._inner = inner
+
+    async def load(self, episode_id: str) -> list[MemoryRecord]:
+        try:
+            return await self._inner.load(episode_id)
+        except Exception as exc:
+            raise MemoryUnavailable(
+                f"Cannot load memory for {episode_id}: {exc}",
+            ) from exc
+
+    async def save(self, record: MemoryRecord) -> None:
+        try:
+            await self._inner.save(record)
+        except Exception as exc:
+            raise MemoryUnavailable(
+                f"Cannot save memory for {record.episode_id}: {exc}",
+            ) from exc
+
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]:
+        return await self._inner.search(query, limit=limit)
+```
+
+For the broader error taxonomy and how memory warnings sit alongside
+`MaxTurnsExceededError`, `GuardrailBlockedError`, `ConfigurationError`,
+and tool-level `McpError` / `ToolError` wrapping, see
+[Error handling](error-handling.md).
+
+---
+
+## Production considerations
+
+### Concurrency model
+
+- `InMemoryMemory` has no locking. Safe under a single asyncio event
+  loop; not safe across threads. Use it for tests and single-process
+  agents only.
+- `SqliteMemory` opens a fresh connection per method call and relies on
+  SQLite's file-level locking. Safe for multiple `Agent` instances in
+  one process. Across processes writing the same file, contention
+  manifests as `database is locked` retries (aiosqlite default
+  behaviour); for heavy write traffic, move to Redis or Postgres.
+- Custom backends are whatever their driver guarantees. Document the
+  concurrency model where you document the backend.
+
+### Durability and backups
+
+`SqliteMemory` writes one `INSERT` per `save` and commits immediately,
+so a clean shutdown loses nothing. A hard crash during the commit may
+lose the in-flight record, but never corrupts the DB file thanks to
+SQLite's journalling. For on-disk backups, any standard SQLite snapshot
+tool works — the Agent never holds a long-lived connection.
+
+For stronger durability (cross-node replication, point-in-time
+recovery), swap in a Postgres or Redis implementation.
+
+### Size management
+
+Neither built-in backend bounds record count. `render_memory_summary`
+keeps only the last 10 records when it builds the prompt injection, so
+runaway storage does not poison the LLM context — but the DB itself
+grows forever unless you prune. Patterns that work:
+
+- Periodic `DELETE FROM memory_records WHERE created_at < ?` (SQLite).
+- Application-level retention policies in a wrapping
+  `MemoryProvider` that calls `save` and periodically prunes old
+  rows.
+- Per-tenant episode namespacing (below) so you can drop an entire
+  tenant with one `DELETE WHERE episode_id LIKE ?`.
+
+### Episode-id namespacing
+
+`episode_id` is a TensorZero-owned string — you pass `None` for a fresh
+episode and the gateway returns the allocated id on the first
+inference. If you want to isolate memory per tenant, per user, or per
+deployment, wrap the backend with a namespace prefix rather than trying
+to reuse the id across domains:
+
+```python
+class NamespacedMemory:
+    def __init__(self, inner: MemoryProvider, prefix: str) -> None:
+        self._inner = inner
+        self._prefix = prefix
+
+    async def load(self, episode_id: str) -> list[MemoryRecord]:
+        return await self._inner.load(f"{self._prefix}:{episode_id}")
+    # save / search follow the same pattern
+```
+
+The prefix lives entirely in your store; the `Agent` still forwards
+TensorZero's raw `episode_id` in and out.
+
+For deployment topology, sticky sessions, and the broader runtime
+picture, see [Production](production.md).
+
+---
+
+## Observability
+
+Memory does not emit its own TensorZero inference records — it only
+reads and writes `MemoryRecord` rows. The linkage to the gateway's
+analytics is transitive:
+
+- `AgentResult.episode_id` is the single key that ties a stored
+  record to every `ChatInferenceResponse` logged to ClickHouse for
+  that episode.
+- `AgentResult.inference_ids` (which the `Agent` copies into the
+  saved `MemoryRecord`) resolves each turn of the run back to its
+  individual inference row.
+- `MemoryRecord.extra` is a free-form dict intended for application
+  metadata — labels, trace ids, experiment arms. It round-trips
+  through both built-in backends (JSON-encoded in SQLite), so you can
+  use it to attach whatever your dashboards need without extending
+  the Protocol.
+
+The rendered summary that reaches the LLM is visible as part of the
+prompt. If you serve your agent over HTTP or expose streaming events,
+`render_memory_summary(records)` is the exact string the model
+receives — log it from your client if you want parity with what the
+gateway sees.
+
+For the end-to-end observability story (`t0.feedback`, ClickHouse
+tables, per-episode analytics), see
+[Observability](observability.md).
+
+---
+
+Memory hydrates the prompt with whatever the agent remembers. Once the context is in place, you often want to constrain what the agent may *do* with it — require approval for expensive tools, cap cost or tool-call budgets per run, block dangerous tool names, encode a domain rule of your own. That policy layer is the subject of the next chapter: [Guardrails](guardrails.md).
+
+---
+
+## External references
+
+- TensorZero — [Episodes & inference routing](https://www.tensorzero.com/docs/gateway/guides/episodes/)
+  · [`input.system` schema](https://www.tensorzero.com/docs/gateway/api-reference/inference/)
+  · [`tensorzero.RawText` content blocks](https://www.tensorzero.com/docs/gateway/api-reference/inference/#message-content-blocks)
+- FastMCP — [`Client` interface](https://gofastmcp.com/clients/overview)
+  · [Resources](https://gofastmcp.com/servers/resources) (for the
+  resource-driven memory alternative)
+- [MiniJinja](https://docs.rs/minijinja/latest/minijinja/) — the template engine
+  TensorZero renders `templates.system.path` through when
+  `memory_strategy="system_template"` is active.
+- [`aiosqlite`](https://aiosqlite.omnilib.dev/) — the async SQLite
+  driver `SqliteMemory` depends on when the `memory-sqlite` extra is
+  installed.
