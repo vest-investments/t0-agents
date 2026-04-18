@@ -1,4 +1,4 @@
-# `10_guardrails` — Trusted Agent (M3)
+# `10_guardrails` — Built-in guardrails on one Agent
 
 Declarative guardrails composed on an `Agent`:
 
@@ -59,10 +59,11 @@ reference for `pricing_per_million_tokens_input`/`_output`) or use
 ## Emitting feedback for guardrail outcomes
 
 The framework does **not** auto-emit `t0.feedback(...)` for guardrail
-events — every metric must be pre-declared in `tensorzero.toml`
-(T0 Q5 resolution). To capture approval rejections as a learnable signal,
-add the following block to your config and extend `main.py` with a
-post-run feedback call:
+events — TensorZero requires every metric to be pre-declared in
+`tensorzero.toml`, so the library surfaces the audit trail on
+`AgentResult.guardrail_log` and leaves emission to the caller. To capture
+approval rejections as a learnable signal, add the following block to
+your config and extend `main.py` with a post-run feedback call:
 
 ```toml
 [metrics.action_approved]
@@ -80,6 +81,28 @@ if any(entry.kind == "rejection" for entry in result.guardrail_log):
     )
 ```
 
-See [`docs/guardrails.md`](../../docs/guardrails.md) for the full
-public guide, including the "Writing your own guardrail" recipes
-(regex validator, PII scrubber, schedule-bound execution gate).
+## Custom guardrail — `custom_guardrail.py`
+
+A second runnable script illustrates the Advanced tier from the public
+doc: writing your own `Guardrail` with a domain-specific
+`T0AgentsFatalError` subclass, stateful accumulation on
+`GuardrailContext.extra`, and a summary emitted from `after_run` (which
+fires even on fatal abort).
+
+```bash
+uv run python examples/10_guardrails/custom_guardrail.py
+```
+
+The scenario asks the agent to send an email to a recipient outside the
+allowlist. The custom `enforce_email_allowlist` guardrail inspects
+`tool_call.arguments["to"]`, extracts the domain, records the attempt on
+`ctx.extra["email_attempts"]`, and raises `UnauthorizedRecipientError`
+(a `T0AgentsFatalError`). Because `after_run` fires in the `finally`
+branch of `Agent.run`, the audit summary is logged regardless of whether
+the run completed.
+
+## See also
+
+See [`docs/guardrails.md`](../../docs/guardrails.md) for the full public
+guide — protocol reference, lifecycle diagram, observability hooks, and
+production notes.

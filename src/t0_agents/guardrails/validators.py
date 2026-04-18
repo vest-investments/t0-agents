@@ -10,8 +10,8 @@ Asymmetry (documented in ``docs/guardrails.md``): ``block_tools`` does NOT
 filter :py:meth:`ToolProvider.list_tools` output.  The LLM still sees the
 tool and may attempt to call it; enforcement is at ``before_tool``.  This
 keeps the wrapper's ``list_tools`` byte-identical to the inner provider
-and preserves the Phase A contract §9.5 no-op equivalence when the block
-list does not match any attempted call.
+when no blocked name is attempted, and still catches models that
+hallucinate tool names the server never advertised.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Guardrails example — Milestone M3 "Trusted Agent".
+"""Guardrails example: four built-in policy layers on one Agent.
 
 Demonstrates all four built-in guardrails composed on one ``Agent``:
 
@@ -14,9 +14,9 @@ Requirements:
     GROQ_API_KEY in .env
     uv run python examples/10_guardrails/main.py
 
-Emitting feedback for guardrail outcomes (T0 Q5 resolution — manual path).
-The framework does not auto-emit ``t0.feedback(...)`` because metrics must
-be pre-declared in ``tensorzero.toml``.  To record approval rejections as a
+Manual feedback path for guardrail outcomes.  The framework does not
+auto-emit ``t0.feedback(...)`` because TensorZero requires metrics to be
+pre-declared in ``tensorzero.toml``.  To record approval rejections as a
 learnable signal, add to your config:
 
     [metrics.action_approved]
@@ -25,7 +25,8 @@ learnable signal, add to your config:
     optimize = "max"
 
 then call ``await t0.feedback(metric_name="action_approved", ...)`` after
-inspecting ``result.guardrail_log`` — see ``docs/guardrails.md``.
+inspecting ``result.guardrail_log`` — see ``docs/guardrails.md``
+("Emitting TensorZero feedback").
 """
 
 from __future__ import annotations
