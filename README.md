@@ -79,7 +79,7 @@ async def main() -> None:
     gateway = AsyncTensorZeroGateway.build_http(
         gateway_url="http://localhost:3000",
     )
-    async with await gateway as t0, Client(mcp) as client:
+    async with gateway as t0, Client(mcp) as client:
         agent = Agent(
             AgentConfig(name="assistant", function_name="agent"),
             t0=t0,
