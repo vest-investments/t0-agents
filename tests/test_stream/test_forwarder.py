@@ -1,4 +1,4 @@
-"""Unit tests for :class:`ElicitationForwarder` Phase E completion."""
+"""Unit tests for :class:`ElicitationForwarder`."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from t0_agents.core.elicitation_forwarder import (
 )
 
 
-async def test_phase_d_default_still_declines() -> None:
-    """Empty constructor preserves Phase D auto-decline behaviour."""
+async def test_empty_forwarder_auto_declines() -> None:
+    """Empty constructor auto-declines every elicitation."""
     forwarder = ElicitationForwarder()
     result = await forwarder.handler("proceed?", None, None, None)
     assert result.action == "decline"

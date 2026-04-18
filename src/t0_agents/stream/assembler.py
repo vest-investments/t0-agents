@@ -8,8 +8,8 @@ flushes consolidation events (``TextEndEvent``, ``ToolCallEvent``,
 ``ThoughtEvent``) once the input iterator is exhausted — in the order the
 blocks first appeared.
 
-``JsonChunk`` is out of scope (Phase E ships chat-only) and surfaces as an
-:class:`ErrorEvent`.  ``UnknownChunk`` is tolerated the same way.
+``JsonChunk`` is out of scope (``Agent.stream`` is chat-only) and surfaces as
+an :class:`ErrorEvent`.  ``UnknownChunk`` is tolerated the same way.
 """
 
 from __future__ import annotations

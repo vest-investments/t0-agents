@@ -268,13 +268,14 @@ async def test_agent_stream_tags_none_preserves_config_only() -> None:
     assert fake_t0.calls[0]["tags"] == {"env": "prod"}
 
 
-async def test_agent_run_unchanged_after_phase_e() -> None:
-    """Regression: Phase D-style Agent.run still returns the expected result."""
+async def test_agent_run_preserves_non_streaming_path() -> None:
+    """Regression: non-streaming Agent.run keeps returning the expected result
+    after the streaming surface was added."""
     from tensorzero import Text
 
     fake_t0 = FakeT0(
         responses=[
-            _response_with_text("phase-d-parity"),
+            _response_with_text("non-streaming-ok"),
         ]
     )
     client = FakeMCPClient(tools=[])
@@ -283,8 +284,8 @@ async def test_agent_run_unchanged_after_phase_e() -> None:
         t0=cast(AsyncTensorZeroGateway, fake_t0),
         tool_provider=client,
     )
-    result = await agent.run("phase d?")
-    assert result.response == "phase-d-parity"
+    result = await agent.run("non-streaming?")
+    assert result.response == "non-streaming-ok"
     assert result.turns == 1
     assert result.response_source == "text"
 

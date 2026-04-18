@@ -35,7 +35,7 @@ def streaming_client_factory() -> Callable[[], FakeFastMCPClient]:
 
 @pytest.fixture
 def elicitation_client_factory() -> Callable[[Any], FakeFastMCPClient]:
-    """Factory that accepts an elicitation handler per FastMCP Q3."""
+    """Factory that accepts a per-connection elicitation handler."""
 
     def _factory(handler: Any) -> FakeFastMCPClient:
         client = FakeFastMCPClient()
