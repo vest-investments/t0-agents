@@ -77,10 +77,7 @@ Mitigations:
 - **Use a larger model**: GPT-4-class / Sonnet / Opus consistently skip
   the intermediate chat turn.
 
-This is a model-behaviour caveat, not a framework bug — see the
-`docs/internal/approval-and-elicitation-integration-plan/logs/phase-3-implementation-log.md`
-(lines 44-50) and `docs/internal/agentic-feature/developer-guide.md §9.3`
-"LLM avoidance" note for the long-form discussion.
+This is a model-behaviour caveat, not a framework bug.
 
 ## SSE smoke-test
 
