@@ -1,14 +1,16 @@
-# Streaming an Agent — SSE and WebSocket
+# Streaming an Agent — typed events, SSE, WebSocket
 
-`Agent.stream()` yields **typed events** as the LLM produces tokens and
-tools run.  The `t0_agents.serve` layer exposes two streaming endpoints
-that bridge those events to the browser: SSE (one-way push) and
-WebSocket (bidirectional, required when a tool calls `ctx.elicit()`).
+Guardrails constrain what the agent may do. Streaming reveals what the agent *is* doing. Both are complementary — a streamed run honours every configured guardrail and surfaces the approval/block events as part of the same stream the caller consumes for text deltas and tool calls.
 
-Ships in the same `[serve]` extra:
+`Agent.stream()` returns an async iterator of **typed `AgentEvent`
+variants** — one per assistant-text delta, one per tool call, one per
+thought chunk, plus terminal consolidation events.  The `stream/`
+submodule defines the event model; the `serve/` package exposes it over
+HTTP via Server-Sent Events (one-way push) and WebSocket (bidirectional,
+required when a tool calls `ctx.elicit()`).
 
-```bash
-pip install 't0-agents[serve]'
+```python
+from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEvent
 ```
 
 ## Why stream?
@@ -17,59 +19,372 @@ pip install 't0-agents[serve]'
   spinners; thinking blocks (reasoning models) show the model's work
   without waiting for the final answer.
 - **Elicitation over the wire** — `ctx.elicit()` prompts the user
-  mid-tool, so an HTTP agent can ask "Delete task T-103?" and wait for a
-  browser click before proceeding.
-- **Back-pressure visibility** — the stream stops progressing when the
+  mid-tool, so an HTTP agent can ask "Delete task T-103?" and wait for
+  a browser click before proceeding.
+- **Backpressure visibility** — the stream stops progressing when the
   client is slow; no hidden buffering.
+- **Drop-in** — `Agent.run()` is byte-identical to the non-streaming
+  path.  Add streaming when you need it; keep batch callers untouched.
 
-## `Agent.stream()` cookbook
+## Install
+
+Streaming primitives (the event dataclasses, `TurnStreamAssembler`,
+`StreamingAgentLoop`, and `Agent.stream()`) ship in the base
+distribution — no new dependency, no extra:
+
+```bash
+pip install t0-agents
+```
+
+The HTTP endpoints (SSE at `/chat/stream`, WebSocket at `/chat/ws`)
+live in `t0_agents.serve` and need the `[serve]` extra, which pulls
+FastAPI, Uvicorn, Pydantic, and `sse-starlette>=2.0`:
+
+```bash
+pip install 't0-agents[serve]'
+```
+
+The TUI renderer that consumes the same events lives in
+`t0_agents.cli` behind the `[cli]` extra — see
+[`docs/cli.md`](cli.md).
+
+## Quickstart
+
+### Easy — consume a mock stream (no Docker, no gateway)
+
+This snippet covers the shape of `Agent.stream()` without booting
+TensorZero.  `fake_event_stream` from `t0_agents.testing.streaming_mocks`
+wraps a list of `AgentEvent`s into the same `AsyncIterator[AgentEvent]`
+shape the real method returns, so you can design a renderer or test a
+consumer end-to-end:
 
 ```python
-from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEvent
+import asyncio
+
+from t0_agents import DoneEvent, TextDeltaEvent, TextEndEvent
+from t0_agents.core.types import AgentResult
+from t0_agents.testing.streaming_mocks import fake_event_stream
+
+
+async def main() -> None:
+    scripted = [
+        TextDeltaEvent(id="t1", delta="Tokyo "),
+        TextDeltaEvent(id="t1", delta="is sunny, "),
+        TextDeltaEvent(id="t1", delta="22°C."),
+        TextEndEvent(id="t1"),
+        DoneEvent(result=AgentResult(
+            response="Tokyo is sunny, 22°C.",
+            episode_id="demo",
+            inference_ids=["i1"],
+            turns=1,
+        )),
+    ]
+
+    async for event in fake_event_stream(scripted):
+        match event:
+            case TextDeltaEvent(delta=s):
+                print(s, end="", flush=True)
+            case DoneEvent(result=r):
+                print(f"\n[done in {r.turns} turn]")
+
+
+asyncio.run(main())
+```
+
+Runs without Docker, without an API key, and without an MCP server.
+Use it as the template for writing unit tests of anything that consumes
+`AsyncIterator[AgentEvent]` — TUI renderers, SSE routes, reducers,
+background workers.
+
+### Real — `Agent.stream()` against a running gateway
+
+Once you have `docker compose up` running and a `GROQ_API_KEY` in your
+environment, the full loop looks like this:
+
+```python
+import sys
+
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
 
+from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEvent
 from my_mcp_server import mcp
 
-async with (
-    await AsyncTensorZeroGateway.build_http(...) as t0,
-    Client(mcp) as client,
-):
-    agent = Agent(AgentConfig(name="assistant", function_name="agent"),
-                  t0=t0, tool_provider=client)
 
-    async for event in agent.stream("What's the weather in Tokyo?"):
-        match event:
-            case TextDeltaEvent(delta=text):
-                sys.stdout.write(text); sys.stdout.flush()
-            case ToolCallEvent(name=name):
-                print(f"\n[calling {name}]")
-            case DoneEvent(result=r):
-                print(f"\n[done in {r.turns} turns, episode {r.episode_id}]")
+async def chat(query: str) -> None:
+    async with (
+        await AsyncTensorZeroGateway.build_http(
+            gateway_url="http://localhost:3000",
+        ) as t0,
+        Client(mcp) as tools,
+    ):
+        agent = Agent(
+            AgentConfig(name="assistant", function_name="agent"),
+            t0=t0,
+            tool_provider=tools,
+        )
+
+        async for event in agent.stream(query):
+            match event:
+                case TextDeltaEvent(delta=text):
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+                case ToolCallEvent(name=name):
+                    print(f"\n[calling {name}]")
+                case DoneEvent(result=r):
+                    print(f"\n[done in {r.turns} turns, episode {r.episode_id}]")
 ```
 
-Every non-streaming caller keeps working — `Agent.run()` is untouched.
+### What just happened
 
-## Event types
+1. `Agent.stream()` starts a turn: it lists MCP tools, builds a T0
+   request, and calls `t0.inference(stream=True)`.
+2. TensorZero delivers chunks — one per content-block delta.
+   `TurnStreamAssembler` folds them into `AgentEvent`s *as they arrive*
+   (`TextDeltaEvent`, `ToolCallDeltaEvent`, `ThoughtDeltaEvent`).
+3. When the chunk iterator ends, the assembler flushes consolidation
+   events — one `TextEndEvent` per text block, one `ToolCallEvent`
+   (with parsed args) per tool call, one `ThoughtEvent` per thought —
+   then the runner emits `TurnEndEvent(turn=N)`.
+4. If the assistant emitted tool calls, the runner executes them via
+   the same `execute_tool_calls` path `Agent.run()` uses, yields one
+   `ToolResultEvent` per call, and opens the next turn.
+5. The first tool-call-free turn is terminal: the runner builds an
+   `AgentResult` and yields `DoneEvent(result=...)`.
+
+`Agent.run()`'s non-streaming path goes through the same turn shape —
+the streaming loop is an additive layer, not a replacement.
+
+## Concepts
+
+### Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│  Agent.stream(message, *, episode_id=None, tags=None)             │
+│      │                                                            │
+│      │  memory.load()  +  guardrail before_run hooks              │
+│      ▼                                                            │
+│  StreamingAgentLoop.stream(t0, tool_provider, ...)                │
+│      │                                                            │
+│      │  for turn in range(max_turns):                             │
+│      │      t0.inference(stream=True) ── AsyncIterator[ChatChunk] │
+│      │      TurnStreamAssembler.assemble(...)                     │
+│      │      → yields AgentEvent as each chunk arrives             │
+│      │      execute_tool_calls[_parallel](...)                    │
+│      ▼                                                            │
+│  DoneEvent(result=AgentResult(response, episode_id, ...))         │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+`stream/` has zero new third-party dependencies on top of the rest of
+the library.  It composes `core/` (for `AgentResult` and
+`MaxTurnsExceededError`) and `mcp/` (for `convert_tools`,
+`execute_tool_calls`, and the recoverable-retry patterns) — and
+nothing else.
+
+### Event taxonomy
+
+Every `AgentEvent` is a frozen `@dataclass(slots=True)` carrying a
+`type: Literal[...]` discriminator so consumers can `match` without
+`isinstance`.  The shapes fall into three groups:
+
+1. **Delta events** fire *as chunks arrive* —
+   `TextDeltaEvent`, `ToolCallDeltaEvent`, `ThoughtDeltaEvent`.
+   Consumers that render a live UI typically only listen to these.
+2. **Consolidation events** fire once per block *after* its final
+   delta — `TextEndEvent`, `ToolCallEvent` (with parsed `arguments`
+   dict), `ThoughtEvent`.  Consumers that want the assembled state
+   (e.g. a reducer that writes to a database) listen to these.
+3. **Control events** frame the run — `ToolResultEvent` (after each
+   tool call finishes), `TurnEndEvent(turn=N)` (one per turn),
+   `DoneEvent(result=AgentResult(...))` (always last on success), and
+   `ErrorEvent` (non-fatal anomalies; see [Error handling](#error-handling)).
+
+### Correlation key
+
+Every event that references a block carries the **stable `id`** the
+TensorZero chunk emitted — `TextChunk.id`, `ToolCallChunk.id`,
+`ThoughtChunk.id`.  A `TextDeltaEvent` and its matching `TextEndEvent`
+share one `id`; two `ToolCallDeltaEvent`s for the same call share one
+`id` and are accumulated into a single `ToolCallEvent` with that
+`id`.  Consumers rely on that stability to implement reducers, to pair
+start/end markers, and to update the right DOM node when rendering.
+
+### Lifecycle per turn
+
+```
+list_tools()  →  t0.inference(stream=True)
+                          │
+                          ▼
+                 AsyncIterator[ChatChunk]
+                          │
+           TurnStreamAssembler.assemble(chunks)
+                          │
+                          ▼
+              AsyncIterator[AgentEvent]
+                          │
+  delta events as chunks arrive ── consolidation events at end
+                          │
+                          ▼
+                     TurnEndEvent
+                          │
+           any ToolCallEvents? ── yes ──→ execute_tool_calls → ToolResultEvents → next turn
+                          │ no
+                          ▼
+                        DoneEvent
+```
+
+### Design decisions
+
+- **Consolidation at turn end, not per-chunk.**  TensorZero's SDK
+  currently emits one block delta per chunk, so a per-chunk diff
+  strategy would fire false-positive end-of-block markers.  The
+  assembler tracks insertion order and flushes consolidation events
+  once — right before `TurnEndEvent`.
+- **Per-session MCP `Client` when elicitation is on the table.**
+  FastMCP's `elicitation_handler` is a *single instance* on each
+  `Client`; sharing one Client across concurrent callers would route
+  every elicitation to the same handler.  The `serve/` WebSocket path
+  builds a fresh `Client` per connection; the SSE path is one-way so
+  it can share.  The `SessionProvider` section below covers the
+  advanced wiring.
+- **`Agent.run()` stays byte-identical.**  The streaming loop is an
+  additive submodule; `run_agent` and the non-streaming `Agent.run`
+  path are unchanged.  Tests that exercise the non-streaming contract
+  remain valid verbatim.
+- **TensorZero-first.**  The framework never invents a parallel
+  transport — it uses `t0.inference(stream=True)` directly.  Every
+  `AgentEvent` is a small semantic upgrade over the underlying chunk
+  (parsed tool args, correlation-preserving end markers); nothing is
+  duplicated.
+
+## API reference
+
+### `Agent.stream`
+
+```python
+async def stream(
+    self,
+    user_message: str,
+    *,
+    episode_id: str | None = None,
+    tags: dict[str, str] | None = None,
+) -> AsyncIterator[AgentEvent]
+```
+
+The streaming analogue of `Agent.run()`.  Shares memory hydration,
+guardrail scaffolding, and tool execution with the non-streaming path;
+the terminal event is always a `DoneEvent` wrapping an `AgentResult`
+(including `guardrail_log` when guardrails are configured).
+
+| Argument | Purpose |
+|---|---|
+| `user_message` | The user's query as a plain string. |
+| `episode_id` | Existing TensorZero episode to continue; `None` starts a new one. |
+| `tags` | Per-call tags that shallow-merge on top of `AgentConfig.tags`.  Required when one `Agent` is shared across many WS frames and you want per-frame tags — see [Server-side: SSE or WebSocket?](#server-side-sse-or-websocket) |
+
+Raises:
+
+- `MaxTurnsExceededError` — `config.max_turns` is exhausted without a
+  tool-call-free turn.
+- `GuardrailBlockedError` — any configured guardrail hard-aborts the
+  run.
+- `TensorZeroError` — a non-recoverable gateway error.  (Recoverable
+  errors surface inline as `ErrorEvent`; see
+  [Error handling](#error-handling).)
+
+### Event types
 
 | Event | When | Fields |
 |---|---|---|
-| `TextDeltaEvent` | Each assistant-text chunk | `id`, `delta`, `type` |
-| `TextEndEvent` | End of a text block | `id`, `type` |
-| `ToolCallDeltaEvent` | Each partial tool-call delta (name+args) | `id`, `raw_name_delta`, `raw_arguments_delta` |
-| `ToolCallEvent` | Assembled tool call ready to dispatch | `id`, `name`, `arguments` |
-| `ToolResultEvent` | Tool finished executing | `id`, `name`, `result`, `is_error` |
-| `ThoughtDeltaEvent` | Reasoning-model thought chunk | `id`, `delta` |
-| `ThoughtEvent` | End of a thought block | `id`, `text` |
-| `TurnEndEvent` | End of one agent turn | `turn` |
-| `DoneEvent` | Run completed (always last) | `result: AgentResult` |
-| `ErrorEvent` | Recoverable error (retry, bad JSON, unknown chunk) | `message`, `detail` |
+| `TextDeltaEvent` | Each assistant-text chunk | `id`, `delta` |
+| `TextEndEvent` | Once per text block after its final delta | `id` |
+| `ToolCallDeltaEvent` | Each partial tool-call delta (name/args) | `id`, `raw_name_delta`, `raw_arguments_delta` |
+| `ToolCallEvent` | Once per tool call, args parsed | `id`, `name`, `arguments: dict[str, Any]` |
+| `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool` |
+| `ThoughtDeltaEvent` | Each reasoning-model thought chunk | `id`, `delta` |
+| `ThoughtEvent` | Once per thought block after its final delta | `id`, `text` |
+| `TurnEndEvent` | Once per turn, after all blocks are assembled | `turn: int` |
+| `DoneEvent` | Always last on success | `result: AgentResult` |
+| `ErrorEvent` | Recoverable anomaly (bad JSON, unknown chunk, retry) | `message: str`, `detail: dict[str, Any]` |
 
-The `id` fields are **stable correlation keys** — every delta for a
-single content block shares the same id, so consumers can accumulate or
-pair them (see contract §3.3).
+`AgentEvent` is the discriminated union of all ten variants.  Every
+dataclass is `slots=True`; JSON serialisation at the HTTP boundary is
+`dataclasses.asdict(event)`, which round-trips cleanly to the browser.
 
-## Server-side: SSE or WebSocket?
+### `StreamingAgentLoop` — advanced
+
+The loop that `Agent.stream()` delegates to.  Exposed so frameworks
+can drive the streaming turn loop directly — for example, in a renderer
+that pre-dates an `Agent` wrapper:
+
+```python
+from t0_agents import StreamingAgentLoop
+
+loop = StreamingAgentLoop()
+async for event in loop.stream(
+    t0=t0, tool_provider=client,
+    user_message="hi", function_name="agent",
+    max_turns=20, tool_timeout=30.0, parallel_tools=False,
+):
+    ...
+```
+
+The full signature accepts every knob `run_agent` does —
+`episode_id`, `dryrun`, `tool_choice`, `tags`, `namespace`,
+`system_arguments`, plus an `on_inference` hook that fires once per
+turn with a `ChatInferenceResponse`-shaped object (used internally by
+guardrails' cost tracker).
+
+### `TurnStreamAssembler` — advanced
+
+The per-turn fold from `AsyncIterator[ChatChunk]` to
+`AsyncIterator[AgentEvent]`.  Useful on its own for tests that
+hand-craft chunks:
+
+```python
+from t0_agents import TurnStreamAssembler
+
+assembler = TurnStreamAssembler()
+async for event in assembler.assemble(chunks):
+    ...
+```
+
+A fresh assembler is built per turn inside `StreamingAgentLoop`; reuse
+across turns would mix block state.
+
+## Consumption tiers
+
+### Easy — minimal consumer
+
+The snippet in [Quickstart](#quickstart) is the canonical pattern:
+`match` on the event type, render the field(s) you care about, bail
+out on `DoneEvent`.  For a terminal UI `print(text, end="",
+flush=True)` is enough; for a web UI, forward each `TextDeltaEvent` to
+the client as soon as it arrives.
+
+### Intermediate — REPL with Rich
+
+[`examples/13_tui/`](../examples/13_tui/) wraps `Agent.stream()` in a
+`rich.live.Live` display.  `t0_agents.cli.TUIRenderer` folds the event
+iterator into a live panel; `rich_elicitation_handler` provides
+browser-free `Prompt.ask()` modals when a tool calls `ctx.elicit()`.
+
+```bash
+uv run t0-agents run examples.13_tui.agent:assistant
+```
+
+See [`docs/cli.md`](cli.md) for the factory convention and the three
+CLI subcommands (`run`, `serve`, `info`).
+
+### Advanced — HTTP with SSE, WebSocket, and elicitation
+
+[`examples/12_streaming_http/`](../examples/12_streaming_http/) ships a
+full browser demo — a FastAPI app, a vanilla-JS client, a FastMCP
+server with elicitation-gated tools, and `InMemoryMemory` for
+multi-turn conversations.  The recipe below wires the four HTTP
+endpoints.
 
 ```python
 from t0_agents.serve import create_app
@@ -88,23 +403,23 @@ app = create_app(
 )
 ```
 
-This wires **four** new route behaviours on the same FastAPI app:
-
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/chat` | Non-streaming (Phase D) |
-| `POST` | `/feedback` | Emit TensorZero feedback (Phase D) |
-| `GET` | `/chat/stream` | SSE — one-way AgentEvent push |
+| `POST` | `/chat` | Non-streaming single-shot agent call ([docs/serving.md](serving.md)) |
+| `POST` | `/feedback` | Emit TensorZero feedback ([docs/serving.md](serving.md)) |
+| `GET` | `/chat/stream` | SSE — one-way `AgentEvent` push |
 | `WS` | `/chat/ws` | Bidirectional — required for elicitation |
 
 Pick:
 
-- **SSE (`/chat/stream`)** when the client only needs to read (dashboards,
-  read-only chat views, CLI `curl --no-buffer`). No elicitation channel.
-- **WebSocket (`/chat/ws`)** when the client can send as well as receive
-  — required whenever a tool may call `ctx.elicit()`.
+- **SSE (`/chat/stream`)** when the client only reads (dashboards,
+  read-only chat views, CLI `curl --no-buffer`).  No elicitation
+  channel — tools that call `ctx.elicit()` fall through to the
+  forwarder's default decline.
+- **WebSocket (`/chat/ws`)** when the client can send frames back —
+  required whenever a tool may call `ctx.elicit()`.
 
-### SSE frame shape
+#### SSE frame shape
 
 ```
 event: text_delta
@@ -114,22 +429,20 @@ event: done
 data: {"type":"done","result":{"response":"...","episode_id":"..."}}
 ```
 
-#### SSE query parameters
+SSE query parameters:
 
 | Param | Type | Required | Purpose |
 |---|---|---|---|
 | `message` | `str` | yes | The user's query. |
 | `episode_id` | `str` | no | Continue an existing TensorZero episode. |
-| `tags` | JSON-encoded `dict[str, str]` | no | Shallow-merge on top of `AgentConfig.tags` for this request only (matches the `tags` field of `POST /chat`'s body). Invalid JSON or non-object values surface as the first SSE frame — an `ErrorEvent` with `detail.kind == "invalid_tags"` — and the stream terminates. |
-
-Example:
+| `tags` | JSON-encoded `dict[str, str]` | no | Shallow-merge on top of `AgentConfig.tags` for this request only.  Invalid JSON or non-object values surface as the first SSE frame — an `ErrorEvent` with `detail.kind == "invalid_tags"` — and the stream terminates. |
 
 ```bash
 curl --no-buffer \
   'http://localhost:8080/chat/stream?message=hi&tags=%7B%22env%22%3A%22staging%22%7D'
 ```
 
-### WebSocket frame shapes
+#### WebSocket frame shapes
 
 Client → server:
 
@@ -138,42 +451,38 @@ Client → server:
 {"type":"elicitation_response","elicitation_id":"uuid","payload":{"action":"accept","content":{}}}
 ```
 
-`tags` in a `user_message` frame shallow-merges onto `AgentConfig.tags`
-for *that frame only* — the same behaviour as `tags` in the `POST /chat`
-body and `?tags=<json>` on `GET /chat/stream`.  Override values win on
-key collisions; the configured deployment label is preserved across
-every frame.  This is the **only** way to vary tags per frame, because
-one `Agent` instance is shared across the lifetime of a WS connection.
+`tags` in a `user_message` frame shallow-merges on top of
+`AgentConfig.tags` for *that frame only* — the only way to vary tags
+per frame when one `Agent` is reused across a WS connection's
+lifetime.
 
-Server → client: every `AgentEvent` serialised as JSON (its `type` field
-is the discriminator), plus:
+Server → client: every `AgentEvent` serialised as JSON (its `type`
+field is the discriminator), plus:
 
 ```json
 {"type":"elicitation_request","elicitation_id":"uuid","message":"Delete task T-103?","schema":{...},"response_type":null}
 {"type":"ws_error","message":"...","detail":{...}}
 ```
 
-### Elicitation round-trip over WS
+#### Elicitation round-trip over WebSocket
 
 1. Client sends `user_message`.
 2. Server streams `text_delta` / `tool_call` events.
 3. A tool calls `ctx.elicit("...?", response_type=None)`.
 4. Server pushes `elicitation_request` with a fresh `elicitation_id`.
-5. Client renders a modal, user clicks Accept.
+5. Client renders a modal, user clicks Accept / Decline.
 6. Client sends `elicitation_response` with the same `elicitation_id`.
 7. Server resolves the forwarder's Future, the tool returns, streaming
    resumes until `done`.
 
-If the WS disconnects while a tool is waiting on elicitation, the
-forwarder auto-declines the pending request — no hanging tool.
+If the WS disconnects while a tool is waiting, the forwarder
+auto-declines the pending request — no hanging tool.
 
-## Browser client recipe
+#### Browser client recipe
 
-A tiny vanilla-JS client that covers every event is in
-[`examples/12_streaming_http/static/app.js`](../examples/12_streaming_http/static/app.js)
-(~180 lines).
-
-Key patterns:
+A 180-line vanilla-JS client that covers every event is in
+[`examples/12_streaming_http/static/app.js`](../examples/12_streaming_http/static/app.js).
+The core pattern:
 
 ```js
 const ws = new WebSocket("ws://localhost:8080/chat/ws");
@@ -190,12 +499,12 @@ ws.onmessage = (m) => {
 ws.send(JSON.stringify({type: "user_message", message: "hi"}));
 ```
 
-## Advanced: `SessionProvider`
+#### `SessionProvider` for auth or multi-tenant wiring
 
-For authentication, multi-tenant routing, telemetry, or custom
-elicitation wiring, implement the `SessionProvider` Protocol yourself.
-It's the framework's single extension point for per-session `Client`
-construction:
+For authentication, per-tenant routing, telemetry spans, or bespoke
+elicitation wiring, implement `SessionProvider` directly instead of
+passing the convenience factories.  It's the framework's single
+extension point for per-session `Client` construction:
 
 ```python
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -215,7 +524,7 @@ class AuthedSessionProvider:
         self,
         *,
         elicitation_handler: ElicitationHandler | None = None,
-    ) -> AbstractAsyncContextManager:
+    ) -> AbstractAsyncContextManager[Client]:
         @asynccontextmanager
         async def _mgr():
             token = self._tracer.start_span("mcp.session")
@@ -239,36 +548,124 @@ implements `build_client(elicitation_handler=...)` satisfies it
 (`@runtime_checkable` — `isinstance(x, SessionProvider)` works at
 construction time).
 
-When you only need the simple path, pass `client_factory=...` (and
-optionally `elicitation_client_factory=...`) to `create_app`; the
-framework wraps them in a `CallableSessionProvider` adapter for you.
+For the simple path, pass `client_factory=...` (and optionally
+`elicitation_client_factory=...`) to `create_app`; the framework wraps
+them in a `CallableSessionProvider` adapter.
 
-## Backpressure
+## Error handling
 
-`Agent.stream()` does not buffer.  Each event is yielded synchronously
-as the TensorZero SDK delivers a chunk.  On the WS route, events are
-sent one-per-`ws.send_json()` call — if the client is slow, the WS
-transport back-pressures the `send_json` coroutine, which back-pressures
-the `async for` loop, which back-pressures the agent's inference stream.
+`AgentEvent` encodes two tiers of error:
 
-If the client disconnects mid-stream, the route catches
-`WebSocketDisconnect`, cancels the active stream task, and
-`forwarder.cancel_all()` drains pending elicitations.
+| Kind | Surface | Examples |
+|---|---|---|
+| Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
+| Fatal | Raised out of the async iterator | `MaxTurnsExceededError`, `GuardrailBlockedError`, non-recoverable `TensorZeroError`, or any `T0AgentsFatalError` subclass |
 
-Stream cancellation mid-response (client aborting a running turn) is
-deferred — clients should close and reconnect for the next turn.  One
-stream per WS connection at a time.
+The recoverable-retry contract is shared with `run_agent` — when the
+gateway returns a 4xx status whose body matches one of the
+`RECOVERABLE_INFERENCE_PATTERNS` (imported from `mcp.loop`), the
+streaming loop appends a corrective-message turn and keeps going, and
+the consumer sees an `ErrorEvent` announcing the retry followed by
+the next turn's events.
 
-## Regression — `Agent.run()` unchanged
+On the WebSocket path, a client disconnect cancels the in-flight
+stream task and calls `forwarder.cancel_all(action="decline")`,
+draining any pending elicitations so waiting tools return cleanly
+instead of hanging.  Stream cancellation *mid-response* (the client
+aborts a running turn without disconnecting) is deferred — clients
+should close and reconnect for the next turn.  One stream per WS
+connection at a time.
 
-`Agent.run()` remains byte-identical to Phase D; streaming is additive.
-The non-streaming `/chat` route continues to decline elicitation
-attempts (the HTTP contract has no return channel).
+See [`docs/error-handling.md`](error-handling.md) for the full
+library-wide exception hierarchy and the
+`T0AgentsError` / `T0AgentsFatalError` split.
+
+## Production considerations
+
+- **Transport**.  Use SSE for read-only streams (dashboards, CLI
+  smoke-tests) and WebSocket when any tool may call `ctx.elicit()`.
+  The one-way SSE path can share a single `Client` across the
+  process, but the default is per-session for symmetry with WS.
+- **Per-session `Client`**.  FastMCP's `elicitation_handler` binds
+  once per Client, so a shared Client cannot route replies to the
+  right user.  The WS route always builds a fresh `Client` per
+  connection via `elicitation_client_factory` (or via
+  `SessionProvider.build_client`).
+- **Backpressure**.  `Agent.stream()` does not buffer.  Each event is
+  yielded synchronously as the TensorZero SDK delivers a chunk.  On
+  the WS route, events are sent one-per-`ws.send_json()` call — if
+  the client is slow, the WS transport back-pressures the `send_json`
+  coroutine, which back-pressures the `async for` loop, which
+  back-pressures the agent's inference stream.
+- **Sticky sessions**.  Because one `Agent` + `Client` pair serves
+  one WS connection, a front-end load balancer must stick a given
+  client to the same backend pod for the duration of the socket.
+  Round-robin routing will break elicitation mid-tool.
+- **Auth and multi-tenant routing**.  The `SessionProvider` Protocol
+  is the extension point.  Implement it to inject JWT headers into
+  the MCP client, pick a per-tenant MCP server, attach telemetry
+  spans, or all three.
+
+See [`docs/production.md`](production.md) for the library-wide
+production checklist (gateway HA, ClickHouse sizing, secret
+management, etc.).
+
+## Observability
+
+Every streaming run produces the same telemetry as its non-streaming
+analogue:
+
+- **Episode continuity** — `DoneEvent.result.episode_id` is the
+  stable identifier the caller threads back through the next
+  `Agent.stream(episode_id=...)` call.  TensorZero attaches episode
+  metadata to every inference for ClickHouse-backed analytics.
+- **Per-turn inference IDs** — `DoneEvent.result.inference_ids` is
+  the ordered list of T0 inference IDs, one per turn (including
+  recoverable-retry placeholders).  Attach feedback to a specific
+  turn via `POST /feedback` with the corresponding ID.
+- **Guardrail log** — if the agent is configured with guardrails,
+  `DoneEvent.result.guardrail_log` carries one `GuardrailLogEntry`
+  per hook activation.  The log survives every abort path, including
+  `GuardrailBlockedError` — see
+  [`docs/guardrails.md`](guardrails.md).
+- **Deployment tagging** — pass `deployment_label="..."` to
+  `create_app`; it adds `t0_agents.deployment=<label>` to every
+  inference call so ClickHouse queries can slice by deployment.
+
+See [`docs/observability.md`](observability.md) for the canonical
+dashboards, ClickHouse queries, and feedback-emission patterns.
+
+## External references
+
+- **TensorZero streaming inference** —
+  [tensorzero.com/docs](https://www.tensorzero.com/docs/).  The
+  `t0.inference(stream=True)` call and the `ChatChunk` / `Usage`
+  types this submodule folds into `AgentEvent`s.
+- **FastMCP elicitation** — [gofastmcp.com](https://gofastmcp.com/).
+  The `ctx.elicit()` primitive that the WebSocket path bridges to a
+  browser modal; the `elicitation_handler` single-instance constraint
+  that drives the per-session `Client` mandate.
+- **Server-Sent Events** —
+  [MDN: Server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
+  The one-way `text/event-stream` protocol used by `GET /chat/stream`.
+- **WebSocket protocol** —
+  [RFC 6455](https://www.rfc-editor.org/rfc/rfc6455).  The
+  bidirectional framing that `WS /chat/ws` builds on.
+
+---
+
+Streaming makes a single agent's work visible. When a single agent is not enough — one researches, one writes, one reviews — the composition layer lets an orchestrator delegate to others as ordinary MCP tools, each with its own memory, guardrails, and (if you need it) its own stream. That is the subject of the next chapter: [Multi-Agent Composition](multi-agent.md).
 
 ## See also
 
 - [`examples/12_streaming_http/`](../examples/12_streaming_http/) —
-  runnable demo with a browser client covering every event type.
+  runnable browser demo covering every event type and the
+  elicitation round-trip.
+- [`examples/13_tui/`](../examples/13_tui/) — streaming REPL with
+  Rich and `rich_elicitation_handler`.
 - [`docs/elicitation.md`](elicitation.md) — the HITL contract the WS
   route bridges.
-- [`docs/serving.md`](serving.md) — non-streaming Phase D surface.
+- [`docs/serving.md`](serving.md) — non-streaming `POST /chat` and
+  `POST /feedback` endpoints.
+- [`docs/cli.md`](cli.md) — `t0-agents run`, the TUI consumer of the
+  same event stream.

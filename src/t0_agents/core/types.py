@@ -96,8 +96,10 @@ class GuardrailLogEntry:
 
     Populated by ``GuardedToolProvider`` (for ``before_tool`` / ``after_tool``)
     and by ``Agent.run`` itself (for ``before_run`` / ``after_run``).  Attached
-    to :class:`AgentResult.guardrail_log` after a successful run so callers
-    can emit per-outcome ``t0.feedback(...)`` manually (T0 Q5 resolution).
+    to :class:`AgentResult.guardrail_log` after every run (including fatal
+    aborts) so callers can emit per-outcome ``t0.feedback(...)`` manually —
+    TensorZero requires metrics to be pre-declared in ``tensorzero.toml``,
+    so the framework does not auto-emit.
     """
 
     guardrail_name: str

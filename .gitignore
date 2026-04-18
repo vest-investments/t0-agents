@@ -43,6 +43,10 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Example runtime artifacts
+*.db
+tui-audit.jsonl
+
 # Loose design-doc drafts at repo root only (organized docs live under docs/).
 /01-*.md
 /02-*.md

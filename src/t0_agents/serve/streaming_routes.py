@@ -61,9 +61,9 @@ logger = logging.getLogger(__name__)
 
 
 def build_streaming_router(*, session_factory: SessionFactory) -> APIRouter:
-    """Assemble the Phase E streaming routes against a :class:`SessionFactory`.
+    """Assemble the streaming routes against a :class:`SessionFactory`.
 
-    Mounted under the same app as the Phase D router — callers that set
+    Mounted alongside the non-streaming router — callers that set
     ``streaming=True`` on :func:`create_app` get both route groups.
     """
     router = APIRouter()

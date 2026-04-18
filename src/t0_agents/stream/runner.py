@@ -345,7 +345,7 @@ class StreamingAgentLoop:
 class _SyntheticChatResponse:
     """Duck-typed mirror of ``ChatInferenceResponse`` for the streaming path.
 
-    Only carries the fields the Phase C ``on_inference`` cost-tracker reads
+    Only carries the fields the ``on_inference`` cost-tracker reads
     (``usage``, ``usage.cost``).  ``Agent.run`` casts the real SDK return
     value to ``ChatInferenceResponse`` and the cost-tracker never isinstance-
     checks, so this duck-type fits the contract and keeps streaming behaviour

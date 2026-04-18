@@ -63,7 +63,7 @@ async def test_per_session_factory_mints_fresh_clients(
 
 
 async def test_share_client_reuses_shared_provider(base_agent: Agent) -> None:
-    """``share_client=True`` reuses ``agent.tool_provider`` across requests."""
+    """``share_client=True`` reuses the agent's tool provider across requests."""
     from tensorzero.types import Text
 
     base_agent._t0._queue.append(  # type: ignore[attr-defined]

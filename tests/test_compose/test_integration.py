@@ -56,7 +56,7 @@ def _build_writer_server() -> FastMCP:
 
 
 def _build_orchestrator_server() -> FastMCP:
-    # The orchestrator's FastMCP has no pre-declared tools; Phase G's
+    # The orchestrator's FastMCP has no pre-declared tools;
     # ``install_sub_agents`` adds ``researcher_ask`` and ``writer_ask``
     # at Agent construction time.
     return FastMCP("orchestrator-server")

@@ -3,13 +3,15 @@
 Rides the same ``(message, response_type, params, context) -> ElicitResult``
 signature as FastMCP's ``elicitation_handler`` so the developer can plug in
 the exact same callable they pass to ``Client(elicitation_handler=...)``.
-No parallel HITL channel is introduced (contract §2.5).
+Elicitation is the library's only human-in-the-loop primitive; this
+guardrail rides that channel rather than inventing a parallel one.
 
 Implementation note (why a handler kwarg).  ``fastmcp.Client`` stores its
 elicitation handler in ``_session_kwargs["elicitation_callback"]`` with no
 public getter.  The wrapper runs client-side and has no access to that
 internal handler, so the guardrail takes its own reference at construction.
-Documented as divergence D1 of the Phase C implementation log.
+Pass the same callable to ``Client(elicitation_handler=...)`` and to
+``require_approval(handler=...)`` for a unified UX across both surfaces.
 """
 
 from __future__ import annotations

@@ -24,8 +24,8 @@ class WSUserMessage(BaseModel):
     """Client → server: begin a new streaming turn.
 
     When a stream is already in flight the server cancels it before
-    starting this one — Phase E is one-stream-per-connection by design
-    (see ``docs/streaming.md`` 'Backpressure').
+    starting this one — the WebSocket route is one-stream-per-connection
+    by design (see ``docs/streaming.md`` 'Backpressure').
     """
 
     type: Literal["user_message"]

@@ -1,30 +1,34 @@
 """Per-session factory for ``(Client, Agent)`` pairs.
 
-Contract §3.5 + FastMCP Q3 mandate that a fresh ``Client`` serve each
-logical caller whenever elicitation may fire.  Phase D defaulted to this
-strict interpretation (one ``Client`` per :meth:`SessionFactory.session`
-call) with ``share_client=True`` as the opt-out.  Phase E generalises the
-construction point by introducing the public :class:`SessionProvider`
-Protocol — see ``docs/streaming.md`` for the advanced recipe.
+A fresh ``Client`` must serve each logical caller whenever elicitation
+may fire: ``fastmcp.Client`` binds exactly one ``elicitation_handler``
+at construction, so a shared Client cannot demultiplex concurrent
+elicitation requests back to the originating callers.  This factory
+enforces that invariant by default and exposes a public
+:class:`SessionProvider` Protocol for advanced wiring (auth,
+multi-tenant routing, telemetry) — see ``docs/streaming.md`` for the
+full recipe.
 
 Modes (mutually exclusive; exactly one must be selected):
 
-1. **``session_provider``** (Phase E) — caller-supplied object
-   implementing :class:`SessionProvider`.  Advanced hook for auth,
-   multi-tenant routing, telemetry, custom elicitation wiring.
-2. **``client_factory``** (Phase D / E convenience) — zero-arg callable
-   returning a fresh ``Client``.  Internally wrapped in a
-   :class:`CallableSessionProvider`.  Optionally paired with
-   ``elicitation_client_factory`` (Phase E, for streaming WS).
-3. **``shared_tool_provider``** (Phase D) — reuse a single ``Client``
-   across every session.  Does **not** support streaming elicitation;
+1. **``session_provider``** — caller-supplied object implementing
+   :class:`SessionProvider`.  Advanced hook for auth, multi-tenant
+   routing, telemetry, custom elicitation wiring.
+2. **``client_factory``** — zero-arg callable returning a fresh
+   ``Client``.  Internally wrapped in a :class:`CallableSessionProvider`.
+   Optionally paired with ``elicitation_client_factory`` for the
+   streaming WebSocket path, which threads a per-connection handler
+   into each Client.
+3. **``shared_tool_provider``** — reuse a single ``Client`` across every
+   session.  Does **not** support streaming elicitation;
    :meth:`session` raises when ``elicitation_handler`` is supplied.
 
 The :meth:`SessionFactory.session` async context manager carries the
 invariant across transports: its lifetime equals *the caller's
-``async with`` block*.  Phase D uses it inside FastAPI routes (one HTTP
-request); Phase E uses it inside SSE / WS endpoints (one stream / one
-WS connection) without changing the shape.
+``async with`` block*.  The non-streaming HTTP routes use it inside
+FastAPI routes (one HTTP request); the streaming SSE / WS endpoints use
+it inside one stream / one WebSocket connection without changing the
+shape.
 """
 
 from __future__ import annotations
@@ -81,11 +85,11 @@ class SessionProvider(Protocol):
 class CallableSessionProvider:
     """Default :class:`SessionProvider` adapter built from one or two lambdas.
 
-    ``client_factory`` is the Phase D zero-arg factory that ignores
-    elicitation.  ``elicitation_client_factory`` — when supplied — is the
-    Phase E factory that receives the per-connection handler; the adapter
-    calls it whenever :meth:`build_client` is invoked with
-    ``elicitation_handler`` set.
+    ``client_factory`` is the zero-arg factory used when no elicitation
+    is required.  ``elicitation_client_factory`` — when supplied —
+    receives the per-connection handler and is called whenever
+    :meth:`build_client` is invoked with ``elicitation_handler`` set
+    (the streaming WebSocket path).
 
     When the caller asks for an elicitation-aware Client and only
     ``client_factory`` is configured, the adapter raises
@@ -185,10 +189,11 @@ class SessionFactory:
     async def startup(self) -> None:
         """Lifecycle hook for :func:`t0_agents.serve.build_lifespan`.
 
-        Phase D / E are no-ops in every mode.  The shared-mode caller owns
-        their client's lifecycle; per-session / provider modes allocate
-        inside :meth:`session`.  Future phases may place an
-        embedded-gateway warm-up here without changing callers.
+        Returns immediately in every mode today.  The shared-mode caller
+        owns their client's lifecycle; per-session / provider modes
+        allocate inside :meth:`session`.  Subclasses or future extensions
+        may place an embedded-gateway warm-up here without changing
+        callers.
         """
         return None
 
@@ -247,7 +252,7 @@ class SessionFactory:
                 raise ConfigurationError(
                     "Streaming elicitation is incompatible with "
                     "'shared_tool_provider' mode — each caller needs its own "
-                    "elicitation handler (FastMCP Q3).  Use 'client_factory' "
+                    "elicitation handler.  Use 'client_factory' "
                     "+ 'elicitation_client_factory' or a 'session_provider'.",
                 )
             yield self._agent_class(

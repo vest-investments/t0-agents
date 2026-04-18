@@ -1,10 +1,10 @@
-"""Multi-agent composition demo (Milestone M7).
+"""Multi-agent composition demo.
 
 Spins up three :class:`Agent` instances — a *researcher* with arXiv
 tool access, a *writer* with markdown tooling, and an *orchestrator*
 that sees the first two as ``researcher_ask`` and ``writer_ask`` MCP
-tools via Phase G's ``AgentConfig.sub_agents`` — then asks the
-orchestrator to write a report.
+tools via ``AgentConfig.sub_agents`` — then asks the orchestrator to
+write a report.
 
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in your environment (or in ``.env`` at the
@@ -26,8 +26,8 @@ from pathlib import Path
 # Dir-name ``14_multi_agent`` starts with a digit, so we cannot import
 # siblings as ``from examples.14_multi_agent.agents import ...``.  Add
 # the example directory to ``sys.path`` and import ``agents`` as a
-# top-level module — same trick Phase F's 13_tui/agent.py uses to reach
-# its ``server`` sibling.
+# top-level module — same trick ``examples/13_tui/agent.py`` uses to
+# reach its ``server`` sibling.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agents import orchestrator_factory  # type: ignore[import-not-found]
 

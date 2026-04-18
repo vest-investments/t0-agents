@@ -1,4 +1,4 @@
-# TUI Agent — Typer + Rich CLI (Milestone M6)
+# TUI Agent — Typer + Rich CLI
 
 Interactive streaming REPL for an MCP-backed agent, powered by the new
 `[cli]` extra. Demonstrates:
@@ -8,9 +8,9 @@ Interactive streaming REPL for an MCP-backed agent, powered by the new
 - **Tool-call spinners** — `🔧 add(a=2,b=3)` turns into `✓ add(a=2,b=3)`
   (or `❌` on error) as the tool completes.
 - **Rich-rendered elicitation** — `set_reminder` calls `ctx.elicit()`
-  with a structured schema; the Phase F `rich_elicitation_handler`
-  renders a per-field prompt (boolean `Confirm`, `enum` choices,
-  optional description).
+  with a structured schema; the `rich_elicitation_handler` renders a
+  per-field prompt (boolean `Confirm`, `enum` choices, optional
+  description).
 - **Episode continuity** — the REPL threads the last `episode_id` into
   each new turn, so memory / TensorZero's episode state stays coherent
   across the whole session.
@@ -76,12 +76,13 @@ uv run t0-agents serve examples.13_tui.agent:assistant \
 
 This wraps the same factory in
 [`t0_agents.serve.create_app(share_client=True)`](../../docs/serving.md)
-and runs uvicorn against the Phase D non-streaming routes (`POST /chat`,
+and runs uvicorn against the non-streaming HTTP routes (`POST /chat`,
 `/feedback`, `/health`, `/info`). Streaming is off by default because
 this factory wires `rich_elicitation_handler` into a shared `Client` —
 that handler talks to the local terminal, so it does not make sense over
 HTTP, and the WS streaming route additionally needs a per-connection
-handler (FastMCP Q3) which shared-Client mode cannot give it.
+elicitation handler (one handler per `Client`) which shared-Client mode
+cannot give it.
 
 For full streaming + browser elicitation, see
 [`examples/12_streaming_http/`](../12_streaming_http/), which wires
@@ -98,12 +99,54 @@ Prints a table of every `AgentConfig` field the factory wires up. The
 factory context is entered just long enough to read `agent.config`, so
 your gateway connection opens and closes in under a second.
 
+## Advanced — audit-logging elicitation handler
+
+`advanced.py` ships a second factory, `assistant_with_audit`, that
+wires the same assistant with a **custom elicitation handler layered
+on top of `make_rich_elicitation_handler`**. Every `ctx.elicit` call
+and its outcome (`accept` / `decline` / `cancel`) gets appended to
+`tui-audit.jsonl` in the current working directory.
+
+Two patterns from the Advanced tiers of [`docs/cli.md`](../../docs/cli.md)
+are exercised:
+
+- Composing on `make_rich_elicitation_handler()` so the Rich `Live`
+  panel still pauses and resumes around every prompt — the wrapper
+  only *adds* behaviour, it doesn't replace the rendering.
+- Calling `get_active_renderer()` inside the handler so the audit log
+  can tag each record with the agent name the live panel is driving,
+  without having to plumb the renderer through FastMCP's fixed
+  `ElicitationHandler` signature.
+
+```bash
+uv run t0-agents run examples.13_tui.advanced:assistant_with_audit
+```
+
+Issue a request that triggers elicitation (e.g. `Remind me tomorrow at
+9 to water the plants.`), answer the Rich prompts, then inspect the
+log:
+
+```bash
+cat tui-audit.jsonl
+```
+
+Expected shape (one JSON object per line):
+
+```
+{"kind":"elicit_request","mode":"form","message":"Reminder at tomorrow 9: water the plants","agent":"audited-assistant","ts":1712345678.1}
+{"kind":"elicit_response","action":"accept","has_content":true,"ts":1712345682.4}
+```
+
+Delete the file between runs for a clean log, or `tail -f
+tui-audit.jsonl` in another terminal to watch entries as they land.
+
 ## Layout
 
 ```
 examples/13_tui/
 ├── README.md          ← this file
 ├── agent.py           ← @asynccontextmanager factory consumed by the CLI
+├── advanced.py        ← audit-logging elicitation handler + factory
 └── server.py          ← FastMCP server: add, set_reminder
 ```
 

@@ -184,6 +184,9 @@ result = await run_agent(
 not just elicitation-capable ones. If you have a mix of fast tools and
 elicitation tools, use a generous value (e.g., `300.0`) rather than `None`.
 
+See [Error handling](error-handling.md) for the full taxonomy of timeout /
+`McpError` / `ToolError` wrapping.
+
 ---
 
 ## Server-side patterns
@@ -286,6 +289,28 @@ async def multi_step(ctx: Context) -> str:
 | 2 | **Bidirectional session required** -- Elicitation needs a stateful MCP session. | In-memory, stdio, and SSE transports work. Stateless HTTP mode breaks elicitation. See [Production](production.md). |
 | 3 | **Timeout covers elicitation** -- Both server-side (`@mcp.tool(timeout=X)`) and client-side (`tool_timeout`) timeouts include human wait time. | Set `tool_timeout=None` or a generous value. |
 | 4 | **Scalar wrapping** -- Scalar types (str, int, bool) are wrapped in `{"value": <type>}` for MCP protocol compatibility. | Handlers must use `content={"value": ...}` for scalar responses. Transparent on the server side. |
+| 5 | **`tool_choice` is evaluated on every turn** -- Passing `tool_choice={"specific": <tool_name>}` to `run_agent` forces the LLM to emit a tool call on *each* turn, including the terminating turn where the model needs to emit final text. The gateway propagates the provider's validation failure. | For elicitation-driven flows (approval, structured input), omit `tool_choice` and rely on prompt guidance to route the first turn. |
+
+---
+
+## Reference handlers
+
+The library ships two handlers suitable for tests and prototypes:
+
+```python
+from t0_agents.mcp import auto_approve_handler, auto_decline_handler
+```
+
+| Handler | Behaviour | Use case |
+|---------|-----------|----------|
+| `auto_approve_handler` | Approves binary approval requests (`response_type is None`); declines structured-input requests. | Smoke tests for approval flows. |
+| `auto_decline_handler` | Declines every request. | Verifying that tools degrade gracefully when the user refuses. |
+
+Both are for testing only. Production code should implement a real handler --
+either a CLI prompt (Intermediate example below), a stateful multi-turn handler
+(Advanced example below), or a remote channel using the forwarder described in
+[Agent](agent.md). The [CLI](cli.md) and [Serving](serving.md) docs show how
+the forwarder is wired into an interactive terminal or a remote HTTP session.
 
 ---
 
@@ -377,3 +402,7 @@ handler = make_multi_turn_handler([
 ])
 client = Client(mcp_server, elicitation_handler=handler)
 ```
+
+---
+
+Elicitation lets the loop pause for interactive input during a single run. Continuity *across* runs — remembering what was said yesterday, or in a different process, or after a redeploy — is a separate concern, handled by a `MemoryProvider` wired into `AgentConfig`. That is the subject of the next chapter: [Memory](memory.md).

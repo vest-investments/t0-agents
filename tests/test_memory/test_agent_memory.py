@@ -64,7 +64,7 @@ def _make_agent(
 
 
 class TestAgentWithoutMemory:
-    """Memory=None path must be identical to Phase A behaviour."""
+    """When config.memory is None, Agent.run performs no memory load or save."""
 
     async def test_no_memory_returns_result(self) -> None:
         agent = _make_agent()

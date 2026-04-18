@@ -96,10 +96,9 @@ class Agent:
             config.max_turns,
         )
 
-        # Phase G: register each sub-agent as an MCP tool on the
-        # orchestrator's in-process FastMCP server.  No-op when
-        # config.sub_agents is empty, preserving Phase A byte-identity
-        # for single-agent constructions.
+        # Register each sub-agent as an MCP tool on the orchestrator's
+        # in-process FastMCP server.  No-op when config.sub_agents is
+        # empty, so single-agent constructions pay no cost.
         self._sub_agents_by_tool_name: dict[str, Agent] = {}
         if config.sub_agents:
             from t0_agents.compose.orchestrator import install_sub_agents
@@ -195,10 +194,9 @@ class Agent:
             user_message, memory_records,
         )
 
-        # --- 3. Set up guardrails (Phase C) ---
-        # Empty-list case: preserve Phase B byte-identity by forwarding the
-        # raw tool_provider and leaving on_inference at None so run_agent's
-        # code path is unchanged.
+        # --- 3. Set up guardrails ---
+        # Empty-list case: forward the raw tool_provider and leave
+        # on_inference at None so run_agent's code path is unchanged.
         guard_ctx: GuardrailContext | None = None
         guard_log: list[GuardrailLogEntry] = []
         tool_provider: ToolProvider = self._tool_provider

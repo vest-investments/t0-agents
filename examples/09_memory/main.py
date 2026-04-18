@@ -1,8 +1,10 @@
-"""Stateful Agent example — Milestone M2.
+"""Stateful Agent example with cross-session memory.
 
-Demonstrates cross-session memory using both ``InMemoryMemory`` (ephemeral)
-and ``SqliteMemory`` (persistent).  The agent remembers context across
-successive ``.run()`` calls via the configured ``MemoryProvider``.
+Runs the same ``Agent`` twice on the same ``episode_id`` — first with
+``InMemoryMemory`` (ephemeral) and then with ``SqliteMemory`` (persistent,
+including a simulated process restart).  Illustrates how the framework
+hydrates and persists state around every ``.run()`` call via the configured
+``MemoryProvider``.
 
 Requirements:
     docker compose up -d          # boots TensorZero gateway + ClickHouse

@@ -36,7 +36,7 @@ def build_router(
     session_factory: SessionFactory,
     t0: AsyncTensorZeroGateway,
 ) -> APIRouter:
-    """Assemble the Phase D routes against a :class:`SessionFactory`.
+    """Assemble the non-streaming routes against a :class:`SessionFactory`.
 
     Exception → HTTP mapping (applied to ``POST /chat`` only — other
     routes raise on truly exceptional errors, which FastAPI renders as
@@ -47,6 +47,11 @@ def build_router(
     * :class:`ConfigurationError` → 400 Bad Request.
     * :class:`TensorZeroError` → 502 Bad Gateway.
     * Any other :class:`T0AgentsError` → 400 Bad Request.
+
+    ``POST /feedback`` additionally passes a 4xx gateway response through
+    verbatim (the ``/feedback`` payload maps 1:1 to caller input, so an
+    "unknown metric" 404 is honestly a caller error); 5xx and missing
+    status codes still map to 502 Bad Gateway.
     """
     router = APIRouter()
 

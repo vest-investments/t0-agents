@@ -829,18 +829,18 @@ async def test_none_description_tool_is_usable_end_to_end(
     assert result.response
 
 
-# --- Elicitation integration (Phase 1) --------------------------------------
+# --- Elicitation integration ------------------------------------------------
 
 
 async def test_run_agent_elicitation_approve() -> None:
-    """P1.15 -- Elicitation-enabled tool through the full agent loop (approve).
+    """Elicitation-enabled tool through the full agent loop (approve).
 
     A Client with an auto-approve handler is passed to ``run_agent``.
     The LLM is directed to call ``approve_action``; the handler accepts
-    the elicitation; the tool returns "Approved: ..."; the LLM produces
+    the elicitation; the tool returns ``"Approved: ..."``; the LLM produces
     a final text response.
 
-    Accepts broad outcomes because LLM behavior is nondeterministic.
+    Accepts broad outcomes because LLM behaviour is nondeterministic.
     """
 
     async def handler(
@@ -877,10 +877,11 @@ async def test_run_agent_elicitation_approve() -> None:
 
 
 async def test_run_agent_elicitation_decline() -> None:
-    """P1.16 -- Elicitation decline through the full agent loop.
+    """Elicitation decline through the full agent loop.
 
-    Same setup as P1.15, but the handler declines. The tool returns
-    "Rejected: ..." and the LLM should produce a final text response.
+    Same setup as the approve variant, but the handler declines. The tool
+    returns ``"Rejected: ..."`` and the LLM should produce a final text
+    response.
     """
 
     async def handler(

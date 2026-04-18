@@ -73,7 +73,7 @@ def _make_agent(
 
 class TestEmptyGuardrailsByteIdentity:
     async def test_no_wrapper_when_guardrails_empty(self) -> None:
-        """``guardrails=[]`` must behave byte-identical to Phase B."""
+        """``guardrails=[]`` leaves the tool provider and loop untouched."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="hi")])])
         client = FakeMCPClient()
         agent = _make_agent(t0=t0, client=client, guardrails=[])

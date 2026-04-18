@@ -3,23 +3,18 @@
 Registration happens at :meth:`Agent.__init__` time, **not** per run:
 the orchestrator LLM sees the full set of delegated ``_ask`` tools
 from the very first inference.  Dynamic mid-run registration is out
-of scope — gateway-safe per T0 Q2, but the LLM-side cost of schema
-changes mid-conversation isn't worth it yet
-(see ``docs/internal/agentic-feature/02-open-questions.md``).
+of scope — the gateway accepts per-call tool lists, but the LLM-side
+cost of schema changes mid-conversation isn't worth it.
 
-Source-validated correction vs the Phase G spec §4.3: the spec read
-``client.local_provider`` on :class:`fastmcp.Client`, but that
-attribute is a property on :class:`fastmcp.FastMCP` *servers*, not on
-clients.  The in-process unwrap in fastmcp 2.x is
-``client.transport.server`` when
-``isinstance(client.transport, FastMCPTransport)``
-(``.venv/.../fastmcp/client/transports/memory.py:29``).  Collision
-detection relies on FastMCP's own
-``ValueError("Component already exists: ...")`` from
-``LocalProvider._add_component``
-(``fastmcp/server/providers/local_provider/local_provider.py:190``),
-which we translate into :class:`ConfigurationError` so callers see a
-predictable t0-agents exception.
+The in-process unwrap path uses ``client.transport.server`` when
+``isinstance(client.transport, FastMCPTransport)`` — the only
+FastMCP transport that exposes the underlying server instance so we
+can call ``add_tool`` on it.  Remote transports (HTTP, SSE, WebSocket)
+raise :class:`ConfigurationError` at construction time.  Collision
+detection translates FastMCP's
+``ValueError("Component already exists: ...")`` into
+:class:`ConfigurationError` so callers see a predictable t0-agents
+exception regardless of the server's ``on_duplicate=`` setting.
 """
 
 from __future__ import annotations
@@ -120,7 +115,8 @@ def install_sub_agents(parent: Agent) -> None:
     """Register each sub-agent as a tool on the orchestrator's server.
 
     No-op when :attr:`AgentConfig.sub_agents` is empty so single-agent
-    constructions keep Phase A byte-identity.  Raises
+    constructions behave exactly as if the submodule were absent.
+    Raises
     :class:`ConfigurationError` on any of:
 
     * a non-``fastmcp.Client`` ``tool_provider``;

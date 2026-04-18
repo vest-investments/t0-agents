@@ -5,6 +5,10 @@ Two complementary test paths on a single agent:
 - **Unit** (`test_agent_unit.py`) — deterministic, no Docker, no API
   keys. Every turn is scripted via `MockGateway`; every tool call
   returns a canned result via `MockToolProvider`. Milliseconds per test.
+  Covers six shapes: the happy path, error recovery, negation, the
+  max-turns safety net, pass-through of a prebuilt
+  `fastmcp.CallToolResult(is_error=True)`, and the
+  `MockGateway.recording()` → `.replay()` workflow.
 - **Embedded** (`test_agent_embedded.py`) — real TensorZero inference
   against the provider whose API key is in your env (default:
   `GROQ_API_KEY`). No ClickHouse, no Postgres, no Docker. Opt-in via

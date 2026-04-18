@@ -1,26 +1,36 @@
 """Future-based elicitation bridge between an in-process FastMCP handler
-and an out-of-process resolver (typically a WebSocket in Phase E).
+and an out-of-process resolver (typically a WebSocket).
 
-Phase D shipped the skeleton with a default ``handler`` that always
-declined — non-streaming HTTP has no return channel, so elicitation is
-surfaced as an explicit tool error.  Phase E completes the surface:
+An :class:`ElicitationForwarder` can run in two modes:
 
-* ``__init__(*, on_request=None, default_timeout=300.0)`` — the
-  ``on_request`` callback is how the forwarder hands a pending request off
-  to the remote channel.  Keeping the argument optional preserves the
-  Phase D contract (``ElicitationForwarder()`` still declines by default).
+* **Auto-decline.** Constructed without ``on_request``, the forwarder's
+  :meth:`~ElicitationForwarder.handler` declines every elicitation
+  immediately.  This is the safe default for contexts that have no return
+  channel for a human response (for example a non-streaming HTTP agent) —
+  tool code inside ``ctx.elicit(...)`` observes an explicit decline
+  rather than hanging.
+* **Remote resolver.** Constructed with an ``on_request`` callback, the
+  handler builds an :class:`ElicitationRequest`, invokes
+  ``on_request(envelope)`` to hand the request off to the remote side
+  (for example by sending a JSON frame over a WebSocket), and awaits an
+  :class:`asyncio.Future` with a timeout.  The remote side resolves the
+  future by calling :meth:`~ElicitationForwarder.resolve` with the
+  incoming response payload.
+
+The public surface is four methods:
+
+* ``__init__(*, on_request=None, default_timeout=300.0)``.
 * ``handler(message, response_type, params, context)`` — the FastMCP-side
-  entry point.  Builds an :class:`ElicitationRequest`, calls
-  ``on_request(envelope)``, awaits the Future with a timeout, and returns
-  the corresponding :class:`ElicitResult`.
+  entry point.
 * ``resolve(elicitation_id, payload)`` — drain one Future when the remote
   side replies.
 * ``cancel_all(action="decline")`` — drain every pending Future, used on
-  WS disconnect.
+  disconnect.
 
-Each WS connection owns its own forwarder instance (one elicitation handler
-per FastMCP ``Client``, per FastMCP Q3 resolution in
-``02-open-questions.md``).
+Each remote channel (for example each WebSocket connection) owns its own
+forwarder instance: ``fastmcp.Client`` binds a single
+``elicitation_handler`` per client, so per-session isolation requires a
+per-session client — and therefore a per-session forwarder.
 """
 
 from __future__ import annotations
@@ -72,14 +82,14 @@ class ElicitationRequest:
 class ElicitationForwarder:
     """Bridges FastMCP's inline elicitation handler to a remote channel.
 
-    Default (Phase D) behaviour — constructed without ``on_request`` —
-    declines every elicitation so non-streaming HTTP servers surface
-    elicitation attempts as tool errors rather than hanging.
+    Default behaviour — constructed without ``on_request`` — declines
+    every elicitation so servers with no return channel surface
+    elicitation attempts as explicit errors rather than hanging.
 
-    Streaming (Phase E) behaviour — constructed with ``on_request`` wired
-    to ``ws.send_json`` — pushes a request envelope to the WS client,
-    blocks on a Future, and resolves the Future from incoming WS frames
-    via :meth:`resolve`.
+    Remote-resolver behaviour — constructed with ``on_request`` wired to
+    a send function (for example ``ws.send_json``) — pushes a request
+    envelope to the remote side, blocks on a Future, and resolves the
+    Future from incoming frames via :meth:`resolve`.
     """
 
     def __init__(
@@ -113,10 +123,10 @@ class ElicitationForwarder:
         Builds a pending request, invokes :attr:`on_request`, awaits the
         Future.  Auto-declines on:
 
-        * Phase D default — ``on_request is None``.
+        * no remote resolver wired — ``on_request is None``.
         * timeout after :attr:`default_timeout` seconds.
-        * task cancellation (e.g. WS disconnect cancels the surrounding
-          streaming task, which cancels this coroutine).
+        * task cancellation (for example a WebSocket disconnect cancels
+          the surrounding streaming task, which cancels this coroutine).
         """
         if self._on_request is None:
             return ElicitResult(action="decline")
