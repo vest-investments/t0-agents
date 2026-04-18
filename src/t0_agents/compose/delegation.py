@@ -1,4 +1,4 @@
-"""Wrap a sub-agent as an MCP tool (Phase G).
+"""Wrap a sub-agent as an MCP tool.
 
 The generated handler signature is ``async def <name>(message: str) -> str``
 so FastMCP's :meth:`Tool.from_function` produces a flat, predictable

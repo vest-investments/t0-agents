@@ -320,7 +320,7 @@ class TestParentEpisodeIdRefresh:
         # An explicit episode_id means the initial bind already holds
         # the right value; the refresh wrapper must NOT be installed
         # so callers who never configured guardrails / on_inference
-        # keep the byte-identity Phase A behaviour.
+        # keep the byte-identical on_inference=None call path.
         captured: list[Any] = []
 
         async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentResult:

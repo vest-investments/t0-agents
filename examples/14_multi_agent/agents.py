@@ -8,10 +8,9 @@ Invoked via:
 
 The factory yields an orchestrator :class:`Agent` that has been wired
 with two sub-agents (``researcher``, ``writer``).  Each sub-agent has
-its own FastMCP server + ``fastmcp.Client``; Phase G's
-``install_sub_agents`` hook registers a ``researcher_ask`` and
-``writer_ask`` tool on the orchestrator's own in-process FastMCP
-server at construction time.
+its own FastMCP server + ``fastmcp.Client``; the ``install_sub_agents``
+hook registers a ``researcher_ask`` and ``writer_ask`` tool on the
+orchestrator's own in-process FastMCP server at construction time.
 """
 
 from __future__ import annotations
@@ -28,8 +27,8 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents import Agent, AgentConfig
 
 # Path juggling so the example modules can be imported as top-level names
-# the same way Phase F's 13_tui/agent.py does.  Keeps the example runnable
-# both as a Python script and via the ``t0-agents run`` loader.
+# the same way ``examples/13_tui/agent.py`` does.  Keeps the example
+# runnable both as a Python script and via the ``t0-agents run`` loader.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from arxiv_server import mcp as arxiv_server  # type: ignore[import-not-found]
 from markdown_server import mcp as markdown_server  # type: ignore[import-not-found]
