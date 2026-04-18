@@ -1,5 +1,7 @@
 # Concepts
 
+The previous chapter introduced the [`Agent`](agent.md) class as the declarative entry point for building an application. This chapter opens the engine that `Agent.run()` delegates to: the `run_agent` loop in `t0_agents.mcp`.
+
 ## The three participants
 
 ```
@@ -89,6 +91,8 @@ return AgentResult(
 
 When no tool calls remain, `Text` blocks are joined into the final response string. If the LLM emitted only `Thought` blocks (no `Text`), those are used as a fallback and `response_source` is set to `"thought"`.
 
+If a tool pauses mid-execution to ask the user a question (via MCP Elicitation), the pause is transparent to `run_agent` -- the `await client.call_tool(...)` simply takes longer. See [Elicitation](elicitation.md).
+
 ## Data flow
 
 ```
@@ -120,3 +124,12 @@ str  -->  ToolResult(name, result, id)  -->  Message(role="user", content=[...])
 | `inference_ids` | `list[str]` | One inference ID per turn. Useful for sending feedback via `t0.feedback()` targeting specific inferences |
 | `turns` | `int` | Number of inference turns the loop executed (1 = single inference, no tool calls) |
 | `response_source` | `Literal["text", "thought"]` | `"text"` when the response came from `Text` blocks; `"thought"` when it fell back to `Thought` blocks |
+
+So far every tool returns synchronously. The next chapter covers the opposite case: a tool that needs to stop mid-call and ask a human a question — how that pause round-trips through the loop without changing it.
+
+## See also
+
+- [Agent](agent.md) -- the declarative `Agent` class that wraps `run_agent` and adds collaborator Protocols, config, and a friendlier ergonomics surface.
+- [Elicitation](elicitation.md) -- human-in-the-loop approval and structured input.
+- [Error handling](error-handling.md) -- full error taxonomy, retry patterns, and the `ToolError` vs `McpError` wrapping rationale.
+- [Observability](observability.md) -- using `episode_id`, `inference_ids`, `response_source`, and `t0.feedback()` for analytics and evals.

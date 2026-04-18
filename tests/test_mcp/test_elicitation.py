@@ -1,8 +1,9 @@
 """Elicitation test suite.
 
-Phase 0 — smoke tests validating the in-memory transport works with elicitation.
-Phase 1 — pattern coverage, error paths, and timeout behavior.
-Phase 4 — reference handler unit tests.
+Covers smoke validation of the in-memory transport with elicitation, pattern
+coverage across binary approval / structured input / scalar wrapping /
+multi-turn, error paths (missing handler, timeout), and reference-handler
+unit tests.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from t0_agents.mcp import execute_tool_calls
 from t0_agents.mcp.elicitation import auto_approve_handler, auto_decline_handler
 from tests.server import mcp
 
-# --- Phase 0: Smoke tests ---------------------------------------------------
+# --- Smoke tests -----------------------------------------------------------
 
 
 async def test_smoke_approve() -> None:
@@ -84,26 +85,26 @@ async def test_smoke_no_handler() -> None:
             await client.call_tool("approve_action", {"action": "deploy"})
 
 
-# --- Phase 1: Elicitation pattern tests (P1.3-P1.11) ------------------------
+# --- Elicitation pattern tests ---------------------------------------------
 
 
 class TestElicitationPatterns:
     """Comprehensive coverage of elicitation patterns."""
 
     async def test_approval_accept(self, auto_approve_handler: Any) -> None:
-        """P1.3 — Handler accepts, tool proceeds."""
+        """Handler accepts, tool proceeds."""
         async with Client(mcp, elicitation_handler=auto_approve_handler) as client:
             result = await client.call_tool("approve_action", {"action": "deploy"})
             assert result.data == "Approved: deploy"
 
     async def test_approval_decline(self, auto_decline_handler: Any) -> None:
-        """P1.4 — Handler declines, tool returns rejection."""
+        """Handler declines, tool returns rejection."""
         async with Client(mcp, elicitation_handler=auto_decline_handler) as client:
             result = await client.call_tool("approve_action", {"action": "deploy"})
             assert result.data == "Rejected: deploy"
 
     async def test_approval_cancel(self) -> None:
-        """P1.5 — Handler cancels, tool handles gracefully (same else branch)."""
+        """Handler cancels, tool handles gracefully (same else branch)."""
 
         async def handler(
             message: str,
@@ -118,7 +119,7 @@ class TestElicitationPatterns:
             assert result.data == "Rejected: deploy"
 
     async def test_scalar_str(self) -> None:
-        """P1.6 — Scalar string flows through multi_step's first elicitation."""
+        """Scalar string flows through multi_step's first elicitation."""
         call_count = 0
 
         async def handler(
@@ -138,7 +139,7 @@ class TestElicitationPatterns:
             assert result.data == "Completed: Alice"
 
     async def test_scalar_int(self) -> None:
-        """P1.7 — Scalar int via ask_age tool."""
+        """Scalar int via ask_age tool."""
 
         async def handler(
             message: str,
@@ -153,7 +154,7 @@ class TestElicitationPatterns:
             assert result.data == "Age: 42"
 
     async def test_structured_input(self) -> None:
-        """P1.8 — Structured dataclass input via collect_info."""
+        """Structured dataclass input via collect_info."""
 
         async def handler(
             message: str,
@@ -168,7 +169,7 @@ class TestElicitationPatterns:
             assert result.data == "Hello Bob, age 25"
 
     async def test_constrained_choice(self) -> None:
-        """P1.9 — Constrained choice via pick_priority."""
+        """Constrained choice via pick_priority."""
 
         async def handler(
             message: str,
@@ -183,7 +184,7 @@ class TestElicitationPatterns:
             assert result.data == "Priority: medium"
 
     async def test_multi_turn_accept(self) -> None:
-        """P1.10 — Both elicitations accepted in multi_step."""
+        """Both elicitations accepted in multi_step."""
         call_count = 0
 
         async def handler(
@@ -204,7 +205,7 @@ class TestElicitationPatterns:
             assert call_count == 2
 
     async def test_multi_turn_cancel(self) -> None:
-        """P1.11 — First elicitation accepted, second declined."""
+        """First elicitation accepted, second declined."""
         call_count = 0
 
         async def handler(
@@ -224,23 +225,29 @@ class TestElicitationPatterns:
             assert result.data == "Rejected at step 2"
 
 
-# --- Phase 1: Error path tests (P1.12-P1.14) --------------------------------
+# --- Error path tests ------------------------------------------------------
 
 
 class TestElicitationErrors:
     """Error handling for elicitation edge cases."""
 
     async def test_no_handler_raises_tool_error(self) -> None:
-        """P1.12 — No handler → ToolError (not McpError, per Phase 0 finding)."""
+        """No handler on client → raises ToolError.
+
+        FastMCP's tool-dispatch layer wraps server-side McpError into
+        ``CallToolResult(isError=True)``; ``client.call_tool(raise_on_error=True)``
+        then surfaces it as ``ToolError``. Documented in docs/error-handling.md.
+        """
         async with Client(mcp) as client:
             with pytest.raises(ToolError, match="Elicitation not supported"):
                 await client.call_tool("approve_action", {"action": "deploy"})
 
     async def test_no_handler_through_execute(self) -> None:
-        """P1.13 — No handler through execute_tool_calls → error ToolResult.
+        """No handler through execute_tool_calls → error ToolResult.
 
-        The ToolError is caught by _execute_single_tool_call's ``except ToolError``
-        branch (loop.py line 114), producing a ToolResult with the error message.
+        The ToolError is caught by ``_execute_single_tool_call``'s
+        ``except ToolError`` branch and turned into a ``ToolResult`` whose
+        ``result`` field starts with ``"ERROR: tool execution failed: "``.
         """
         tc = ToolCall(
             id="c1",
@@ -257,11 +264,11 @@ class TestElicitationErrors:
             assert "Elicitation not supported" in results[0].result
 
     async def test_timeout_covers_elicitation(self) -> None:
-        """P1.14 — Timeout wraps elicitation roundtrip.
+        """Timeout wraps the elicitation roundtrip.
 
-        A slow handler (simulating human wait time) causes the call_tool
-        timeout to fire, proving that the timeout covers the full
-        elicitation exchange — not just the tool execution.
+        A slow handler (simulating human wait time) causes the
+        ``call_tool`` timeout to fire, proving that the timeout covers the
+        full elicitation exchange — not just the tool execution.
         """
 
         async def slow_handler(
@@ -280,7 +287,7 @@ class TestElicitationErrors:
                 )
 
 
-# --- Phase 4: Reference handler tests ----------------------------------------
+# --- Reference handler tests -----------------------------------------------
 
 
 class TestReferenceHandlers:

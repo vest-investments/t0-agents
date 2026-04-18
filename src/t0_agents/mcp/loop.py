@@ -346,9 +346,9 @@ async def run_agent(
         # We cannot isinstance-check here because unit tests use duck-typed fakes.
         response = cast(ChatInferenceResponse, raw)
 
-        # Post-inference observability hook (Phase C).  Fires BEFORE tool
-        # execution so guardrails like ``max_cost`` can block the next
-        # tool call based on cumulative usage from this turn.
+        # Post-inference observability hook.  Fires BEFORE tool execution
+        # so guardrails like ``max_cost`` can block the next tool call
+        # based on cumulative usage from this turn.
         if on_inference is not None:
             await on_inference(response)
 

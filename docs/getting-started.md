@@ -88,5 +88,9 @@ Both the `AsyncTensorZeroGateway` and `Client` must be entered as async context 
 
 ## Next steps
 
-- [Concepts](concepts.md) -- Architecture, loop lifecycle, design decisions
-- [examples/](../examples/) -- Runnable examples (adapter basics, basic agent)
+- [Agent](agent.md) -- the declarative, config-driven `Agent` class that wraps `run_agent` and the rest of the stack; this is the API most applications use day-to-day.
+- [Concepts](concepts.md) -- architecture, loop lifecycle, design decisions.
+- [Elicitation](elicitation.md) -- human-in-the-loop approval and structured input, with no changes to `run_agent`.
+- [Error handling](error-handling.md) -- how the loop handles tool errors, hallucinated tool names, timeouts, and `max_turns`.
+- [Observability](observability.md) -- episode IDs, inference IDs, feedback to ClickHouse.
+- Examples: [`01_adapter_basics`](../examples/01_adapter_basics/) (offline), [`02_basic_agent`](../examples/02_basic_agent/) (loop), [`05_error_handling`](../examples/05_error_handling/), [`07_elicitation`](../examples/07_elicitation/).
