@@ -50,7 +50,7 @@ class FeedbackRequest(BaseModel):
     Fields match the six kwargs of
     :meth:`tensorzero.AsyncTensorZeroGateway.feedback`; the caller is
     responsible for pre-declaring ``metric_name`` in ``tensorzero.toml``
-    (see ``docs/guardrails.md`` on T0 Q5).
+    (see ``docs/guardrails.md`` for the metrics-vs-feedback contract).
     """
 
     metric_name: str
@@ -72,8 +72,9 @@ class HealthResponse(BaseModel):
 
     Values are free-form strings so subclasses of the router can report
     richer states (``"degraded"``, ``"starting"``, ...) without a schema
-    change.  The Phase D implementation uses ``"ok"``, ``"down"``, and
-    ``"per-session"``.
+    change.  The default implementation emits ``"ok"``, ``"down"``, or
+    ``"per-session"`` — the last is a healthy state meaning "each
+    request builds its own client".
     """
 
     gateway: str

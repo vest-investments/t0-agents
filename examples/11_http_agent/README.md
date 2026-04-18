@@ -1,4 +1,4 @@
-# `11_http_agent` — Hosted Agent (M4)
+# `11_http_agent` — HTTP serving demo
 
 One-line wrap of an `Agent` in a FastAPI service.  `uvicorn` serves the
 four endpoints documented in `docs/serving.md`:
@@ -30,8 +30,9 @@ uv run uvicorn examples.11_http_agent.agent_app:app --host 0.0.0.0 --port 8080
 ## Highlights
 
 * **Per-session Client** — `client_factory=lambda: Client(mcp)` builds
-  a fresh FastMCP client per HTTP request.  Matches the contract §3.5
-  mandate; future Phase E elicitation piping reuses the same
+  a fresh FastMCP client per HTTP request.  This is what keeps
+  elicitation demultiplexed in deployments that enable it; the
+  browser-based WebSocket path in `docs/streaming.md` reuses the same
   abstraction unchanged.
 * **`InMemoryMemory` attached** — `client.sh`'s second `/chat` call
   sends the first call's `episode_id` back; the agent hydrates the
@@ -83,15 +84,18 @@ async with client:  # or manage elsewhere
 
 Elicitation attempts on a shared client cannot be routed back to the
 original caller — the framework's default forwarder declines them with
-an explicit error.  Phase E's streaming layer lifts this limitation via
+an explicit error.  The streaming extension (`streaming=True` on
+`create_app`, covered in `docs/streaming.md`) lifts this limitation via
 an SSE / WebSocket elicitation channel.
 
 ## What this example does *not* show
 
 * **Elicitation over HTTP.**  Plain request/response has no return
-  channel for human-in-the-loop prompts — Phase E (M5) adds SSE +
-  WebSocket transports.  The Phase D default (`auto-decline`) makes
-  the limitation explicit in tool results.
+  channel for human-in-the-loop prompts; the non-streaming surface
+  declines elicitation with an explicit error so tools fail cleanly
+  rather than hanging.  Add `streaming=True` on `create_app` for a live
+  HITL channel — see `docs/streaming.md`.
 * **Authentication / rate limiting.**  Compose your own FastAPI
   middleware; see `docs/serving.md` for examples.
-* **Streaming deltas.**  Also Phase E.
+* **Streaming deltas.**  Also `streaming=True` — see
+  `docs/streaming.md`.

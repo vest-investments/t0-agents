@@ -15,9 +15,12 @@ Notes
   FastAPI ``app`` object is fully constructed at module-import time —
   that is what ``uvicorn agent_app:app`` expects.
 * The per-session ``Client`` factory ``lambda: Client(mcp)`` creates a
-  fresh in-process FastMCP client for every request, honouring the
-  FastMCP Q3 / contract §3.5 mandate.  No elicitation tool is declared
-  in this demo, so the forwarder's auto-decline default is never
+  fresh in-process FastMCP client for every request.  That's what keeps
+  elicitation handlers demultiplexed — ``fastmcp.Client`` binds a
+  single ``elicitation_handler`` at construction, so a shared client
+  cannot route concurrent prompts back to the right caller (see
+  ``docs/serving.md`` § Concepts).  No elicitation tool is declared in
+  this demo, so the forwarder's auto-decline default is never
   triggered.
 * ``deployment_label="demo"`` is echoed on every inference's tags as
   ``t0_agents.deployment=demo`` — verify it via ``curl /info`` or

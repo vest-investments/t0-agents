@@ -1,7 +1,7 @@
 """Async lifespan wiring for FastAPI.
 
-Phase D uses the lifespan context manager to invoke the two hooks that
-extend through later phases: :meth:`SessionFactory.startup` /
+The lifespan context manager invokes two pairs of hooks on startup /
+shutdown: :meth:`SessionFactory.startup` /
 :meth:`SessionFactory.shutdown` and :meth:`Agent.warmup`.  Both default
 to no-ops today but exist on the call path so extensions (embedded
 gateway warm-up, per-pod cache hydration) do not widen the public API.

@@ -3,13 +3,14 @@
 The public surface is :func:`create_app` and :func:`mount_agent`.  Both
 take an existing :class:`Agent` plus *exactly one* of three modes:
 
-* ``session_provider`` — caller-supplied :class:`SessionProvider` (Phase E
-  advanced path: auth, multi-tenant routing, telemetry, custom WS
+* ``session_provider`` — caller-supplied :class:`SessionProvider`
+  (advanced path: auth, multi-tenant routing, telemetry, custom WS
   elicitation wiring).  See ``docs/streaming.md``.
 * ``client_factory`` — zero-arg callable that builds a fresh
-  ``fastmcp.Client`` for every session.  Default Phase D path.  Optionally
-  paired with ``elicitation_client_factory`` (Phase E) for streaming WS.
-* ``share_client=True`` — reuse ``agent.tool_provider`` across every
+  ``fastmcp.Client`` for every session.  The default path for
+  non-streaming agents.  Optionally paired with
+  ``elicitation_client_factory`` for streaming WebSocket elicitation.
+* ``share_client=True`` — reuse the agent's tool provider across every
   session.  Safe only when no tool uses elicitation; the caller owns the
   ``Client``'s open/close lifecycle.
 
@@ -18,12 +19,16 @@ startup — no silent ambiguity.
 
 ``deployment_label``, when set, is merged into ``AgentConfig.tags`` as
 ``t0_agents.deployment=<label>`` before any session is built, so every
-inference record carries it automatically (resolved T0 Q3).
+inference and every forwarded feedback record carries the same
+"which surface?" observability tag.  ``namespace`` on ``AgentConfig``
+and ``deployment_label`` are orthogonal: the former routes variant
+sampling, the latter is pure metadata.
 
 ``streaming=True`` additionally mounts the SSE (``GET /chat/stream``) and
 WebSocket (``WS /chat/ws``) routes from
-:mod:`t0_agents.serve.streaming_routes`.  Default is ``False`` so Phase D
-deployments stay byte-identical.
+:mod:`t0_agents.serve.streaming_routes`.  Default is ``False``;
+batch-only deployments pay nothing for the streaming imports when they
+don't need them.
 """
 
 from __future__ import annotations

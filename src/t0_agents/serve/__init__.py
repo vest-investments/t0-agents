@@ -21,9 +21,10 @@ Public surface:
   ``elicitation_client_factory`` kwargs on :func:`create_app` for the
   simple path.  See ``docs/streaming.md``.
 
-Streaming elicitation (Phase E, ``streaming=True``) flows through
-:class:`~t0_agents.core.ElicitationForwarder`; the non-streaming Phase D
-HTTP surface continues to decline elicitation by default.
+Streaming elicitation (``streaming=True``) flows through
+:class:`~t0_agents.core.ElicitationForwarder`; the default non-streaming
+HTTP surface declines elicitation automatically when no remote resolver
+is wired.
 """
 
 from __future__ import annotations
