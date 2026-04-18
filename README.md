@@ -1,5 +1,9 @@
 # t0-agents
 
+<p align="center">
+  <img src="docs/assets/hero.png" alt="t0-agents" width="420">
+</p>
+
 The Pythonic agentic framework for [TensorZero](https://www.tensorzero.com/).
 
 Build LLM agents that discover and execute tools through [MCP](https://modelcontextprotocol.io/) (Model Context Protocol) while inheriting TensorZero's structured inference, episode tracking, and ClickHouse-backed observability. Every layer of the agent stack — memory, guardrails, streaming, multi-agent composition, HTTP serving, a terminal TUI, and a test harness — is opt-in so you only install what you need.
