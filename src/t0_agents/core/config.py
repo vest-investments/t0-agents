@@ -56,8 +56,8 @@ class AgentConfig:
             :class:`ConfigurationError` on name collisions.  Requires
             the orchestrator's ``tool_provider`` to be a
             ``fastmcp.Client`` wrapping an in-process ``FastMCP``
-            instance.  The default empty list preserves Phase A
-            byte-identity for single-agent configurations.
+            instance.  The default empty list leaves single-agent
+            configurations unaffected.
     """
 
     # Identity
@@ -75,14 +75,14 @@ class AgentConfig:
     tags: dict[str, str] | None = field(default=None)
     namespace: str | None = None
 
-    # Memory (Phase B)
+    # Memory
     memory: MemoryProvider | None = None
     memory_strategy: Literal["auto", "system_template", "prepended_message"] = "auto"
 
-    # Guardrails (Phase C)
+    # Guardrails
     guardrails: list[Guardrail] = field(default_factory=list)
 
-    # Multi-agent composition (Phase G)
+    # Multi-agent composition
     sub_agents: list[Agent] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -108,7 +108,8 @@ class AgentConfig:
             )
         if self.sub_agents:
             # Lazy import to dodge the core.agent ↔ core.config cycle;
-            # this only fires when the user opts in to Phase G composition.
+            # this only fires when the user opts in to multi-agent
+            # composition.
             from t0_agents.core.agent import Agent as _Agent
 
             for idx, sa in enumerate(self.sub_agents):
