@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway, Text, Thought
-from tensorzero.types import TensorZeroError
+from tensorzero.types import TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents import run_agent
 from t0_agents.mcp.loop import RECOVERABLE_INFERENCE_PATTERNS
@@ -263,6 +263,59 @@ class TestThoughtOnlyHandling:
 
         messages = [r.message for r in caplog.records]
         assert any("thought-only response used as fallback" in m for m in messages)
+
+    async def test_thought_summary_used_as_fallback(self) -> None:
+        """``Thought.summary`` content is mined when ``Thought.text`` is empty.
+
+        Anchors the gpt-oss / OpenAI o-series case where the model's content
+        arrives as ``ThoughtSummaryBlock`` entries on ``Thought.summary``
+        rather than on ``Thought.text``.  Before the fix the fallback only
+        read ``b.text`` and these responses came back empty.
+        """
+        r1 = FakeChatResponse(content=[
+            Thought(
+                text=None,
+                summary=[
+                    ThoughtSummaryBlock(text="step one"),
+                    ThoughtSummaryBlock(text="step two"),
+                ],
+            ),
+        ])
+        t0 = FakeT0([r1])
+        mcp = FakeMCPClient()
+
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], mcp),
+            "test",
+            "agent",
+        )
+
+        assert result.response == "step one\nstep two"
+        assert result.response_source == "thought"
+        assert result.turns == 1
+
+    async def test_thought_text_and_summary_concatenated(self) -> None:
+        """When a Thought has both ``text`` and ``summary``, both contribute."""
+        r1 = FakeChatResponse(content=[
+            Thought(
+                text="raw thought",
+                summary=[ThoughtSummaryBlock(text="summary line")],
+            ),
+        ])
+        t0 = FakeT0([r1])
+        mcp = FakeMCPClient()
+
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], mcp),
+            "test",
+            "agent",
+        )
+
+        assert "raw thought" in result.response
+        assert "summary line" in result.response
+        assert result.response_source == "thought"
 
 
 # --- TestToolChoice -----------------------------------------------------------

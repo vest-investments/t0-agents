@@ -130,7 +130,11 @@ class TurnStreamAssembler:
             )
             return
         if isinstance(block, ThoughtChunk):
-            delta = block.text or ""
+            # ThoughtChunk carries reasoning content via either ``text`` (raw
+            # thought) or ``summary_text`` (provider summary, e.g. gpt-oss
+            # harmony's analysis channel, OpenAI o-series reasoning summaries).
+            # Fold both into a single delta so callers see every channel.
+            delta = (block.text or "") + (block.summary_text or "")
             if not delta:
                 return
             self._thought[block.id] = self._thought.get(block.id, "") + delta
