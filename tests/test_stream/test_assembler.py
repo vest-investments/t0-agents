@@ -101,6 +101,74 @@ async def test_assembler_thought_chunks() -> None:
     assert thoughts[0].id == "r1"
 
 
+async def test_assembler_thought_summary_text_chunks() -> None:
+    """Reasoning emitted via ``summary_text`` flows as ``ThoughtDeltaEvent``.
+
+    Anchors the gpt-oss / o-series case where the provider populates
+    ``summary_text`` instead of ``text``; before the fix, every chunk was
+    silently dropped and the consumer saw an empty stream.
+    """
+    events = await _drain(
+        [
+            chat_chunk([thought_chunk(summary_text="reasoning ", block_id="r1")]),
+            chat_chunk([thought_chunk(summary_text="summary", block_id="r1")]),
+            final_chunk(),
+        ]
+    )
+    deltas = [e for e in events if isinstance(e, ThoughtDeltaEvent)]
+    assert [d.delta for d in deltas] == ["reasoning ", "summary"]
+    thoughts = [e for e in events if isinstance(e, ThoughtEvent)]
+    assert len(thoughts) == 1
+    assert thoughts[0].text == "reasoning summary"
+    assert thoughts[0].id == "r1"
+
+
+async def test_assembler_thought_text_and_summary_folded() -> None:
+    """When a single chunk carries both ``text`` and ``summary_text``,
+    the assembler folds them into one delta with a newline separator.
+
+    The newline mirrors ``mcp/loop.py``'s ``"\\n".join(...)`` over
+    ``Thought.text`` + ``Thought.summary[*].text`` so a consumer that
+    concatenates streamed deltas reconstructs the same string the
+    non-streaming path produces in ``AgentResult.response``.
+    """
+    events = await _drain(
+        [
+            chat_chunk(
+                [
+                    thought_chunk(
+                        text="raw",
+                        summary_text="summary",
+                        block_id="r1",
+                    )
+                ]
+            ),
+            final_chunk(),
+        ]
+    )
+    deltas = [e for e in events if isinstance(e, ThoughtDeltaEvent)]
+    assert len(deltas) == 1
+    assert deltas[0].delta == "raw\nsummary"
+    thoughts = [e for e in events if isinstance(e, ThoughtEvent)]
+    assert thoughts[0].text == "raw\nsummary"
+
+
+async def test_assembler_thought_empty_text_and_summary_dropped() -> None:
+    """Chunks with neither ``text`` nor ``summary_text`` content are skipped."""
+    events = await _drain(
+        [
+            chat_chunk([thought_chunk(text="", summary_text="", block_id="r1")]),
+            chat_chunk([thought_chunk(summary_text="real", block_id="r1")]),
+            final_chunk(),
+        ]
+    )
+    deltas = [e for e in events if isinstance(e, ThoughtDeltaEvent)]
+    # Only the non-empty chunk produces a delta.
+    assert [d.delta for d in deltas] == ["real"]
+    thoughts = [e for e in events if isinstance(e, ThoughtEvent)]
+    assert thoughts[0].text == "real"
+
+
 async def test_assembler_mixed_blocks_in_stream() -> None:
     events = await _drain(
         [

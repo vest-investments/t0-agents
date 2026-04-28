@@ -19,6 +19,7 @@ from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
     TextDeltaEvent,
+    ThoughtDeltaEvent,
 )
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import (
@@ -26,6 +27,7 @@ from tests._fake_t0 import (
     chat_chunk,
     final_chunk,
     text_chunk,
+    thought_chunk,
 )
 
 
@@ -70,6 +72,39 @@ async def test_agent_stream_text_only() -> None:
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].result.response == "hello"
     assert any(isinstance(e, TextDeltaEvent) for e in events)
+
+
+async def test_agent_stream_summary_text_populates_response() -> None:
+    """Reasoning models that emit content via ``summary_text`` produce a
+    populated ``AgentResult`` instead of an empty stream.
+
+    Regression: gpt-oss / OpenAI o-series providers route their analysis
+    channel through ``ThoughtChunk.summary_text``; before the assembler
+    learned that field, every chunk was dropped and the consumer saw
+    ``DoneEvent.result.response == ""``.
+    """
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([thought_chunk(summary_text="the answer ", block_id="r1")]),
+                chat_chunk([thought_chunk(summary_text="is 5", block_id="r1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(name="a", function_name="agent"),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    events = await _drain_stream(agent, "compute 2+3")
+
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].result.response == "the answer is 5"
+    assert events[-1].result.response_source == "thought"
+    assert any(isinstance(e, ThoughtDeltaEvent) for e in events)
+    assert not any(isinstance(e, TextDeltaEvent) for e in events)
 
 
 async def test_agent_stream_persists_memory() -> None:

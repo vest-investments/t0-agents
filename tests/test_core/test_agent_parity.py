@@ -16,13 +16,21 @@ from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
+from tensorzero.types import ThoughtSummaryBlock
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.core.types import ToolProvider
+from t0_agents.stream.events import DoneEvent
 from tests._fake_mcp import FakeMCPClient
-from tests._fake_t0 import FakeChatResponse, FakeT0
+from tests._fake_t0 import (
+    FakeChatResponse,
+    FakeT0,
+    chat_chunk,
+    final_chunk,
+    thought_chunk,
+)
 
 # ---------------------------------------------------------------------------
 # Fixture builders (local)
@@ -203,3 +211,54 @@ class TestAgentParity:
         await agent.run("hello")
 
         assert t0.calls[0]["dryrun"] is True
+
+    async def test_thought_summary_parity_run_vs_stream(self) -> None:
+        """``Agent.run`` and ``Agent.stream`` agree on summary-only thought content.
+
+        Reasoning providers (gpt-oss harmony, OpenAI o-series) ship their
+        analysis channel via ``Thought.summary`` (non-streaming) or
+        ``ThoughtChunk.summary_text`` (streaming).  Both paths must mine
+        the same content and end up with identical
+        ``response`` / ``response_source`` values, so a consumer can swap
+        between the two surfaces without behavioural drift.
+        """
+        # Same logical summary content modeled in each surface's native shape:
+        # - Non-streaming: one ``Thought.summary`` entry holding the full text.
+        # - Streaming: two same-id chunks whose ``summary_text`` deltas
+        #   concatenate (the assembler folds same-id chunks together).
+        # Both must surface identical ``response`` and ``response_source``.
+        run_t0 = FakeT0([
+            FakeChatResponse(
+                content=[
+                    Thought(
+                        text=None,
+                        summary=[ThoughtSummaryBlock(text="reasoning summary")],
+                    ),
+                ]
+            ),
+        ])
+        run_agent_obj = _agent(run_t0, FakeMCPClient())
+        run_result = await run_agent_obj.run("Q?")
+
+        stream_t0 = FakeT0(
+            responses=[
+                [
+                    chat_chunk(
+                        [thought_chunk(summary_text="reasoning ", block_id="r1")]
+                    ),
+                    chat_chunk(
+                        [thought_chunk(summary_text="summary", block_id="r1")]
+                    ),
+                    final_chunk(),
+                ]
+            ]
+        )
+        stream_agent_obj = _agent(stream_t0, FakeMCPClient())
+        events = [ev async for ev in stream_agent_obj.stream("Q?")]
+        done = events[-1]
+        assert isinstance(done, DoneEvent)
+
+        assert run_result.response == "reasoning summary"
+        assert run_result.response_source == "thought"
+        assert done.result.response == run_result.response
+        assert done.result.response_source == run_result.response_source

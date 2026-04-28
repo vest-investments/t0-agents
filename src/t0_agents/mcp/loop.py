@@ -374,13 +374,24 @@ async def run_agent(
                 if isinstance(b, Text) and b.text
             )
             # Thought-only fallback: if no Text blocks produced content,
-            # extract from Thought blocks and flag the source.
+            # extract from Thought blocks and flag the source.  ``Thought``
+            # carries reasoning via either ``text`` (raw) or ``summary``
+            # (a list of ``ThoughtSummaryBlock``, e.g. gpt-oss harmony's
+            # analysis channel or OpenAI o-series reasoning summaries) —
+            # both are mined so summary-only providers don't yield empty
+            # responses.
             response_source: Literal["text", "thought"] = "text"
             if not text:
-                thought_texts = [
-                    b.text for b in response.content
-                    if isinstance(b, Thought) and b.text
-                ]
+                thought_texts: list[str] = []
+                for b in response.content:
+                    if not isinstance(b, Thought):
+                        continue
+                    if b.text:
+                        thought_texts.append(b.text)
+                    if b.summary:
+                        thought_texts.extend(
+                            s.text for s in b.summary if s.text
+                        )
                 if thought_texts:
                     text = "\n".join(thought_texts)
                     response_source = "thought"

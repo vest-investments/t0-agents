@@ -94,9 +94,25 @@ def tool_call_chunk(
     )
 
 
-def thought_chunk(text: str, *, block_id: str = "th-1") -> ThoughtChunk:
-    """Build a ``ThoughtChunk`` with the given reasoning-text delta."""
-    return ThoughtChunk(id=block_id, text=text, type="thought")
+def thought_chunk(
+    text: str | None = None,
+    *,
+    summary_text: str | None = None,
+    block_id: str = "th-1",
+) -> ThoughtChunk:
+    """Build a ``ThoughtChunk`` carrying reasoning content.
+
+    Reasoning models surface content via either ``text`` (raw thought, the
+    common case) or ``summary_text`` (provider-side summary — e.g. gpt-oss
+    harmony's analysis channel, OpenAI o-series reasoning summaries).  Tests
+    pass either or both; at least one must be non-empty.
+    """
+    return ThoughtChunk(
+        id=block_id,
+        text=text,
+        summary_text=summary_text,
+        type="thought",
+    )
 
 
 def chat_chunk(
