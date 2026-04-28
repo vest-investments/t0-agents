@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.9.0] — Unreleased
 
+### Fixed
+
+- **Reasoning models that emit content via the summary channel no longer
+  yield empty responses.** ``ThoughtChunk.summary_text`` (streaming) and
+  ``Thought.summary[*].text`` (non-streaming) — populated by OpenAI
+  o-series reasoning summaries and harmony-format providers in some
+  configurations — were previously silently dropped because the
+  assembler and the ``mcp/loop.py`` thought-fallback only read the
+  ``text`` field.  Symptom: ``DoneEvent.result.response == ""`` and
+  no ``ThoughtDeltaEvent``s emitted for affected providers.
+  - The streaming assembler now folds ``text + summary_text`` into a
+    single ``ThoughtDeltaEvent`` delta.  When a chunk carries both, a
+    ``"\n"`` is interposed so the streamed content matches the
+    non-streaming path's ``"\n".join(...)`` of the same logical entries.
+  - The non-streaming Thought-fallback now mines
+    ``Thought.summary[*].text`` alongside ``Thought.text``.
+  - No public API or wire-format change; consumers that already render
+    ``thought_delta`` events automatically receive the recovered
+    content, and ``AgentResult.response_source`` correctly reports
+    ``"thought"`` when only summary content is present.
+
 ### Added
 
 - **Agent testing framework** (`from t0_agents.testing import MockGateway,
