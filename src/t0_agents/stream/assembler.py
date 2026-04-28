@@ -133,8 +133,14 @@ class TurnStreamAssembler:
             # ThoughtChunk carries reasoning content via either ``text`` (raw
             # thought) or ``summary_text`` (provider summary, e.g. gpt-oss
             # harmony's analysis channel, OpenAI o-series reasoning summaries).
-            # Fold both into a single delta so callers see every channel.
-            delta = (block.text or "") + (block.summary_text or "")
+            # Fold both into a single delta — when both are present we
+            # interpose a newline so the merged stream matches the
+            # ``mcp/loop.py`` non-streaming fallback's ``"\n".join(...)``
+            # of ``Thought.text`` + ``Thought.summary[*].text`` entries.
+            text_part = block.text or ""
+            summary_part = block.summary_text or ""
+            separator = "\n" if text_part and summary_part else ""
+            delta = text_part + separator + summary_part
             if not delta:
                 return
             self._thought[block.id] = self._thought.get(block.id, "") + delta

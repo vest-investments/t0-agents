@@ -125,14 +125,19 @@ async def test_assembler_thought_summary_text_chunks() -> None:
 
 async def test_assembler_thought_text_and_summary_folded() -> None:
     """When a single chunk carries both ``text`` and ``summary_text``,
-    the assembler folds them into one delta.
+    the assembler folds them into one delta with a newline separator.
+
+    The newline mirrors ``mcp/loop.py``'s ``"\\n".join(...)`` over
+    ``Thought.text`` + ``Thought.summary[*].text`` so a consumer that
+    concatenates streamed deltas reconstructs the same string the
+    non-streaming path produces in ``AgentResult.response``.
     """
     events = await _drain(
         [
             chat_chunk(
                 [
                     thought_chunk(
-                        text="raw ",
+                        text="raw",
                         summary_text="summary",
                         block_id="r1",
                     )
@@ -143,9 +148,9 @@ async def test_assembler_thought_text_and_summary_folded() -> None:
     )
     deltas = [e for e in events if isinstance(e, ThoughtDeltaEvent)]
     assert len(deltas) == 1
-    assert deltas[0].delta == "raw summary"
+    assert deltas[0].delta == "raw\nsummary"
     thoughts = [e for e in events if isinstance(e, ThoughtEvent)]
-    assert thoughts[0].text == "raw summary"
+    assert thoughts[0].text == "raw\nsummary"
 
 
 async def test_assembler_thought_empty_text_and_summary_dropped() -> None:
