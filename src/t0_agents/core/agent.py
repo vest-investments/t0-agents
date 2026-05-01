@@ -177,8 +177,16 @@ class Agent:
             GuardrailBlockedError: If any guardrail hard-aborts the run.
         """
         # --- 1. Load memory ---
+        # ``messages`` strategy uses load_history (called from
+        # _prepare_memory_injection); records are unused on that path so
+        # we skip the load() round-trip entirely.
         memory_records: list[MemoryRecord] = []
-        if self._config.memory is not None and episode_id is not None:
+        strategy = self._resolve_memory_strategy()
+        if (
+            self._config.memory is not None
+            and episode_id is not None
+            and strategy != "messages"
+        ):
             try:
                 raw_records = await self._config.memory.load(episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
@@ -190,8 +198,8 @@ class Agent:
                 )
 
         # --- 2. Prepare injection ---
-        effective_message, extra_kwargs = self._prepare_memory_injection(
-            user_message, memory_records,
+        effective_message, extra_kwargs = await self._prepare_memory_injection(
+            user_message, memory_records, episode_id=episode_id,
         )
 
         # --- 3. Set up guardrails ---
@@ -403,8 +411,15 @@ class Agent:
             GuardrailBlockedError: If any guardrail hard-aborts the run.
         """
         # --- 1. Load memory --- (mirrors run())
+        # ``messages`` strategy uses load_history; skip the records load
+        # for that path.
         memory_records: list[MemoryRecord] = []
-        if self._config.memory is not None and episode_id is not None:
+        strategy = self._resolve_memory_strategy()
+        if (
+            self._config.memory is not None
+            and episode_id is not None
+            and strategy != "messages"
+        ):
             try:
                 raw_records = await self._config.memory.load(episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
@@ -416,8 +431,8 @@ class Agent:
                 )
 
         # --- 2. Prepare injection ---
-        effective_message, extra_kwargs = self._prepare_memory_injection(
-            user_message, memory_records,
+        effective_message, extra_kwargs = await self._prepare_memory_injection(
+            user_message, memory_records, episode_id=episode_id,
         )
 
         # --- 3. Set up guardrails ---
@@ -621,7 +636,7 @@ class Agent:
 
     def _resolve_memory_strategy(
         self,
-    ) -> Literal["system_template", "prepended_message"]:
+    ) -> Literal["system_template", "prepended_message", "messages"]:
         """Resolve ``"auto"`` to a concrete strategy.
 
         The TensorZero SDK (v2026.4.0) does not expose a
@@ -629,6 +644,10 @@ class Agent:
         system schema is not possible.  ``"auto"`` therefore always
         resolves to ``"prepended_message"`` — the strategy that works
         with any function/variant without TOML changes.
+
+        ``"messages"`` is never selected by ``"auto"``; callers must
+        opt in explicitly because it requires the memory provider to
+        implement ``load_history``.
         """
         # TODO: When the TensorZero SDK gains a function-config
         # introspection API, inspect whether the system schema declares
@@ -639,26 +658,57 @@ class Agent:
             return "prepended_message"
         return strategy
 
-    def _prepare_memory_injection(
+    async def _prepare_memory_injection(
         self,
         user_message: str,
         records: list[MemoryRecord],
+        *,
+        episode_id: str | None,
     ) -> tuple[str, dict[str, Any]]:
         """Build the effective user message and extra kwargs for run_agent.
 
+        Dispatches on the resolved memory strategy.  For
+        ``"prepended_message"`` and ``"system_template"`` the *records*
+        list (already loaded by the caller via ``memory.load``) is rendered
+        into a string summary and surfaced either inside the user message
+        or as ``system_arguments``.  For ``"messages"`` the records list
+        is unused — instead this method calls ``memory.load_history`` to
+        retrieve a TZ-native ``list[Message]`` and returns it under the
+        ``prior_messages`` key in *extra_kwargs*.
+
         Returns:
             A ``(effective_message, extra_kwargs)`` tuple.  *extra_kwargs*
-            is empty for the ``"prepended_message"`` strategy and contains
-            ``system_arguments`` for the ``"system_template"`` strategy.
+            is empty for the ``"prepended_message"`` strategy, contains
+            ``system_arguments`` for the ``"system_template"`` strategy,
+            and contains ``prior_messages`` for the ``"messages"`` strategy.
         """
+        strategy = self._resolve_memory_strategy()
+
+        if strategy == "messages":
+            if self._config.memory is None or episode_id is None:
+                return user_message, {}
+            try:
+                history = await self._config.memory.load_history(  # type: ignore[attr-defined]
+                    episode_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Memory load_history failed for episode %s; proceeding "
+                    "without prior context",
+                    episode_id,
+                    exc_info=True,
+                )
+                return user_message, {}
+            if not history:
+                return user_message, {}
+            return user_message, {"prior_messages": list(history)}
+
         if not records:
             return user_message, {}
 
         summary = render_memory_summary(records)
         if not summary:
             return user_message, {}
-
-        strategy = self._resolve_memory_strategy()
 
         if strategy == "system_template":
             return user_message, {

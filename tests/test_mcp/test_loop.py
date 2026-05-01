@@ -653,3 +653,70 @@ class TestRunAgent:
             "agent",
         )
         assert t0.calls[0]["namespace"] is None
+
+    async def test_prior_messages_seeds_history(self) -> None:
+        """prior_messages prepended to the loop's messages list before
+        the new user prompt is appended."""
+        from tensorzero import Message
+
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        prior = [
+            Message(role="user", content="earlier question"),
+            Message(role="assistant", content=[Text(text="earlier answer")]),
+        ]
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "follow-up",
+            "agent",
+            prior_messages=prior,
+        )
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert len(first_messages) == 3
+        assert first_messages[0]["role"] == "user"
+        assert first_messages[0]["content"] == "earlier question"
+        assert first_messages[1]["role"] == "assistant"
+        assert first_messages[2]["role"] == "user"
+        assert first_messages[2]["content"] == "follow-up"
+
+    async def test_prior_messages_none_byte_identical(self) -> None:
+        """prior_messages=None matches the legacy single-user-message shape."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "hello",
+            "agent",
+        )
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_prior_messages_empty_list_acts_like_none(self) -> None:
+        """Empty list is treated as no seed — single user message goes in."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "hello",
+            "agent",
+            prior_messages=[],
+        )
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_prior_messages_does_not_alias_caller_list(self) -> None:
+        """The loop appends to a copy, never mutating the caller's list."""
+        from tensorzero import Message
+
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        prior = [Message(role="user", content="seed")]
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "now",
+            "agent",
+            prior_messages=prior,
+        )
+        # If the loop aliased the list, ``prior`` would now have len 2 (or
+        # more after tool roundtrips).  Caller-owned data must stay intact.
+        assert len(prior) == 1

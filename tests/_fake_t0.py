@@ -69,6 +69,20 @@ class FakeFeedbackResponse:
     feedback_id: UUID = field(default_factory=uuid4)
 
 
+@dataclass
+class FakeListInferencesResponse:
+    """Duck-typed stand-in for ``tensorzero.GetInferencesResponse``.
+
+    ``run_agent`` does not call ``list_inferences`` itself — this is for
+    ``TensorZeroMemory`` and any other consumer that inspects the
+    observability API.  ``inferences`` is intentionally typed as a free-
+    form list so tests can drop in real ``StoredInferenceChat`` instances
+    or hand-rolled namespaces with the same shape.
+    """
+
+    inferences: list[Any] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Streaming helpers (Phase E)
 # ---------------------------------------------------------------------------
@@ -169,12 +183,20 @@ class FakeT0:
     def __init__(
         self,
         responses: list[FakeChatResponse | StreamScript | Exception],
+        *,
+        list_inferences_responses: (
+            list[FakeListInferencesResponse | Exception] | None
+        ) = None,
     ) -> None:
         self._queue: list[FakeChatResponse | StreamScript | Exception] = list(
             responses
         )
+        self._list_queue: list[FakeListInferencesResponse | Exception] = list(
+            list_inferences_responses or []
+        )
         self.calls: list[dict[str, Any]] = []
         self.feedback_calls: list[dict[str, Any]] = []
+        self.list_inferences_calls: list[dict[str, Any]] = []
 
     async def inference(
         self, **kwargs: Any
@@ -214,6 +236,29 @@ class FakeT0:
     async def feedback(self, **kwargs: Any) -> FakeFeedbackResponse:
         self.feedback_calls.append(dict(kwargs))
         return FakeFeedbackResponse()
+
+    async def list_inferences(
+        self, *, request: Any,
+    ) -> FakeListInferencesResponse:
+        """Pop the next ``list_inferences_responses`` entry.
+
+        Captures the inbound :class:`ListInferencesRequest` on
+        ``self.list_inferences_calls`` so tests can assert request
+        shape (filters, episode_id, order_by, limit) in addition to
+        the records the consumer derives from the response.
+
+        Raises :class:`AssertionError` when the queue is empty so
+        tests fail loudly rather than dispatching unscripted reads.
+        """
+        self.list_inferences_calls.append({"request": request})
+        if not self._list_queue:
+            raise AssertionError(
+                "FakeT0: ran out of canned list_inferences responses"
+            )
+        item = self._list_queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 async def _script_iterator(

@@ -276,3 +276,270 @@ class TestMemoryValidation:
                 function_name="agent",
                 memory_strategy="invalid",  # type: ignore[arg-type]
             )
+
+
+class TestMessagesStrategyValidation:
+    """``memory_strategy='messages'`` requires a provider with load_history."""
+
+    def test_missing_memory_raises(self) -> None:
+        with pytest.raises(ConfigurationError, match="load_history"):
+            AgentConfig(
+                name="test",
+                function_name="agent",
+                memory_strategy="messages",
+                memory=None,
+            )
+
+    def test_provider_without_load_history_raises(self) -> None:
+        # InMemoryMemory does not implement load_history.
+        with pytest.raises(ConfigurationError, match="load_history"):
+            AgentConfig(
+                name="test",
+                function_name="agent",
+                memory_strategy="messages",
+                memory=InMemoryMemory(),
+            )
+
+    def test_provider_with_load_history_accepts(self) -> None:
+        class HistoryProvider:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(
+                self, episode_id: str
+            ) -> list[Any] | None:
+                return None
+
+        # Construction must not raise — the duck-typed provider satisfies
+        # both the MemoryProvider Protocol and the load_history extension.
+        cfg = AgentConfig(
+            name="test",
+            function_name="agent",
+            memory_strategy="messages",
+            memory=cast(MemoryProvider, HistoryProvider()),
+        )
+        assert cfg.memory_strategy == "messages"
+
+
+class TestMessagesStrategyInjection:
+    """Verify Agent threads load_history's output through prior_messages."""
+
+    async def test_load_history_seeds_prior_messages(self) -> None:
+        from tensorzero import Message, Text
+
+        class FakeHistoryMem:
+            def __init__(self) -> None:
+                self.load_calls = 0
+                self.history_calls = 0
+
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                self.load_calls += 1
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(
+                self, episode_id: str
+            ) -> list[Message] | None:
+                self.history_calls += 1
+                return [
+                    Message(role="user", content="earlier"),
+                    Message(role="assistant", content=[Text(text="prior reply")]),
+                ]
+
+        mem = FakeHistoryMem()
+        ep = str(_EPISODE)
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+
+        await agent.run("now", episode_id=ep)
+
+        # load() must NOT be called when strategy is "messages".
+        assert mem.load_calls == 0
+        # load_history is the only read path.
+        assert mem.history_calls == 1
+        # The first inference's input.messages = [prior..., {user, "now"}].
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert len(first_messages) == 3
+        assert first_messages[0]["role"] == "user"
+        assert first_messages[0]["content"] == "earlier"
+        assert first_messages[1]["role"] == "assistant"
+        assert first_messages[2]["role"] == "user"
+        assert first_messages[2]["content"] == "now"
+
+    async def test_fresh_episode_skips_load_history(self) -> None:
+        """No episode_id → no prior history fetch; behaves like a new run."""
+
+        class FakeHistoryMem:
+            def __init__(self) -> None:
+                self.history_calls = 0
+
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(self, episode_id: str) -> list[Any] | None:
+                self.history_calls += 1
+                return None
+
+        mem = FakeHistoryMem()
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+
+        await agent.run("hello")  # no episode_id
+
+        assert mem.history_calls == 0
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_load_history_returns_none_no_seeding(self) -> None:
+        """Empty episode → fall through to the no-history path."""
+
+        class EmptyHistoryMem:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(self, episode_id: str) -> list[Any] | None:
+                return None
+
+        mem = EmptyHistoryMem()
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+        await agent.run("hello", episode_id=str(_EPISODE))
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_load_history_failure_is_non_fatal(self) -> None:
+        """If load_history raises, run still completes with empty history."""
+
+        class FailingHistoryMem:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(self, episode_id: str) -> list[Any] | None:
+                raise RuntimeError("gateway down")
+
+        mem = FailingHistoryMem()
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+        result = await agent.run("hello", episode_id=str(_EPISODE))
+        assert result.response == "ok"
+        first_messages = t0.calls[0]["input"]["messages"]
+        # Falls through to the no-history path: single user message.
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+
+class TestMessagesStrategyStreamParity:
+    """Agent.stream must mirror Agent.run's messages-strategy flow."""
+
+    async def test_stream_threads_prior_messages(self) -> None:
+        from tensorzero import Message
+        from tensorzero.types import TextChunk
+
+        from t0_agents.stream.events import DoneEvent
+        from tests._fake_t0 import chat_chunk, final_chunk
+
+        class FakeHistoryMem:
+            def __init__(self) -> None:
+                self.history_calls = 0
+
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(
+                self, episode_id: str
+            ) -> list[Message] | None:
+                self.history_calls += 1
+                return [Message(role="user", content="seed")]
+
+        mem = FakeHistoryMem()
+        ep = str(_EPISODE)
+        # Streaming script: one text chunk, one final usage chunk.
+        t0 = FakeT0(
+            [
+                [
+                    chat_chunk([TextChunk(id="t-1", text="ok", type="text")],
+                               episode_id=_EPISODE),
+                    final_chunk(episode_id=_EPISODE),
+                ]
+            ]
+        )
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+        events: list[Any] = []
+        async for event in agent.stream("now", episode_id=ep):
+            events.append(event)
+
+        assert mem.history_calls == 1
+        # DoneEvent at the tail.
+        assert isinstance(events[-1], DoneEvent)
+        # Streamed inference saw prior_messages + new user.
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages[0]["role"] == "user"
+        assert first_messages[0]["content"] == "seed"
+        assert first_messages[1]["role"] == "user"
+        assert first_messages[1]["content"] == "now"
