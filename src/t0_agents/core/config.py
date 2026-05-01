@@ -13,7 +13,9 @@ from t0_agents.core.types import Guardrail, MemoryProvider
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
 
-_VALID_MEMORY_STRATEGIES = frozenset({"auto", "system_template", "prepended_message"})
+_VALID_MEMORY_STRATEGIES = frozenset(
+    {"auto", "system_template", "prepended_message", "messages"}
+)
 
 
 @dataclass(slots=True)
@@ -42,6 +44,13 @@ class AgentConfig:
             that requires no TOML variant support).
             ``"system_template"`` passes memory via ``input.system.arguments``.
             ``"prepended_message"`` prepends a text summary to the user message.
+            ``"messages"`` threads the prior conversation as a TensorZero-
+            native ``input.messages`` history; requires the memory
+            provider to implement ``load_history(episode_id) -> list[Message]
+            | None`` (e.g. :class:`~t0_agents.memory.TensorZeroMemory`).
+            Recommended whenever the backend can supply structured
+            history because it sidesteps the unbounded summary growth
+            that ``prepended_message`` exhibits across turns.
         guardrails: Optional list of :class:`Guardrail` instances.  When
             non-empty, the ``Agent`` wraps the tool provider with a
             ``GuardedToolProvider`` that fires ``before_tool`` / ``after_tool``
@@ -77,7 +86,9 @@ class AgentConfig:
 
     # Memory
     memory: MemoryProvider | None = None
-    memory_strategy: Literal["auto", "system_template", "prepended_message"] = "auto"
+    memory_strategy: Literal[
+        "auto", "system_template", "prepended_message", "messages"
+    ] = "auto"
 
     # Guardrails
     guardrails: list[Guardrail] = field(default_factory=list)
@@ -106,6 +117,23 @@ class AgentConfig:
                 f"AgentConfig.memory_strategy must be one of "
                 f"{sorted(_VALID_MEMORY_STRATEGIES)}, got {self.memory_strategy!r}"
             )
+        if self.memory_strategy == "messages":
+            if self.memory is None:
+                raise ConfigurationError(
+                    "memory_strategy='messages' requires a memory provider "
+                    "that implements load_history(episode_id) -> "
+                    "list[Message] | None. Pass AgentConfig(..., "
+                    "memory=TensorZeroMemory(...)) or another compatible "
+                    "backend."
+                )
+            if not hasattr(self.memory, "load_history"):
+                raise ConfigurationError(
+                    f"memory_strategy='messages' requires the memory "
+                    f"provider to implement load_history(episode_id) -> "
+                    f"list[Message] | None. "
+                    f"{type(self.memory).__name__} does not — extend it or "
+                    f"swap to TensorZeroMemory."
+                )
         if self.sub_agents:
             # Lazy import to dodge the core.agent ↔ core.config cycle;
             # this only fires when the user opts in to multi-agent

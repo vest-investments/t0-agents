@@ -87,16 +87,23 @@ class StreamingAgentLoop:
         namespace: str | None = None,
         system_arguments: dict[str, Any] | None = None,
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
+        prior_messages: list[Message] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Drive the streaming loop and yield every event.
 
         The final yielded event is always a :class:`DoneEvent` wrapping the
         accumulated :class:`AgentResult`.  Raises :class:`MaxTurnsExceededError`
         if ``max_turns`` is exhausted without a tool-call-free turn.
+
+        ``prior_messages`` mirrors the kwarg of the same name on
+        :func:`~t0_agents.mcp.loop.run_agent` — when supplied, the loop
+        seeds ``messages`` with the prior conversation before appending
+        the new user prompt.  Used by the ``messages`` memory strategy.
         """
         mcp_tools = await tool_provider.list_tools()
         t0_tools = convert_tools(mcp_tools)
-        messages: list[Message] = [Message(role="user", content=user_message)]
+        messages: list[Message] = list(prior_messages) if prior_messages else []
+        messages.append(Message(role="user", content=user_message))
         inference_ids: list[str] = []
         executor = (
             execute_tool_calls_parallel if parallel_tools else execute_tool_calls
