@@ -3,6 +3,7 @@
 from t0_agents.core.types import MemoryProvider
 from t0_agents.memory.base import MemoryRecord, render_memory_summary
 from t0_agents.memory.in_memory import InMemoryMemory
+from t0_agents.memory.tensorzero import TensorZeroMemory
 
 try:
     from t0_agents.memory.sqlite import SqliteMemory
@@ -14,5 +15,6 @@ __all__ = [
     "MemoryProvider",
     "MemoryRecord",
     "SqliteMemory",
+    "TensorZeroMemory",
     "render_memory_summary",
 ]
