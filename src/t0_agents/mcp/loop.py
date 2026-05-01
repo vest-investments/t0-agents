@@ -217,6 +217,7 @@ async def run_agent(
     namespace: str | None = None,
     system_arguments: dict[str, Any] | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
+    prior_messages: list[Message] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -277,6 +278,15 @@ async def run_agent(
             from ``response.usage.cost`` so ``max_cost`` can abort the
             run at the next tool call. ``None`` (the default) is a no-op
             that preserves today's behaviour byte-for-byte.
+        prior_messages: Optional TensorZero-native message history to
+            seed the loop with.  Used by the ``messages`` memory
+            strategy (``Agent`` with ``memory_strategy="messages"`` and a
+            provider that exposes ``load_history``) to thread a prior
+            conversation through ``input.messages`` without
+            stringifying it into the user prompt.  When ``None`` (the
+            default) or empty, the loop starts with a single
+            ``Message(role="user", content=user_message)``, byte-
+            identical to the pre-``prior_messages`` behaviour.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -290,7 +300,8 @@ async def run_agent(
     """
     mcp_tools = await mcp_client.list_tools()
     t0_tools = convert_tools(mcp_tools)
-    messages: list[Message] = [Message(role="user", content=user_message)]
+    messages: list[Message] = list(prior_messages) if prior_messages else []
+    messages.append(Message(role="user", content=user_message))
     inference_ids: list[str] = []
     executor = execute_tool_calls_parallel if parallel_tools else execute_tool_calls
 
