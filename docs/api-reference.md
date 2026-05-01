@@ -43,6 +43,7 @@ async def run_agent(
     parallel_tools: bool = False,
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
+    prior_messages: list[Message] | None = None,
 ) -> AgentResult:
 ```
 
@@ -60,6 +61,7 @@ async def run_agent(
 | `parallel_tools` | `bool` | `False` | If `True`, dispatches tool calls concurrently via `asyncio.gather`. Otherwise sequential. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
+| `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.run` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
 
 ### Returns
 

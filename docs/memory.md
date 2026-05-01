@@ -24,12 +24,15 @@ from t0_agents.memory import (
 
 ## Installation
 
-`InMemoryMemory`, `MemoryRecord`, and `render_memory_summary` ship with
-the base distribution. `SqliteMemory` lives behind an opt-in extra
-because it pulls [`aiosqlite`](https://pypi.org/project/aiosqlite/):
+`InMemoryMemory`, `TensorZeroMemory`, `MemoryRecord`, and
+`render_memory_summary` ship with the base distribution.
+`TensorZeroMemory` is included because the `tensorzero` SDK is already
+a base dependency — there is nothing to install separately.
+`SqliteMemory` lives behind an opt-in extra because it pulls
+[`aiosqlite`](https://pypi.org/project/aiosqlite/):
 
 ```bash
-# Base (InMemoryMemory only)
+# Base (InMemoryMemory + TensorZeroMemory)
 pip install t0-agents
 
 # With SQLite persistence
@@ -198,16 +201,22 @@ configuration or any tool schemas.
 agent.run(message, episode_id=<id or None>)
    │
    ├─ 1. Load          memory.load(episode_id)  ─►  List[MemoryRecord]
-   │                   (skipped when episode_id is None)
+   │                   (skipped when episode_id is None or
+   │                    when memory_strategy="messages")
    │
    ├─ 2. Inject        render_memory_summary(records)
    │                   │
    │                   ├─ strategy "prepended_message":
    │                   │    summary prepended to the user message
    │                   │
-   │                   └─ strategy "system_template":
-   │                        summary passed via
-   │                        input.system.arguments.memory_context
+   │                   ├─ strategy "system_template":
+   │                   │    summary passed via
+   │                   │    input.system.arguments.memory_context
+   │                   │
+   │                   └─ strategy "messages":
+   │                        memory.load_history(episode_id) ─► list[Message]
+   │                        threaded through input.messages verbatim;
+   │                        records are NOT used on this path
    │
    ├─ 3. Run           run_agent(...)        ← regular loop, no memory knowledge
    │
@@ -418,6 +427,64 @@ CREATE INDEX idx_memory_episode ON memory_records(episode_id);
 orders by `id DESC` (most recent first) and uses SQLite's
 `LIKE ... COLLATE NOCASE` for case-insensitive matching.
 
+### `TensorZeroMemory`
+
+Reads cross-turn memory from TensorZero's `list_inferences` API. Ships
+in the base distribution because `tensorzero` is already a base
+dependency.
+
+```python
+class TensorZeroMemory:
+    DEFAULT_LOAD_LIMIT = 10
+
+    def __init__(
+        self,
+        gateway: AsyncTensorZeroGateway,
+        *,
+        function_name: str | None = None,
+        tag_filter: dict[str, str] | None = None,
+        extra_filters: InferenceFilter | None = None,
+        load_limit: int = DEFAULT_LOAD_LIMIT,
+        experimental_search: bool = False,
+    ) -> None: ...
+
+    # MemoryProvider Protocol
+    async def load(self, episode_id: str) -> list[MemoryRecord]: ...
+    async def save(self, record: MemoryRecord) -> None: ...
+    async def search(
+        self, query: str, *, limit: int = 5,
+    ) -> list[MemoryRecord]: ...
+
+    # Native-history extension
+    async def load_history(
+        self, episode_id: str,
+    ) -> list[Message] | None: ...
+```
+
+| Parameter | Behaviour |
+|---|---|
+| `gateway` | An open `AsyncTensorZeroGateway`. Must outlive the memory instance — `load`/`load_history` issue calls on it. |
+| `function_name` | Filter inferences by TensorZero function name. Strongly recommended for partition-pruning on ClickHouse-backed observability stores; `None` queries across functions. |
+| `tag_filter` | Equality-only convenience: each `(key, value)` pair becomes an `InferenceFilterTag(=)` and the pairs are AND-combined. Pair with the same tags on `AgentConfig.tags` so reads and writes share a tenant scope. |
+| `extra_filters` | Raw `InferenceFilter` passthrough for non-equality predicates (`InferenceFilterTime`, `InferenceFilterOr`, manual AND/NOT trees). AND-combined with `tag_filter` when both are set. |
+| `load_limit` | Maximum number of inferences `load` may return. Defaults to `10`, matching `render_memory_summary`'s `max_records`. |
+| `experimental_search` | When `True`, `search` forwards the query to TZ's `search_query_experimental`. The endpoint is flagged experimental in the SDK; defaults to `False` (no-op). |
+
+`load` reverses the gateway's DESC-by-timestamp results to oldest-
+first and produces one `MemoryRecord` per chat inference that emitted
+text. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids`
+contains a single id — this backend exposes one record per inference,
+not per agent run.
+
+`load_history` reuses the most recent inference's `input.messages` as
+the cumulative history (TZ accumulates within an episode). Stored
+content blocks are converted to runtime equivalents (`Text`,
+`RawText`, `ToolCall`, `ToolResult`, `Thought`); `Template`, `File`,
+and `Unknown` blocks are dropped with a single warning per call.
+
+`save` is a no-op: TZ wrote the row at inference time. `search`
+returns `[]` unless opted in via `experimental_search=True`.
+
 ### `AgentConfig` fields
 
 ```python
@@ -426,7 +493,7 @@ class AgentConfig:
     # …
     memory: MemoryProvider | None = None
     memory_strategy: Literal[
-        "auto", "system_template", "prepended_message",
+        "auto", "system_template", "prepended_message", "messages",
     ] = "auto"
     # …
 ```
@@ -434,7 +501,7 @@ class AgentConfig:
 | Field | Type | Default | Behaviour |
 |---|---|---|---|
 | `memory` | `MemoryProvider \| None` | `None` | When `None`, the `Agent` skips load and save entirely. When set, `Agent.__init__` validates the instance against the Protocol and raises `ConfigurationError` on mismatch. |
-| `memory_strategy` | `Literal["auto", "system_template", "prepended_message"]` | `"auto"` | How loaded records are injected. Validated at `AgentConfig.__post_init__`; an invalid value raises `ConfigurationError` before the `Agent` is constructed. |
+| `memory_strategy` | `Literal["auto", "system_template", "prepended_message", "messages"]` | `"auto"` | How loaded records are injected. Validated at `AgentConfig.__post_init__`; an invalid value raises `ConfigurationError`, as does picking `"messages"` against a backend that does not implement `load_history`. |
 
 ---
 
@@ -445,6 +512,7 @@ class AgentConfig:
 | `"auto"` (default) | Currently resolves to `"prepended_message"`. | You haven't decided yet, or you want the framework to pick the right path once TensorZero exposes variant introspection. |
 | `"prepended_message"` | Text summary is prepended to the user message, separated by `---`. | Works with any TensorZero function or variant. No TOML changes required. |
 | `"system_template"` | Summary is passed to the gateway as `input.system.arguments.memory_context`. | Your variant declares a MiniJinja system template with a `memory_context` variable. Keeps memory out of the message history. |
+| `"messages"` | The prior conversation flows through `input.messages` as a TZ-native message history. No string rendering. | Pair with `TensorZeroMemory` (or any backend that implements `load_history`). Cleanest multi-turn semantics; preserves tool calls and tool results across turns; sidesteps the unbounded summary growth that `"prepended_message"` exhibits when the backend re-reads its own writes. |
 
 ### Using `"system_template"`
 
@@ -525,6 +593,153 @@ agent = Agent(
 ```
 
 The DB file and table are created automatically on first write.
+
+---
+
+## Reading memory from TensorZero observability
+
+`TensorZeroMemory` is the third reference backend, and it has a
+different shape from the first two: it does not *store* anything. The
+TensorZero gateway already persists every chat inference to ClickHouse
+at the moment the call is made, so a "memory" that wraps the
+gateway's own observability log is simultaneously the cheapest backend
+to operate and the most aligned with TensorZero's design — episodes
+are *defined* as the unit of cross-inference correlation. This backend
+just exposes that log as a `MemoryProvider`.
+
+The trade-off is that every `Agent.run` with an `episode_id` adds one
+HTTP round-trip to the gateway before the inference (the read of the
+prior history) — the gateway is the source of truth, so each turn
+re-reads it. With the recommended `memory_strategy="messages"` that
+read is one `list_inferences(limit=1)` call; with the records-shaped
+strategies it is `limit=10` by default. Locally the round-trip is
+~30–50 ms; against a remote TZ deployment, plan accordingly.
+
+### Quickstart
+
+```python
+from fastmcp import Client, FastMCP
+from tensorzero import AsyncTensorZeroGateway
+
+from t0_agents import Agent, AgentConfig
+from t0_agents.memory import TensorZeroMemory
+
+
+mcp = FastMCP("demo")
+
+
+async def main() -> None:
+    async with await AsyncTensorZeroGateway.build_http(
+        gateway_url="http://localhost:3000",
+    ) as t0, Client(mcp) as client:
+        agent = Agent(
+            AgentConfig(
+                name="assistant",
+                function_name="agent",
+                memory=TensorZeroMemory(
+                    t0,
+                    function_name="agent",
+                    tag_filter={"customer_id": "alice"},
+                ),
+                memory_strategy="messages",
+                tags={"customer_id": "alice"},
+            ),
+            t0=t0,
+            tool_provider=client,
+        )
+
+        r1 = await agent.run("My name is Alice. Please remember.")
+        r2 = await agent.run(
+            "What is my name?", episode_id=r1.episode_id,
+        )
+        print(r2.response)  # → "Your name is Alice."
+```
+
+Pair the `tag_filter` on the memory with the same key/value on
+`AgentConfig.tags`. The gateway tags every inference with the agent's
+configured tags; the memory's filter scopes reads to those same tags.
+With matching tags on both sides a single `customer_id` (or any other
+domain key) gives you tenant isolation by construction.
+
+### Why pick `memory_strategy="messages"`
+
+The two earlier strategies render memory into a string — either
+prepended to the user message or passed as a `system_arguments` field.
+That round-trip is fine for in-process backends like `InMemoryMemory`
+and `SqliteMemory` because they store the *original* user message
+(not the prepended one) and the next read returns clean records.
+
+`TensorZeroMemory` reads from TZ, which records what the gateway
+*received* — i.e. the rendered, prepended user message. With the
+default `"prepended_message"` strategy, every subsequent turn would
+prepend a summary that itself contains the previous summaries,
+turning N turns into O(2^N) tokens worth of nested history. The
+`"messages"` strategy bypasses string rendering entirely:
+`load_history` returns a TZ-native `list[Message]` — already in the
+shape the gateway accepts — and the agent threads it through
+`input.messages`. Tool calls and tool results from prior turns are
+preserved alongside the user/assistant text, so the model can reason
+about its own earlier work.
+
+If you do choose `"system_template"` (because your variant has a
+MiniJinja template that ships with the function), `TensorZeroMemory`
+works against it without any further changes. Only the
+`"prepended_message"` path has the unbounded-growth pitfall.
+
+### Filters
+
+Two complementary kwargs: `tag_filter` for the equality-only common
+case (it covers `customer_id`, `tenant`, `env`, etc.) and
+`extra_filters` for everything else.
+
+```python
+from tensorzero import InferenceFilterTime
+
+memory = TensorZeroMemory(
+    t0,
+    function_name="agent",
+    tag_filter={"customer_id": "alice"},
+    extra_filters=InferenceFilterTime(
+        comparison_operator=">=",
+        time="2026-01-01T00:00:00Z",
+    ),
+)
+```
+
+Both are AND-combined when both are populated; either is accepted
+alone. `tag_filter` builds one `InferenceFilterTag(=)` per dict
+entry. For `!=` predicates, OR/NOT trees, or anything else the
+`InferenceFilter` union supports, build the filter manually and pass
+it via `extra_filters` (or subclass `TensorZeroMemory` and override
+the private `_build_filters` method if you want full control).
+
+### Reading and saving semantics
+
+| Method | Behaviour |
+|---|---|
+| `load(episode_id)` | Issues `list_inferences(limit=load_limit, order_by=DESC)` and returns one `MemoryRecord` per chat inference that emitted text. JSON-output and tool-call-only inferences are skipped. Reversed to oldest-first to match `InMemoryMemory` / `SqliteMemory`. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids` is a single-element list — this backend exposes one record per inference, not per agent run. |
+| `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes. |
+| `save(record)` | No-op. The gateway already persisted the row at inference time; calling `save` again would duplicate the observability entry. |
+| `search(query, *, limit=5)` | Returns `[]` by default. Pass `experimental_search=True` to the constructor to opt in; the query is forwarded to TZ's `search_query_experimental` field. The gateway flags that endpoint as experimental and warns it may cause full-table scans, so it is not appropriate for low-latency request paths. |
+
+### Read-after-write timing
+
+TensorZero's writer is asynchronous on the gateway side. Under heavy
+local-Docker load, the row for an inference may not be visible to
+`list_inferences` for a fraction of a second. Production paths read
+the *prior* turn's history, not the inference that just happened, so
+this is not normally observable. Tests that immediately read after
+writing should sleep ~1 s before the read; never sleep in production
+code — make the consumer of `load_history` resilient to occasional
+empty results instead.
+
+### Lifetime
+
+`TensorZeroMemory` keeps a reference to the gateway. The gateway must
+outlive the memory instance — close the `AsyncTensorZeroGateway` only
+after every `Agent.run` / `Agent.stream` that depends on the memory has
+completed. Inside `t0_agents.serve`, build the memory inside the
+per-session `SessionFactory` so each request gets its own scope.
 
 ---
 
@@ -719,6 +934,7 @@ calls in a `try / except Exception`, logs a warning, and continues.
 | Failure | Effect | Log level | Can I observe it? |
 |---|---|---|---|
 | `memory.load` raises | Run proceeds with an empty context. | `WARNING` (with traceback). | Yes — `logging.getLogger("t0_agents")` or a child logger. |
+| `memory.load_history` raises (`memory_strategy="messages"`) | Run proceeds with no prior messages. | `WARNING` (with traceback). | Yes — same logger. |
 | `memory.save` raises | `AgentResult` is still returned unchanged. | `WARNING` (with traceback). | Yes — same logger. |
 
 If you want hard failure instead, wrap your backend and raise
@@ -781,6 +997,13 @@ and tool-level `McpError` / `ToolError` wrapping, see
   one process. Across processes writing the same file, contention
   manifests as `database is locked` retries (aiosqlite default
   behaviour); for heavy write traffic, move to Redis or Postgres.
+- `TensorZeroMemory` holds an `AsyncTensorZeroGateway` reference and
+  delegates concurrency to whatever the gateway provides. Each
+  `load`/`load_history` is one HTTP round-trip; safety across
+  concurrent `Agent.run` calls follows the gateway's connection pool.
+  Build the memory inside the per-session `SessionFactory` in
+  `t0_agents.serve` so the gateway lifetime always wraps the memory
+  lifetime, never the other way round.
 - Custom backends are whatever their driver guarantees. Document the
   concurrency model where you document the backend.
 
@@ -794,6 +1017,12 @@ tool works — the Agent never holds a long-lived connection.
 
 For stronger durability (cross-node replication, point-in-time
 recovery), swap in a Postgres or Redis implementation.
+
+`TensorZeroMemory` inherits its durability from TensorZero — the
+gateway is the writer, ClickHouse is the store. Whatever your TZ
+deployment promises (single-node Docker, a managed cloud cluster, a
+self-managed replicated ClickHouse) is what your memory promises. No
+in-process state to back up.
 
 ### Size management
 

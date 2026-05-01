@@ -29,6 +29,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`TensorZeroMemory` backend**
+  (`from t0_agents.memory import TensorZeroMemory`).  Reads cross-turn
+  memory directly from TensorZero's `list_inferences` observability API
+  instead of running a parallel store.  Ships in the base distribution —
+  no new extra, no new dependency, because `tensorzero` is already
+  required.  `save()` is a no-op (TZ is the writer); `load()` returns
+  one `MemoryRecord` per chat inference that emitted text, oldest-first.
+  Multi-tenant filtering via `tag_filter: dict[str, str]` (equality,
+  AND-combined) plus `extra_filters: InferenceFilter` passthrough for
+  time/AND/OR/NOT predicates.  `search()` returns `[]` by default; pass
+  `experimental_search=True` to forward the query to TZ's
+  `search_query_experimental` endpoint (flagged experimental in the SDK).
+- **`memory_strategy="messages"`** — fourth `AgentConfig.memory_strategy`
+  option, paired with the new `MemoryProvider.load_history` extension
+  method.  When set, the `Agent` skips the records-shaped `load()` and
+  instead calls `memory.load_history(episode_id) -> list[Message] | None`
+  and threads the result through `input.messages` as a TZ-native
+  conversation history.  Sidesteps the unbounded summary growth that
+  `prepended_message` exhibits when the backend reads its own writes
+  back from the TZ log; preserves tool calls and tool results across
+  turns so the model can reason about its own prior work.  Validated at
+  `AgentConfig.__post_init__` — picking `"messages"` against a backend
+  that does not implement `load_history` raises `ConfigurationError`.
+- **`run_agent(prior_messages=...)`** — new optional kwarg on the
+  low-level loop (mirrored on `StreamingAgentLoop.stream`) that seeds
+  the conversation with a TZ-native message history before the new user
+  prompt is appended.  Default `None` preserves byte-identical
+  behaviour, honouring the frozen-signature invariant of the `mcp/`
+  submodule.
 - **Agent testing framework** (`from t0_agents.testing import MockGateway,
   MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
   Milestone M8: Testable Agents.  Ships from the base distribution — no
