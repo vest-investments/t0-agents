@@ -257,6 +257,27 @@ class TestAgent:
         await agent.run("go")
         assert t0.calls[0]["namespace"] == "prod"
 
+    async def test_run_system_arguments_forwarded(self) -> None:
+        """system_arguments reaches t0.inference as input.system.arguments."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0)
+        await agent.run("go", system_arguments={"max_turns": 5})
+        assert t0.calls[0]["input"]["system"] == {"arguments": {"max_turns": 5}}
+
+    async def test_run_system_arguments_omitted_no_op(self) -> None:
+        """Default system_arguments=None leaves the input.system key absent."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0)
+        await agent.run("go")
+        assert "system" not in t0.calls[0]["input"]
+
+    async def test_run_system_arguments_empty_dict_no_op(self) -> None:
+        """Empty system_arguments={} collapses to no `system` key (guard)."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0)
+        await agent.run("go", system_arguments={})
+        assert "system" not in t0.calls[0]["input"]
+
     async def test_none_timeout_uses_default(self) -> None:
         """tool_timeout=None on config → 30.0 passed to run_agent."""
         from fastmcp.client.client import CallToolResult

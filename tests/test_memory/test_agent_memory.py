@@ -223,6 +223,52 @@ class TestMemoryStrategy:
         call = t0.calls[0]
         assert call["input"]["messages"][0]["content"] == "hello"
 
+    async def test_caller_system_arguments_merge_with_system_template(self) -> None:
+        """Caller-supplied keys land alongside memory_context; non-colliding."""
+        mem = InMemoryMemory()
+        ep = str(_EPISODE)
+        await mem.save(MemoryRecord(
+            episode_id=ep,
+            user_message="context",
+            agent_response="response",
+            turns=1,
+        ))
+
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(t0=t0, memory=mem, memory_strategy="system_template")
+        await agent.run(
+            "question",
+            episode_id=ep,
+            system_arguments={"max_turns": 5},
+        )
+
+        args = t0.calls[0]["input"]["system"]["arguments"]
+        assert "memory_context" in args
+        assert "context" in args["memory_context"]
+        assert args["max_turns"] == 5
+
+    async def test_caller_wins_on_memory_context_collision(self) -> None:
+        """Caller-precedence: explicit memory_context override beats memory's."""
+        mem = InMemoryMemory()
+        ep = str(_EPISODE)
+        await mem.save(MemoryRecord(
+            episode_id=ep,
+            user_message="context",
+            agent_response="response",
+            turns=1,
+        ))
+
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(t0=t0, memory=mem, memory_strategy="system_template")
+        await agent.run(
+            "question",
+            episode_id=ep,
+            system_arguments={"memory_context": "OVERRIDE"},
+        )
+
+        args = t0.calls[0]["input"]["system"]["arguments"]
+        assert args == {"memory_context": "OVERRIDE"}
+
 
 class TestMemoryErrorGracefulDegradation:
     async def test_load_failure_does_not_abort(self) -> None:
@@ -480,6 +526,50 @@ class TestMessagesStrategyInjection:
         first_messages = t0.calls[0]["input"]["messages"]
         # Falls through to the no-history path: single user message.
         assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_caller_system_arguments_pass_through_messages(self) -> None:
+        """messages strategy + caller args → both reach the inference call."""
+        from tensorzero import Message, Text
+
+        class FakeHistoryMem:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+            async def load_history(
+                self, episode_id: str
+            ) -> list[Message] | None:
+                return [
+                    Message(role="user", content="earlier"),
+                    Message(role="assistant", content=[Text(text="prior")]),
+                ]
+
+        mem = FakeHistoryMem()
+        ep = str(_EPISODE)
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(
+            t0=t0,
+            memory=cast(InMemoryMemory, mem),
+            memory_strategy="messages",
+        )
+
+        await agent.run(
+            "now",
+            episode_id=ep,
+            system_arguments={"max_turns": 5},
+        )
+
+        call = t0.calls[0]
+        # prior_messages reached the call alongside system.arguments.
+        assert len(call["input"]["messages"]) == 3
+        assert call["input"]["system"] == {"arguments": {"max_turns": 5}}
 
 
 class TestMessagesStrategyStreamParity:

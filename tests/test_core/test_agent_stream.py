@@ -336,3 +336,33 @@ def _response_with_text(text: str) -> Any:
     from tests._fake_t0 import FakeChatResponse
 
     return FakeChatResponse(content=[Text(type="text", text=text)])
+
+
+async def test_agent_stream_system_arguments_forwarded() -> None:
+    """Streaming path threads system_arguments to t0.inference.
+
+    Mirrors the non-streaming ``test_run_system_arguments_forwarded`` so
+    both surfaces are covered.
+    """
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(name="a", function_name="agent"),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    events: list[AgentEvent] = []
+    async for ev in agent.stream("hi", system_arguments={"max_turns": 5}):
+        events.append(ev)
+
+    assert isinstance(events[-1], DoneEvent)
+    assert fake_t0.calls[0]["input"]["system"] == {
+        "arguments": {"max_turns": 5},
+    }

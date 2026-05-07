@@ -184,6 +184,7 @@ class Agent:
         *,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
     ) -> AgentResult: ...
 
     async def stream(
@@ -192,6 +193,7 @@ class Agent:
         *,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]: ...
 
     async def warmup(self) -> None: ...
@@ -201,8 +203,8 @@ class Agent:
 |---|---|
 | `__init__` | Validates `tool_provider` against the `ToolProvider` protocol and (when configured) `config.memory` against `MemoryProvider`. Registers any `config.sub_agents` on an in-process FastMCP server. Never opens connections. |
 | `config` | Read-only property returning the `AgentConfig` passed to the constructor. |
-| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). |
-| `stream` | Streaming analogue. Yields `AgentEvent`s in real time and ends with a terminal `DoneEvent(result=AgentResult(...))`. See [streaming.md](streaming.md). |
+| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system.arguments` for the system-template render; shallow-merged with the memory strategy's contribution, with caller keys winning on collision. |
+| `stream` | Streaming analogue. Yields `AgentEvent`s in real time and ends with a terminal `DoneEvent(result=AgentResult(...))`. Same `tags` / `system_arguments` per-call kwargs as `run`. See [streaming.md](streaming.md). |
 | `warmup` | Optional lifespan-phase readiness hook called by `t0_agents.serve.create_app` at startup. Default implementation is a no-op; override in a subclass to front-load probes. See [serving.md](serving.md). |
 
 ### `AgentResult`
