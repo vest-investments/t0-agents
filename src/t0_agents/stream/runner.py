@@ -268,7 +268,7 @@ class StreamingAgentLoop:
         """Issue ``t0.inference(stream=True)`` — return the iterator or the error."""
         input_dict: dict[str, Any] = {"messages": messages}
         if system_arguments is not None:
-            input_dict["system"] = {"arguments": system_arguments}
+            input_dict["system"] = system_arguments
         try:
             raw = await t0.inference(
                 function_name=function_name,

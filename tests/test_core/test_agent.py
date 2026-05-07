@@ -258,11 +258,15 @@ class TestAgent:
         assert t0.calls[0]["namespace"] == "prod"
 
     async def test_run_system_arguments_forwarded(self) -> None:
-        """system_arguments reaches t0.inference as input.system.arguments."""
+        """system_arguments reaches t0.inference as input.system directly.
+
+        Per the TensorZero gateway API reference, ``input.system`` IS the
+        schema-described arguments dict — no ``arguments`` wrapper.
+        """
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
         await agent.run("go", system_arguments={"max_turns": 5})
-        assert t0.calls[0]["input"]["system"] == {"arguments": {"max_turns": 5}}
+        assert t0.calls[0]["input"]["system"] == {"max_turns": 5}
 
     async def test_run_system_arguments_omitted_no_op(self) -> None:
         """Default system_arguments=None leaves the input.system key absent."""

@@ -42,7 +42,8 @@ class AgentConfig:
         memory_strategy: How memory context is injected into the prompt.
             ``"auto"`` resolves to ``"prepended_message"`` (the strategy
             that requires no TOML variant support).
-            ``"system_template"`` passes memory via ``input.system.arguments``.
+            ``"system_template"`` passes memory via ``input.system`` (the
+            schema-described arguments dict).
             ``"prepended_message"`` prepends a text summary to the user message.
             ``"messages"`` threads the prior conversation as a TensorZero-
             native ``input.messages`` history; requires the memory

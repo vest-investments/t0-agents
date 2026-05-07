@@ -47,7 +47,7 @@ python advanced.py
 |---|---|---|
 | `"auto"` (default) | Currently resolves to `"prepended_message"` | Most cases |
 | `"prepended_message"` | Prepends a text summary to the user message | Works with any TensorZero function or variant |
-| `"system_template"` | Passes memory via `input.system.arguments.memory_context` | Your variant declares a MiniJinja system template with a `memory_context` variable |
+| `"system_template"` | Passes memory via `input.system.memory_context` (no `arguments` wrapper) | Your variant declares a MiniJinja system template with a `memory_context` variable |
 | `"messages"` | Threads the prior conversation through `input.messages` verbatim | Pair with `TensorZeroMemory`; cleanest multi-turn path; preserves tool calls across turns |
 
 See [`docs/memory.md`](../../docs/memory.md) for the full reference:

@@ -17,6 +17,18 @@ type = "chat"
 type = "chat_completion"
 model = "gpt_oss_20"
 
+# Schema-declared variant for integration coverage of `system_arguments`.
+# The strict schema rejects any payload shape other than the one described,
+# which catches the wrapper-bug class of regressions automatically.
+[functions.agent_with_schema]
+type = "chat"
+schemas.system.path = "functions/agent_with_schema/system_schema.json"
+
+[functions.agent_with_schema.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/agent_with_schema/system.minijinja"
+
 # Metrics for feedback
 [metrics.task_success]
 type = "boolean"

@@ -211,7 +211,7 @@ agent.run(message, episode_id=<id or None>)
    │                   │
    │                   ├─ strategy "system_template":
    │                   │    summary passed via
-   │                   │    input.system.arguments.memory_context
+   │                   │    input.system.memory_context
    │                   │
    │                   └─ strategy "messages":
    │                        memory.load_history(episode_id) ─► list[Message]
@@ -240,7 +240,7 @@ persisted after `DoneEvent`.
 
 TensorZero offers two code paths for feeding context into an inference:
 
-- **`input.system.arguments`** — the variant's MiniJinja system
+- **`input.system`** — the variant's MiniJinja system
   template is rendered with a `memory_context` variable. Requires you
   to edit `tensorzero.toml`, but keeps memory out of the message
   history (the template is a server-side concern).
@@ -511,7 +511,7 @@ class AgentConfig:
 |---|---|---|
 | `"auto"` (default) | Currently resolves to `"prepended_message"`. | You haven't decided yet, or you want the framework to pick the right path once TensorZero exposes variant introspection. |
 | `"prepended_message"` | Text summary is prepended to the user message, separated by `---`. | Works with any TensorZero function or variant. No TOML changes required. |
-| `"system_template"` | Summary is passed to the gateway as `input.system.arguments.memory_context`. | Your variant declares a MiniJinja system template with a `memory_context` variable. Keeps memory out of the message history. |
+| `"system_template"` | Summary is passed to the gateway as `input.system.memory_context` (the dict is the schema-described arguments object directly). | Your variant declares a MiniJinja system template with a `memory_context` variable. Keeps memory out of the message history. |
 | `"messages"` | The prior conversation flows through `input.messages` as a TZ-native message history. No string rendering. | Pair with `TensorZeroMemory` (or any backend that implements `load_history`). Cleanest multi-turn semantics; preserves tool calls and tool results across turns; sidesteps the unbounded summary growth that `"prepended_message"` exhibits when the backend re-reads its own writes. |
 
 ### Using `"system_template"`

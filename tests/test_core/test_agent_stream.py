@@ -363,6 +363,6 @@ async def test_agent_stream_system_arguments_forwarded() -> None:
         events.append(ev)
 
     assert isinstance(events[-1], DoneEvent)
-    assert fake_t0.calls[0]["input"]["system"] == {
-        "arguments": {"max_turns": 5},
-    }
+    # input.system IS the schema-described arguments dict directly —
+    # no `arguments` wrapper. Mirrors test_run_system_arguments_forwarded.
+    assert fake_t0.calls[0]["input"]["system"] == {"max_turns": 5}
