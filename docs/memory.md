@@ -553,6 +553,27 @@ every run with loaded records. When no records match the
 `episode_id`, no injection happens at all — neither the template
 nor the user message is modified.
 
+#### Combining memory with caller-supplied template variables
+
+`Agent.run` and `Agent.stream` accept their own `system_arguments`
+kwarg, which is shallow-merged with whatever the memory strategy
+injects:
+
+```python
+await agent.run(
+    "question",
+    episode_id=ep,
+    system_arguments={"max_turns": 5, "user_name": "Alice"},
+)
+```
+
+Use this when the function's system template declares variables
+beyond `memory_context` (e.g. `{{ max_turns }}`, `{{ user_name }}`).
+On collision, **caller keys take precedence** — the explicit caller
+value beats the implicit memory injection. Caller `None` (the
+default) is byte-identical to today's behaviour: only the memory
+strategy contributes.
+
 ---
 
 ## Built-in backends

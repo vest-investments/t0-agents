@@ -145,6 +145,7 @@ class Agent:
         *,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
     ) -> AgentResult:
         """Run the agent loop and return the final response.
 
@@ -166,6 +167,17 @@ class Agent:
                 untouched.  The configured deployment label (if any) is
                 already part of ``config.tags`` and is preserved by the
                 merge.
+            system_arguments: Optional dict forwarded to TensorZero as
+                ``input.system.arguments`` for the system-template render.
+                Useful when the function's system template declares
+                variables beyond what the memory strategy injects (e.g.
+                ``{{ max_turns }}``, ``{{ user_name }}``).  Shallow-merged
+                with — not overwritten by — the ``system_arguments``
+                produced by ``memory_strategy="system_template"``: caller
+                keys take precedence on collision.  Validated by
+                TensorZero against the function's system schema, so
+                supply only keys the schema declares.  ``None`` (the
+                default) preserves today's behaviour exactly.
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
@@ -201,6 +213,7 @@ class Agent:
         effective_message, extra_kwargs = await self._prepare_memory_injection(
             user_message, memory_records, episode_id=episode_id,
         )
+        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
 
         # --- 3. Set up guardrails ---
         # Empty-list case: forward the raw tool_provider and leave
@@ -377,6 +390,7 @@ class Agent:
         *,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Streaming analogue of :meth:`run`.
 
@@ -400,6 +414,12 @@ class Agent:
                 where one :class:`Agent` is shared across many frames —
                 without this kwarg there is no way to vary tags
                 per-frame.  Matches :meth:`run`'s semantics.
+            system_arguments: Optional dict forwarded to TensorZero as
+                ``input.system.arguments`` for the system-template
+                render.  Same merge semantics as :meth:`run` — caller
+                keys take precedence over the ``memory_context`` injected
+                by ``memory_strategy="system_template"``.  ``None``
+                (the default) preserves today's behaviour exactly.
 
         Yields:
             :class:`~t0_agents.stream.events.AgentEvent` instances as the
@@ -434,6 +454,7 @@ class Agent:
         effective_message, extra_kwargs = await self._prepare_memory_injection(
             user_message, memory_records, episode_id=episode_id,
         )
+        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
 
         # --- 3. Set up guardrails ---
         guard_ctx: GuardrailContext | None = None
@@ -633,6 +654,29 @@ class Agent:
         if not base and not extra:
             return None
         return {**base, **extra}
+
+    @staticmethod
+    def _merge_caller_system_arguments(
+        extra_kwargs: dict[str, Any],
+        caller_args: dict[str, Any] | None,
+    ) -> None:
+        """Merge caller-supplied ``system_arguments`` into ``extra_kwargs`` in-place.
+
+        Caller keys take precedence over memory-strategy keys on collision —
+        explicit caller intent should not be silently overwritten by an
+        implicit memory injection.  An empty merged dict collapses to "no
+        ``system_arguments`` key" so the gateway never sees
+        ``input.system.arguments={}``.
+
+        No-op when ``caller_args`` is ``None``: byte-identical to today's
+        behaviour for callers that omit the kwarg.
+        """
+        if caller_args is None:
+            return
+        merged = dict(extra_kwargs.pop("system_arguments", None) or {})
+        merged.update(caller_args)
+        if merged:
+            extra_kwargs["system_arguments"] = merged
 
     def _resolve_memory_strategy(
         self,
