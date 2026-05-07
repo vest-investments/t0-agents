@@ -265,12 +265,14 @@ async def run_agent(
         namespace: TensorZero namespace forwarded to every ``t0.inference()``
             call for experimentation routing. Falls back to the function's
             default namespace when ``None``.
-        system_arguments: Template arguments injected into
-            ``input.system.arguments`` on every ``t0.inference()`` call.
-            Used by the memory subsystem to pass ``memory_context`` to
-            system-template variants. ``None`` (the default) omits the
-            ``system`` key from the input dict entirely, preserving
-            existing behaviour.
+        system_arguments: Template arguments forwarded to TensorZero as
+            ``input.system`` on every ``t0.inference()`` call.  When the
+            function declares ``schemas.system.path``, the dict must
+            match that schema directly — its keys are the
+            schema-described properties.  Used by the memory subsystem
+            to pass ``memory_context`` to system-template variants.
+            ``None`` (the default) omits the ``system`` key from the
+            input dict entirely, preserving existing behaviour.
         on_inference: Optional async callback invoked with every
             ``ChatInferenceResponse`` after it is received and cast,
             BEFORE the turn's tool calls are dispatched. Used by the
@@ -317,7 +319,7 @@ async def run_agent(
         try:
             input_dict: dict[str, Any] = {"messages": messages}
             if system_arguments is not None:
-                input_dict["system"] = {"arguments": system_arguments}
+                input_dict["system"] = system_arguments
             raw = await t0.inference(
                 function_name=function_name,
                 episode_id=episode_id,

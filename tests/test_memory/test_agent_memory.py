@@ -207,11 +207,11 @@ class TestMemoryStrategy:
         call = t0.calls[0]
         # User message should be original (unmodified)
         assert call["input"]["messages"][0]["content"] == "question"
-        # run_agent translates system_arguments into input.system.arguments
+        # run_agent assigns system_arguments directly to input.system —
+        # the dict is the schema-described arguments object, not wrapped.
         system = call["input"]["system"]
-        assert "arguments" in system
-        assert "memory_context" in system["arguments"]
-        assert "context" in system["arguments"]["memory_context"]
+        assert "memory_context" in system
+        assert "context" in system["memory_context"]
 
     async def test_no_injection_when_no_records(self) -> None:
         """With an empty episode, no memory prefix should be injected."""
@@ -242,10 +242,10 @@ class TestMemoryStrategy:
             system_arguments={"max_turns": 5},
         )
 
-        args = t0.calls[0]["input"]["system"]["arguments"]
-        assert "memory_context" in args
-        assert "context" in args["memory_context"]
-        assert args["max_turns"] == 5
+        system = t0.calls[0]["input"]["system"]
+        assert "memory_context" in system
+        assert "context" in system["memory_context"]
+        assert system["max_turns"] == 5
 
     async def test_caller_wins_on_memory_context_collision(self) -> None:
         """Caller-precedence: explicit memory_context override beats memory's."""
@@ -266,8 +266,8 @@ class TestMemoryStrategy:
             system_arguments={"memory_context": "OVERRIDE"},
         )
 
-        args = t0.calls[0]["input"]["system"]["arguments"]
-        assert args == {"memory_context": "OVERRIDE"}
+        system = t0.calls[0]["input"]["system"]
+        assert system == {"memory_context": "OVERRIDE"}
 
 
 class TestMemoryErrorGracefulDegradation:
@@ -567,9 +567,9 @@ class TestMessagesStrategyInjection:
         )
 
         call = t0.calls[0]
-        # prior_messages reached the call alongside system.arguments.
+        # prior_messages reached the call alongside system arguments.
         assert len(call["input"]["messages"]) == 3
-        assert call["input"]["system"] == {"arguments": {"max_turns": 5}}
+        assert call["input"]["system"] == {"max_turns": 5}
 
 
 class TestMessagesStrategyStreamParity:

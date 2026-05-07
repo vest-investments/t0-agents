@@ -168,15 +168,16 @@ class Agent:
                 already part of ``config.tags`` and is preserved by the
                 merge.
             system_arguments: Optional dict forwarded to TensorZero as
-                ``input.system.arguments`` for the system-template render.
+                ``input.system`` for the system-template render.  When
+                the function declares ``schemas.system.path``, the dict
+                must match the schema directly — its keys are the
+                schema-described properties (no ``arguments`` wrapper).
                 Useful when the function's system template declares
                 variables beyond what the memory strategy injects (e.g.
                 ``{{ max_turns }}``, ``{{ user_name }}``).  Shallow-merged
                 with — not overwritten by — the ``system_arguments``
                 produced by ``memory_strategy="system_template"``: caller
-                keys take precedence on collision.  Validated by
-                TensorZero against the function's system schema, so
-                supply only keys the schema declares.  ``None`` (the
+                keys take precedence on collision.  ``None`` (the
                 default) preserves today's behaviour exactly.
 
         Returns:
@@ -415,11 +416,11 @@ class Agent:
                 without this kwarg there is no way to vary tags
                 per-frame.  Matches :meth:`run`'s semantics.
             system_arguments: Optional dict forwarded to TensorZero as
-                ``input.system.arguments`` for the system-template
-                render.  Same merge semantics as :meth:`run` — caller
-                keys take precedence over the ``memory_context`` injected
-                by ``memory_strategy="system_template"``.  ``None``
-                (the default) preserves today's behaviour exactly.
+                ``input.system`` for the system-template render.  Same
+                merge semantics as :meth:`run` — caller keys take
+                precedence over the ``memory_context`` injected by
+                ``memory_strategy="system_template"``.  ``None`` (the
+                default) preserves today's behaviour exactly.
 
         Yields:
             :class:`~t0_agents.stream.events.AgentEvent` instances as the
@@ -666,7 +667,7 @@ class Agent:
         explicit caller intent should not be silently overwritten by an
         implicit memory injection.  An empty merged dict collapses to "no
         ``system_arguments`` key" so the gateway never sees
-        ``input.system.arguments={}``.
+        ``input.system={}``.
 
         No-op when ``caller_args`` is ``None``: byte-identical to today's
         behaviour for callers that omit the kwarg.
