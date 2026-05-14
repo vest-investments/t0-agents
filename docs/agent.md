@@ -118,6 +118,18 @@ async with await AsyncTensorZeroGateway.build_http(...) as t0, Client(mcp) as to
 
 `Agent` does not install signal handlers, configure logging, spawn threads, or touch the filesystem on your behalf.
 
+### Concurrency
+
+Three places in the stack can run things in parallel: tool calls within one turn, batched tools across turns, and sub-agents under a single orchestrator. Each maps to a single knob; the framework intentionally does not provide a planner, a DAG DSL, or a `parallel(...)` helper on top of `asyncio.gather`. The full mental model with code examples lives in [concurrency.md](concurrency.md); the short version:
+
+| Layer | Trigger | Knob |
+|---|---|---|
+| Intra-turn | LLM emits several tool calls in one assistant turn | `AgentConfig(parallel_tools=True)` |
+| Inter-turn | LLM emits one tool per turn but the calls are independent | A "batch tool" on your MCP server |
+| Multi-agent | Orchestrator delegates to several sub-agents in one turn | Same `parallel_tools=True` on the orchestrator |
+
+`parallel_tools` defaults to `False` on purpose: it is unsafe to combine with `require_approval` (it would fan out N approval prompts to one human in the same turn) and it multiplies your peak tool-side QPS. See [Guardrails / `parallel_tools=True`](guardrails.md#parallel_toolstrue) and the [Production checklist](production.md#parallel-vs-sequential-tool-execution) before flipping it.
+
 ### Key design decisions
 
 | Decision | Why |
