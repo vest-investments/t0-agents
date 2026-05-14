@@ -6,75 +6,104 @@ Two demos that exercise the three layers of parallelism described in
 | Demo | Layer | What it shows |
 |---|---|---|
 | `01_parallel_tools.py` | L1 intra-turn | Same prompt run twice (`parallel_tools=False` then `True`); side-by-side wall-clock timing |
-| `02_parallel_subagents.py` | L3 multi-agent | An orchestrator with two sub-agents (`researcher`, `writer`) dispatched concurrently when delegated to in the same turn |
+| `02_parallel_subagents.py` | L3 multi-agent | An orchestrator with two sub-agents (`researcher`, `writer`); side-by-side timing of sequential vs parallel delegation |
 
 The L2 "batch tool" pattern is illustrated by `server.py` — the
-`fetch_urls_batch` tool fans out N requests via `asyncio.gather`
-inside a single tool call, sidestepping the case where the LLM emits
-one tool per turn.
+`fetch_urls_batch` tool fans out N requests via `asyncio.gather` inside
+a single tool call, sidestepping the case where the LLM emits one tool
+per turn. It is not invoked by the demos (they exercise L1 / L3) but
+ships as a code-level reference.
+
+## Why the demos use a mocked LLM
+
+Whether `parallel_tools=True` accelerates a run depends on the LLM
+deciding to emit several tool calls in one assistant turn. Smaller
+models (and some providers) emit exactly one tool call per turn — in
+that case the parallel executor has nothing to parallelise and the
+flag's effect is invisible.
+
+To demonstrate the executor selection deterministically, both demos
+replace the real gateway with
+[`t0_agents.testing.MockGateway`](../../docs/testing.md), scripted to
+emit the multi-tool turn the layer requires (three `fetch_url` calls
+for L1; both `researcher_ask` and `writer_ask` in one turn for L3).
+The FastMCP servers and the agent loop are otherwise unchanged, so the
+wall-clock numbers reflect the real executor at work.
 
 ## Prerequisites
 
-```bash
-export GROQ_API_KEY=gsk_...
-docker compose up -d           # boots the per-example gateway on :3000
-uv sync
-```
+Just `uv sync`. **No docker, no API key, no gateway** — the demos run
+offline.
 
 ## Run
 
 ```bash
-# Demo 01 — intra-turn parallel tool execution
 uv run python examples/16_parallel/01_parallel_tools.py
-
-# Demo 02 — multi-agent parallel composition
 uv run python examples/16_parallel/02_parallel_subagents.py
 ```
 
-## What to observe
+## Expected output
 
 ### `01_parallel_tools.py`
 
-The `fetch_url` tool sleeps for `LATENCY_S = 1.5` seconds per call.
+`fetch_url` sleeps for `LATENCY_S = 1.5` seconds per call. With three
+calls in a single turn:
 
-- **`parallel_tools=False`** (sequential) — if the model emits three
-  `fetch_url` calls in one turn, they run back-to-back and the run
-  takes ~4.5 s.
-- **`parallel_tools=True`** (parallel) — the same three calls run
-  through `asyncio.gather` and the run finishes in ~1.5 s.
+```
+Run 1 (sequential, the default):
+  parallel_tools=False ->  4.5Xs (2 turn(s))
 
-The INFO log on stderr shows `fetch_url START ... fetch_url END`
-markers; under parallel dispatch the three START lines arrive before
-any END line.
+Run 2 (parallel):
+  parallel_tools=True  ->  1.5Xs (2 turn(s))
+
+Speed-up: ~3x (sequential / parallel)
+```
+
+The INFO log on stderr shows three `fetch_url START` markers followed
+by three `fetch_url END` markers. Under sequential dispatch the START
+and END lines interleave one pair at a time; under parallel dispatch
+all three STARTs arrive back-to-back and all three ENDs land ~1.5 s
+later.
 
 ### `02_parallel_subagents.py`
 
-The orchestrator has `parallel_tools=True` and sees `researcher_ask`
-and `writer_ask` as MCP tools. When the orchestrator LLM delegates to
-both in the same assistant turn, their sub-agent runs overlap. The
-elapsed wall-clock approaches the slower of the two sub-agent runs
-rather than their sum.
+Each sub-agent's tool sleeps for 1 s. With the orchestrator delegating
+to both sub-agents in the same turn:
 
-## Caveats and the L2 "batch tool" pattern
+```
+Run 1 (sequential, the default):
+  parallel_tools=False ->  2.0Xs (2 turn(s))
 
-Whether `parallel_tools=True` accelerates your run depends on the
-model deciding to emit multiple tool calls in one turn. Some
-providers (and some smaller models) emit exactly one tool call per
-turn, in which case there is nothing for the parallel executor to
-parallelise.
+Run 2 (parallel):
+  parallel_tools=True  ->  1.0Xs (2 turn(s))
 
-When that happens, design the tool surface around the limitation:
-expose a single tool that takes a list and parallelises inside.
-`server.py` ships `fetch_urls_batch` as a worked example —
-`await asyncio.gather(*[_simulate_fetch(u) for u in urls])` — so even
-a one-tool-per-turn agent finishes the three fetches in one tool call.
+Speed-up: ~2x (sequential / parallel)
+```
 
-See [`docs/concurrency.md`](../../docs/concurrency.md) for the full
-decision table and the patterns the framework deliberately does not
-provide.
+The orchestrator's `parallel_tools=True` is what enables the overlap:
+sub-agents are exposed as MCP tools, so multi-agent parallelism reduces
+to the same intra-turn dispatch as L1.
 
-## Stop the gateway
+## Adapting the demos to a real LLM
 
-```bash
-docker compose down
+`MockGateway` is a duck-typed `AsyncTensorZeroGateway`. To swap a real
+gateway in, replace `_build_gateway()` (or the three `_..._gateway()`
+helpers in demo 02) with `AsyncTensorZeroGateway.build_http(...)`, add
+a `tensorzero.toml` declaring the functions used by each
+`AgentConfig.function_name`, and boot the gateway with
+`docker compose`. Whether you then observe the speed-up depends on
+your model's parallel-tool-call behavior — see
+[`docs/concurrency.md`](../../docs/concurrency.md) for the full
+discussion.
+
+## File layout
+
+```
+examples/16_parallel/
+├── README.md                       ← this file
+├── 01_parallel_tools.py            ← L1 demo with side-by-side timing
+├── 02_parallel_subagents.py        ← L3 demo with side-by-side timing
+├── server.py                       ← FastMCP server: fetch_url + fetch_urls_batch
+├── research_server.py              ← researcher sub-agent's MCP server
+└── writing_server.py               ← writer sub-agent's MCP server
 ```
