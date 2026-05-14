@@ -47,6 +47,73 @@ The default is intentionally safe. Flip it to `True` only when **all** of these 
 
 When in doubt, leave it off and turn it on per-agent once you have read the [Production checklist](production.md#parallel-vs-sequential-tool-execution).
 
+### Model and provider support
+
+`parallel_tools=True` only helps when the LLM actually emits several tool calls in the same assistant turn. That decision lives at the *provider*, not at t0-agents, and three independent things have to line up:
+
+1. **Native model capability.** Some models routinely emit multi-tool turns; others always emit exactly one tool call per turn no matter how you prompt them. In a model card, grep for:
+   - "parallel function calling" (OpenAI's term)
+   - "parallel tool use" / "parallel tool calls" (Anthropic, Mistral, Cohere)
+   - explicit "supports" / "does not support" statements
+   - mentions of the BFCL parallel-category benchmark
+   - whether the provider's API exposes a `parallel_tool_calls: bool` parameter — if it does, the model is probably capable
+
+   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/16_parallel/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
+
+2. **Provider-gateway support inside TensorZero.** Even when the upstream model is capable, the gateway has to forward the parallel-emission hint. TensorZero maintains an allowlist; at the time of writing **Groq is not on it** (`tests/test_mcp/test_integration.py:388` documents the constraint), while OpenAI and Fireworks AI are. Check TensorZero's release notes and your provider block in `tensorzero.toml`.
+
+3. **The inference-level hint.** TensorZero's `t0.inference()` accepts a `parallel_tool_calls: bool` argument that, when forwarded to a capable provider, instructs the model to prefer parallel emissions. **t0-agents does not currently plumb this through `AgentConfig` or `run_agent`** — until that is added, you rely on the model's spontaneous behavior or call `t0.inference()` directly when you need the hint. This is a parked follow-up; see the bottom of this page.
+
+If any of the three fails, the loop sees one `ToolCall` block per turn and `parallel_tools=True` has nothing to parallelise. The mitigation is the L2 "batch tool" pattern below — it sidesteps the LLM's emission style entirely.
+
+### Verifying support without committing to a model
+
+A 5-line probe is enough to know whether a given model + provider + TensorZero function actually delivers multi-tool turns. Send one real inference with a prompt that should produce parallel calls and count the `ToolCall` blocks in the response:
+
+```python
+from tensorzero import ToolCall
+
+response = await t0.inference(
+    function_name="agent",
+    input={"messages": [{"role": "user",
+                          "content": "Fetch /a, /b, /c at the same time."}]},
+    additional_tools=t0_tools,
+    dryrun=True,
+)
+n_tool_calls = sum(1 for b in response.content if isinstance(b, ToolCall))
+# n_tool_calls >= 2  =>  parallel_tools=True will speed this model up
+# n_tool_calls == 1  =>  use the L2 batch-tool pattern instead
+```
+
+`dryrun=True` keeps the probe out of ClickHouse and off your billing while still going through the real provider. Run it once per model upgrade in CI to detect regressions.
+
+### Testing the executor selection without an LLM
+
+For deterministic unit tests of the parallel dispatch itself — independent of which model you ultimately ship — bypass the LLM with [`MockGateway`](testing.md):
+
+```python
+from typing import cast
+from t0_agents.testing import MockGateway
+from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
+
+gateway = MockGateway.script(
+    [
+        # Turn 1: three independent tool calls in one assistant turn
+        [
+            ToolCall(id=f"c{i}", raw_name="fetch", name="fetch",
+                     raw_arguments=f'{{"url": "{u}"}}', arguments={"url": u})
+            for i, u in enumerate(["a", "b", "c"])
+        ],
+        # Turn 2: terminating text
+        [Text(text="Done")],
+    ]
+)
+agent = Agent(config, t0=cast(AsyncTensorZeroGateway, gateway), tool_provider=...)
+result = await agent.run("...")
+```
+
+`examples/16_parallel/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
+
 ## L2: Inter-turn dependencies and the "batch tool" pattern
 
 If tool B reads the output of tool A, the LLM will emit A on turn N and B on turn N+1. That is **not a problem to solve with parallelism** — by construction the two are dependent, and the agent loop is already the dependency graph: each turn is a level. `parallel_tools=True` will not help here, and adding a planner that "discovers" the dependency is the kind of parallel system that duplicates what the model already does turn by turn.
@@ -101,6 +168,7 @@ This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other 
 - **A DAG / graph builder for tool dependencies.** The LLM is the planner. Hand-rolling a parallel dependency graph in framework configuration would duplicate that planning and force users to maintain two ways of describing the same workflow.
 - **Flipping `parallel_tools=True` by default.** Existing agents with `require_approval` or any await-yielding guardrail would silently change semantics. The opt-in posture is on purpose — see [Production considerations](guardrails.md#parallel_toolstrue).
 - **Per-tool `serial=True` metadata.** Mixed read/write MCP servers would benefit, but it requires an MCP-extension contract that does not exist today. Tracked as a follow-up; not part of the current API.
+- **Forwarding `parallel_tool_calls` from `AgentConfig` to `t0.inference()`.** TensorZero exposes the inference-level hint, but `AgentConfig` does not plumb it through today. Tracked as a follow-up; until then, callers that need to instruct the model rather than rely on its spontaneous behavior must call `t0.inference()` directly.
 
 If you find yourself reaching for any of the above, the answer is almost always L1 (turn the flag on) or L2 (write a batch tool) or L3 (let the orchestrator LLM delegate, with the flag on).
 

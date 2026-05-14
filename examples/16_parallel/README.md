@@ -91,10 +91,18 @@ gateway in, replace `_build_gateway()` (or the three `_..._gateway()`
 helpers in demo 02) with `AsyncTensorZeroGateway.build_http(...)`, add
 a `tensorzero.toml` declaring the functions used by each
 `AgentConfig.function_name`, and boot the gateway with
-`docker compose`. Whether you then observe the speed-up depends on
-your model's parallel-tool-call behavior — see
-[`docs/concurrency.md`](../../docs/concurrency.md) for the full
-discussion.
+`docker compose`.
+
+Whether you then observe the speed-up depends on **three independent
+things**: the model's native ability to emit multi-tool turns, your
+provider's support for TensorZero's `parallel_tool_calls` hint
+(Groq currently is **not** on the allowlist; OpenAI and Fireworks AI
+are), and the inference-level flag itself. See
+[Concurrency / Model and provider support](../../docs/concurrency.md#model-and-provider-support)
+for the model-card checklist, and
+[Concurrency / Verifying support without committing to a model](../../docs/concurrency.md#verifying-support-without-committing-to-a-model)
+for the five-line probe you can run against any candidate model before
+wiring it into your stack.
 
 ## File layout
 
