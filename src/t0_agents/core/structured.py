@@ -28,7 +28,7 @@ hygiene: it imports only from ``tensorzero`` and the standard library.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -87,68 +87,98 @@ class StructuredOutput:
     retry_attempts: int = 0
 
 
-def _extract_first_balanced(text: str, opener: str, closer: str) -> str | None:
-    """Return the first balanced ``opener``…``closer`` span in ``text``.
+def _iter_balanced_spans(
+    text: str, opener: str, closer: str
+) -> Iterator[str]:
+    """Yield every balanced ``opener``…``closer`` span in ``text``, in order.
 
-    Tracks JSON string-literal state (``"…"`` with ``\\``-escapes) so that
-    delimiters appearing inside a string do not affect the depth counter.
-    Returns the span *including* its delimiters, or ``None`` if no balanced
-    span is found (e.g. unbalanced input or no opener present).
+    Iterates through every occurrence of ``opener`` as a candidate
+    starting position.  When a starting position produces a balanced
+    span (closer matched at depth 0, respecting JSON string-literal
+    state with ``\\``-escapes), the span is yielded and iteration
+    resumes after its closer.  A literal ``opener`` in prose that never
+    closes is silently skipped — the scanner advances to the next
+    occurrence rather than aborting.
+
+    Yielding every balanced span — rather than returning only the first
+    — lets :func:`permissive_parse` retry ``json.loads`` past spans
+    that are syntactically balanced but not valid JSON (for example
+    ``{key: value}`` without quoted keys, which models occasionally
+    produce in apology text).
     """
-    start = text.find(opener)
-    if start < 0:
-        return None
+    curr = 0
+    while True:
+        start = text.find(opener, curr)
+        if start < 0:
+            return
 
-    depth = 0
-    in_string = False
-    escape = False
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
 
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if in_string:
-            if ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == opener:
-            depth += 1
-        elif ch == closer:
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if in_string:
+                if ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
 
-    return None
+        if end >= 0:
+            yield text[start : end + 1]
+            curr = end + 1
+        else:
+            # Unbalanced from this starting position — advance past it
+            # and retry from the next occurrence of ``opener``.
+            curr = start + 1
 
 
-def _extract_fenced_code(text: str) -> str | None:
-    """Return the contents of the first fenced code block in ``text``.
+def _iter_fenced_code(text: str) -> Iterator[str]:
+    """Yield the contents of every fenced code block in ``text``, in order.
 
     Recognises both `````json … ````` and
     plain ````` … ````` blocks; any optional
-    language tag on the opening fence is skipped (the scanner advances past
-    the first newline after the opening backticks).  Returns the inner
-    content with trailing ``\\n`` stripped, or ``None`` if no complete
-    fenced block is found.
+    language tag on the opening fence is skipped (the scanner advances
+    past the first newline after the opening backticks).  Each yielded
+    block has its trailing ``\\n`` stripped.  Iteration stops at the
+    first opening backticks not followed by a complete block (no
+    newline, or no matching closing backticks).
+
+    Chain-of-thought models sometimes emit a prose fence first and a
+    JSON fence second — :func:`permissive_parse` tries every block
+    until one parses, so the JSON in the second fence is recovered
+    even when the first fence does not parse.
     """
-    open_idx = text.find("```")
-    if open_idx < 0:
-        return None
-    content_start = open_idx + 3
-    newline = text.find("\n", content_start)
-    if newline < 0:
-        return None
-    content_start = newline + 1
-    close_idx = text.find("```", content_start)
-    if close_idx < 0:
-        return None
-    return text[content_start:close_idx].rstrip("\n")
+    pos = 0
+    while True:
+        open_idx = text.find("```", pos)
+        if open_idx < 0:
+            return
+        content_start = open_idx + 3
+        newline = text.find("\n", content_start)
+        if newline < 0:
+            return
+        content_start = newline + 1
+        close_idx = text.find("```", content_start)
+        if close_idx < 0:
+            return
+        yield text[content_start:close_idx].rstrip("\n")
+        pos = close_idx + 3
 
 
 def _ordered_pairs_for(text: str) -> list[tuple[str, str]]:
@@ -186,10 +216,13 @@ def permissive_parse(raw: str) -> tuple[Any | None, PermissiveStrategy]:
     2. Balanced-brace scan for the first ``{…}`` or ``[…]`` span,
        preferring whichever opener appears earliest in ``raw`` — so a
        top-level array containing objects is recovered as the array.
-       Returns ``(value, "permissive")``.
-    3. First fenced code block (`````json … `````
-       or plain ````` … `````) — recovers
-       Markdown-wrapped JSON.  Returns ``(value, "permissive")``.
+       Within a chosen pair, each occurrence of the opener is tried in
+       turn: a literal brace or bracket in prose that never closes is
+       skipped, not fatal.  Returns ``(value, "permissive")``.
+    3. Every fenced code block (`````json … `````
+       or plain ````` … `````) in order
+       — recovers Markdown-wrapped JSON even when an earlier reasoning
+       fence does not parse.  Returns ``(value, "permissive")``.
 
     No exceptions escape: every ``json.JSONDecodeError`` along the way is
     silently swallowed and the next strategy is attempted.  When all
@@ -202,22 +235,19 @@ def permissive_parse(raw: str) -> tuple[Any | None, PermissiveStrategy]:
             pass
 
     for opener, closer in _ordered_pairs_for(raw):
-        span = _extract_first_balanced(raw, opener, closer)
-        if span is not None:
+        for span in _iter_balanced_spans(raw, opener, closer):
             try:
                 return json.loads(span), "permissive"
             except json.JSONDecodeError:
                 pass
 
-    fenced = _extract_fenced_code(raw)
-    if fenced is not None:
+    for fenced in _iter_fenced_code(raw):
         try:
             return json.loads(fenced), "permissive"
         except json.JSONDecodeError:
             pass
         for opener, closer in _ordered_pairs_for(fenced):
-            span = _extract_first_balanced(fenced, opener, closer)
-            if span is not None:
+            for span in _iter_balanced_spans(fenced, opener, closer):
                 try:
                     return json.loads(span), "permissive"
                 except json.JSONDecodeError:

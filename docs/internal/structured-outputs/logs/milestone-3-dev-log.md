@@ -190,6 +190,41 @@ The fix is local to `permissive_parse` and adds one short helper.
 and in `02-open-questions.md` Q5's resolution so M4/M5 readers do not
 re-discover the bug.
 
+### e) Post-review: iterate balanced spans and fenced blocks
+
+PR #24 surfaced two `gemini-code-assist[bot]` comments (medium
+priority) flagging that the original `_extract_first_balanced` and
+`_extract_fenced_code` would silently lose recovery cases.  Both are
+real failure modes for chain-of-thought / apology-prone models.
+
+**What changed:** promoted both internal helpers from "return the first
+hit" to "yield every hit, in order":
+
+- `_extract_first_balanced(text, opener, closer) -> str | None` is
+  replaced by `_iter_balanced_spans(text, opener, closer) -> Iterator[str]`.
+  `permissive_parse` iterates each yielded span and tries `json.loads`
+  on it; this also catches the case where the first balanced span is
+  syntactically balanced but invalid JSON (e.g. an apology containing
+  `{key: value}` without quoted keys, followed by valid JSON in the
+  same response).
+- `_extract_fenced_code(text) -> str | None` is replaced by
+  `_iter_fenced_code(text) -> Iterator[str]`.  Chain-of-thought models
+  commonly emit a prose ```` ``` ```` reasoning block before the
+  ```` ```json ```` answer block; the iterator yields every block
+  in order so `permissive_parse` retries past the unparseable ones.
+
+**Why:** both changes are strictly additive — every input the original
+`_extract_first_*` helpers recovered is still recovered by their
+iterating successors, plus the previously-lost cases above.  Two new
+unit tests (`test_skips_unbalanced_opener_in_prose` and
+`test_recovers_second_fenced_block_when_first_unparseable`) pin the
+two motivating scenarios.
+
+**Impact on subsequent milestones:** none.  The two helpers remain
+private (underscore-prefixed); only `permissive_parse` is public, and
+its semantics — "recover if any layer can; never raise" — are
+unchanged.
+
 ---
 
 ## §3 Open questions raised or resolved
@@ -292,7 +327,7 @@ Linux, Python 3.12, `uv` installed):
 |----------------------------------------------------------|---------|
 | `uv run ruff check src/`                                  | passed — `All checks passed!` |
 | `uv run mypy src/`                                        | passed — `Success: no issues found in 54 source files` |
-| `uv run pytest -m "not integration"`                      | passed — 594 tests pass, 2 skipped, 52 deselected (2.85s) |
+| `uv run pytest -m "not integration"`                      | passed — 596 tests pass, 2 skipped, 52 deselected (2.61s, post-review) |
 | `uv run pytest tests/test_core/test_permissive_parse.py`  | passed — 22 tests in 0.09 s |
 | `uv run pytest tests/test_core/test_agent_json_retry.py`  | passed — 9 tests in 0.10 s |
 | `uv run python examples/17_structured/recovery_demo.py`   | passed — four scenarios print four distinct `parse_strategy` outcomes |

@@ -91,6 +91,35 @@ class TestPermissiveLayer:
         assert value == {"text": 'he said "} {'}
         assert strategy == "permissive"
 
+    def test_skips_unbalanced_opener_in_prose(self) -> None:
+        # A literal ``{`` in prose with no matching closer must not
+        # short-circuit the scan — the scanner should advance to the
+        # next occurrence and recover the actual JSON.  Models do this
+        # in practice, e.g. when describing options before producing
+        # the structured answer.
+        raw = (
+            'Options include {fast, cheap} (no, not those literally); '
+            'final answer: {"speed": "fast"}'
+        )
+        value, strategy = permissive_parse(raw)
+        assert value == {"speed": "fast"}
+        assert strategy == "permissive"
+
+    def test_recovers_second_fenced_block_when_first_unparseable(self) -> None:
+        # Chain-of-thought models commonly emit a reasoning fence before
+        # the JSON fence.  When the first fence is not JSON, every
+        # subsequent fence is tried in order until one parses.  This
+        # constructs the case where the *outer* balanced-brace scan
+        # cannot rescue us either: there are no top-level ``{`` or ``[``
+        # openers in the raw text, only inside the fences.
+        raw = (
+            "```\nreasoning text without any braces here\n```\n"
+            '```json\n{"a": 1}\n```'
+        )
+        value, strategy = permissive_parse(raw)
+        assert value == {"a": 1}
+        assert strategy == "permissive"
+
 
 class TestNoneLayer:
     def test_invalid_returns_none(self) -> None:
