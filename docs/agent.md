@@ -174,7 +174,7 @@ Frozen-shape dataclass (slots, no inheritance). Validation runs in `__post_init_
 | `memory_strategy` | `Literal["auto", "system_template", "prepended_message"]` | `"auto"` | Controls how loaded memory is injected into the prompt. See [memory.md](memory.md). |
 | `guardrails` | `list[Guardrail]` | `[]` | Declarative policy layer. See [guardrails.md](guardrails.md). |
 | `sub_agents` | `list[Agent]` | `[]` | Exposes nested agents as MCP tools on an orchestrator. See [multi-agent.md](multi-agent.md). |
-| `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function. Wiring for `Agent.run` JSON dispatch lands in M2 — for now, call `t0_agents.core.structured.run_structured_inference()` directly. See [structured-outputs.md](structured-outputs.md). |
+| `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function and routes `Agent.run` through `run_structured_inference` (since v0.10.0-M2). See [structured-outputs.md](structured-outputs.md). |
 | `output_schema` | `Mapping[str, Any] \| Path \| None` | `None` | Optional dynamic schema for JSON functions. `Path` is read as JSON at construction time (relative paths resolve against `cwd`). Forbidden when `function_kind == "chat"`. |
 | `json_mode` | `Literal["off", "on", "strict", "tool"] \| None` | `None` | TensorZero `json_mode` override. Required when `function_kind == "json"`; forbidden when `function_kind == "chat"`. |
 
@@ -200,6 +200,8 @@ class Agent:
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
     ) -> AgentResult: ...
 
     async def stream(
@@ -218,7 +220,7 @@ class Agent:
 |---|---|
 | `__init__` | Validates `tool_provider` against the `ToolProvider` protocol and (when configured) `config.memory` against `MemoryProvider`. Registers any `config.sub_agents` on an in-process FastMCP server. Never opens connections. |
 | `config` | Read-only property returning the `AgentConfig` passed to the constructor. |
-| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system` for the system-template render (the dict matches the function's system schema directly — no `arguments` wrapper); shallow-merged with the memory strategy's contribution, with caller keys winning on collision. |
+| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. When `config.function_kind == "json"`, the tool loop is replaced by a single call to `run_structured_inference` — `before_run` / `after_run` guardrails still fire, but `before_tool` / `after_tool` never do. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system` for the system-template render (the dict matches the function's system schema directly — no `arguments` wrapper); shallow-merged with the memory strategy's contribution, with caller keys winning on collision. Optional `output_schema` / `json_mode` override the config-level values for one call; both are forbidden on chat agents and raise `ConfigurationError` if supplied there. |
 | `stream` | Streaming analogue. Yields `AgentEvent`s in real time and ends with a terminal `DoneEvent(result=AgentResult(...))`. Same `tags` / `system_arguments` per-call kwargs as `run`. See [streaming.md](streaming.md). |
 | `warmup` | Optional lifespan-phase readiness hook called by `t0_agents.serve.create_app` at startup. Default implementation is a no-op; override in a subclass to front-load probes. See [serving.md](serving.md). |
 
@@ -226,12 +228,14 @@ class Agent:
 
 | Field | Type | Description |
 |---|---|---|
-| `response` | `str` | Final text from the terminating turn. Joined from `Text` blocks, or `Thought` blocks if no text was produced. |
+| `response` | `str` | Final text from the terminating turn. Joined from `Text` blocks, or `Thought` blocks if no text was produced. For JSON runs (`function_kind == "json"`) it is the raw JSON string the model produced. |
 | `episode_id` | `str \| None` | TensorZero episode id. Captured from the first inference response. `None` only if no inference ran. |
-| `inference_ids` | `list[str]` | One inference id per turn, in order. Pass these to `t0.feedback(...)` to attribute outcomes to specific turns. |
-| `turns` | `int` | Number of inference turns the loop executed. `1` means a single inference with no tool calls. |
-| `response_source` | `Literal["text", "thought"]` | `"text"` when the response came from `Text` blocks; `"thought"` when it fell back to reasoning blocks. |
+| `inference_ids` | `list[str]` | One inference id per turn, in order. Pass these to `t0.feedback(...)` to attribute outcomes to specific turns. JSON runs always have exactly one entry. |
+| `turns` | `int` | Number of inference turns the loop executed. `1` means a single inference with no tool calls. JSON runs are always `1`. |
+| `response_source` | `Literal["text", "thought"]` | `"text"` when the response came from `Text` blocks; `"thought"` when it fell back to reasoning blocks. JSON runs stay `"text"` — they emit no thought blocks. |
 | `guardrail_log` | `list[GuardrailLogEntry]` | Per-hook audit record (empty when no guardrails are configured). See [guardrails.md](guardrails.md). |
+| `function_kind` | `Literal["chat", "json"]` | Echoes `AgentConfig.function_kind`. `"chat"` for the tool-loop path, `"json"` for single-shot JSON runs. |
+| `parsed` | `Any \| None` | The JSON object TensorZero produced for a JSON run. `None` for chat runs and also for JSON runs where the model output failed to parse (M3 adds permissive recovery). See [structured-outputs.md](structured-outputs.md). |
 
 ### Collaborator Protocols
 

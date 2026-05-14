@@ -2,7 +2,7 @@
 
 TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour and what each upcoming milestone adds to the surface.
 
-> **Milestone 1 (M1):** ships the single-shot `run_structured_inference()` helper, the new `AgentConfig` fields (`function_kind`, `output_schema`, `json_mode`), and the new `AgentResult` fields (`function_kind`, `parsed`).  `Agent.run(...)` dispatch lands in M2; permissive parsing and the retry loop land in M3; provider-safety warnings and the `Agent.stream(...)` guard land in M4; testing helpers and the dynamic-schema NER example land in M5.
+> **Milestones 1 and 2 (M1, M2):** M1 shipped the single-shot `run_structured_inference()` helper, the new `AgentConfig` fields (`function_kind`, `output_schema`, `json_mode`), and the new `AgentResult` fields (`function_kind`, `parsed`).  M2 wires `Agent.run(...)` to dispatch JSON functions through the helper transparently and surfaces per-call `output_schema` / `json_mode` kwargs.  Permissive parsing and the retry loop land in M3; provider-safety warnings and the `Agent.stream(...)` guard land in M4; testing helpers and the dynamic-schema NER example land in M5.
 
 ## What are JSON functions?
 
@@ -119,6 +119,85 @@ result = await run_structured_inference(...)
 customer = Customer.model_validate(result.parsed)
 ```
 
+## Structured `Agent`
+
+The high-level `Agent` wrapper recognises `function_kind="json"` and dispatches to `run_structured_inference()` automatically — no manual branching required. Build the same `AgentConfig` you would for a chat agent, set the two new fields, and call `agent.run(...)` exactly as before.
+
+```python
+from fastmcp import Client, FastMCP
+from tensorzero import AsyncTensorZeroGateway
+from t0_agents import Agent, AgentConfig
+
+config = AgentConfig(
+    name="customer-extractor",
+    function_name="extract_customer_info",
+    function_kind="json",
+    json_mode="strict",
+)
+
+async with await AsyncTensorZeroGateway.build_http(
+    gateway_url="http://localhost:3000",
+) as t0, Client(FastMCP("noop")) as mcp_client:
+    agent = Agent(config, t0=t0, tool_provider=mcp_client)
+    result = await agent.run("Hi, I'm Sarah at sarah@example.com")
+
+# result.function_kind  — "json"
+# result.parsed         — {"name": "Sarah", "email": "sarah@example.com"}
+# result.response       — '{"name":"Sarah","email":"sarah@example.com"}'
+# result.turns          — 1   (JSON is single-shot)
+# result.inference_ids  — [<one uuid>]
+```
+
+JSON functions never call MCP tools, but `Agent` still requires a `tool_provider` for its constructor — pass any `ToolProvider` (e.g. an empty in-process FastMCP `Client`, as in the snippet above). For a runnable copy see `examples/17_structured/structured_agent.py`.
+
+### Per-call overrides
+
+Both `output_schema` and `json_mode` can be overridden for a single call. Per-call values win over the `AgentConfig` fields:
+
+```python
+result = await agent.run(
+    "...",
+    output_schema={"type": "object", "properties": {"email": {"type": "string"}}, ...},
+    json_mode="tool",  # overrides config's "strict"
+)
+```
+
+Passing either kwarg on a chat-flavoured agent (`function_kind == "chat"`) raises `ConfigurationError` — the kwargs are specifically scoped to JSON functions.
+
+### How `Agent.run` dispatches
+
+```
+agent.run(message, ...)
+        │
+        ▼
+  function_kind == "json"?
+        │
+   ┌────┴────┐
+   ▼         ▼
+  yes        no
+   │         │
+   │         ├─► output_schema/json_mode set?  ─yes─► ConfigurationError
+   │         │
+   │         └─► run_agent (chat loop, byte-identical to v0.9.0)
+   │
+   └─► run_structured_inference (single-shot JSON inference)
+```
+
+### Memory and guardrails for JSON runs
+
+JSON functions are single-shot — there is no tool loop, no parallel tool dispatch, no sub-agent orchestration (the last is rejected at `AgentConfig.__post_init__`). The scaffolding fires accordingly:
+
+| Hook | Fires on JSON run? | Notes |
+|------|--------------------|-------|
+| `Guardrail.before_run` | Yes | Same `GuardrailContext`, same fatal/non-fatal contract as chat. |
+| `Guardrail.before_tool` | **No** | JSON functions never call tools. |
+| `Guardrail.after_tool` | **No** | JSON functions never call tools. |
+| `Guardrail.after_run` | Yes | Same contract as chat — receives the final `AgentResult` (or `None` on fatal abort). |
+| `MemoryProvider.load` | Yes when `episode_id` is set | `prepended_message` (default) prepends a summary; `system_template` threads into `input.system`. |
+| `MemoryProvider.save` | Yes | `MemoryRecord.agent_response` is the raw JSON string (i.e. `result.response`). |
+
+The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.run` raises `ConfigurationError` at runtime whenever a JSON-flavoured agent is configured with that strategy, regardless of whether a prior history exists. Use `"prepended_message"` (the default) or `"system_template"` instead.
+
 ## `json_mode` provider matrix
 
 | Mode       | What it does                                                                       | Best for                                                       |
@@ -138,15 +217,14 @@ See [the gateway guide §8](https://www.tensorzero.com/docs/gateway/generate-str
 
 ## What's coming
 
-The structured-outputs roadmap ships in five milestones; M1 closes only the first.
+The structured-outputs roadmap ships in five milestones; M1 and M2 are closed.
 
-- **M2** — `Agent.run(...)` dispatches `function_kind == "json"` agents to `run_structured_inference()` transparently and surfaces per-call `output_schema` / `json_mode` kwargs.
 - **M3** — adds `permissive_json_parsing` (in-Python recovery when the gateway returns `parsed == None`) and `max_json_retries` (re-emit the inference with a corrective hint).  `parse_strategy` will report which layer produced the parse.
 - **M4** — adds the `Agent.stream(...) + function_kind == "json"` guard (TZ does not emit `parsed` for streaming JSON), the opt-in `require_parsed()` guardrail, and provider-safety warnings.
 - **M5** — adds `MockGateway` support for JSON shapes, the `assert_parsed_*` testing helpers, and the dynamic-schema NER example.
 
 ## See also
 
-- [Agent](agent.md) — declarative front door; will gain `function_kind == "json"` dispatch in M2.
+- [Agent](agent.md) — declarative front door; gains `function_kind == "json"` dispatch (since v0.10.0-M2).
 - [Concepts](concepts.md) — overview of TensorZero's chat-vs-json distinction.
 - [TensorZero structured-outputs guide](https://www.tensorzero.com/docs/gateway/generate-structured-outputs) — authoritative source for `output_schema`, `json_mode`, `response_format`, and provider quirks.
