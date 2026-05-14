@@ -1,0 +1,26 @@
+# TensorZero gateway configuration for the structured-outputs example.
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+[models.gpt_oss_20]
+routing = ["groq"]
+
+[models.gpt_oss_20.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+# JSON function: TensorZero parses the model output against the schema.
+# ``json_mode = "strict"`` asks the provider to enforce schema compliance
+# on its end (works for OpenAI Structured Outputs and direct Anthropic).
+# Use ``"tool"`` for providers without native strict support
+# (e.g. AWS Bedrock non-Anthropic) — see docs/structured-outputs.md.
+[functions.extract_customer_info]
+type = "json"
+output_schema = "functions/extract_customer_info/output_schema.json"
+
+[functions.extract_customer_info.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/extract_customer_info/system_template.minijinja"
+json_mode = "strict"

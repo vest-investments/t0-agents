@@ -19,6 +19,7 @@ from t0_agents.core.exceptions import (
     T0AgentsError,
     T0AgentsFatalError,
 )
+from t0_agents.core.structured import StructuredOutput
 from t0_agents.core.types import (
     AgentResult,
     Guardrail,
@@ -59,6 +60,7 @@ __all__ = [
     "MaxTurnsExceededError",
     "MemoryProvider",
     "StreamingAgentLoop",
+    "StructuredOutput",
     "SubAgentError",
     "T0AgentsError",
     "T0AgentsFatalError",

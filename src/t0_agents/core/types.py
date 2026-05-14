@@ -111,7 +111,14 @@ class GuardrailLogEntry:
 
 @dataclass
 class AgentResult:
-    """Result of an agent run."""
+    """Result of an agent run.
+
+    ``function_kind`` and ``parsed`` are the M1 surface for structured
+    outputs.  Their defaults (``"chat"`` and ``None``) preserve
+    byte-identical behaviour for callers that ran against v0.9.0 — a
+    chat agent's result reads the same as before.  Wiring lands in M2;
+    M1 ships only the dataclass surface.
+    """
 
     response: str
     episode_id: str | None = None
@@ -119,3 +126,5 @@ class AgentResult:
     turns: int = 0
     response_source: Literal["text", "thought"] = "text"
     guardrail_log: list[GuardrailLogEntry] = field(default_factory=list)
+    function_kind: Literal["chat", "json"] = "chat"
+    parsed: Any | None = None

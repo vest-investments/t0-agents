@@ -29,6 +29,19 @@ type = "chat_completion"
 model = "gpt_oss_20"
 templates.system.path = "functions/agent_with_schema/system.minijinja"
 
+# Structured-outputs roadmap (M1): JSON function used by the
+# structured-outputs example (examples/17_structured/) and the
+# tests/test_core/test_structured_integration.py integration tests.
+[functions.extract_customer_info]
+type = "json"
+output_schema = "functions/extract_customer_info/output_schema.json"
+
+[functions.extract_customer_info.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/extract_customer_info/system_template.minijinja"
+json_mode = "strict"
+
 # Metrics for feedback
 [metrics.task_success]
 type = "boolean"
