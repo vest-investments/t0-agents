@@ -196,7 +196,7 @@ JSON functions are single-shot — there is no tool loop, no parallel tool dispa
 | `MemoryProvider.load` | Yes when `episode_id` is set | `prepended_message` (default) prepends a summary; `system_template` threads into `input.system`. |
 | `MemoryProvider.save` | Yes | `MemoryRecord.agent_response` is the raw JSON string (i.e. `result.response`). |
 
-The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.run` raises `ConfigurationError` at runtime when a JSON run loads a non-empty conversation history. Use `"prepended_message"` (the default) or `"system_template"` instead.
+The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.run` raises `ConfigurationError` at runtime whenever a JSON-flavoured agent is configured with that strategy, regardless of whether a prior history exists. Use `"prepended_message"` (the default) or `"system_template"` instead.
 
 ## `json_mode` provider matrix
 

@@ -737,13 +737,24 @@ class Agent:
         path used by chat.
         """
         # --- 1. Load memory (mirrors chat run()) ---
-        memory_records: list[MemoryRecord] = []
+        # ``run_structured_inference`` is single-shot and has no
+        # ``prior_messages`` kwarg — TZ's JSON functions take exactly one
+        # user message.  Reject ``memory_strategy="messages"`` at the
+        # strategy level (rather than after a load round-trip that
+        # might silently see an empty history) so the misconfiguration
+        # is caught uniformly regardless of episode state.  M3+ may
+        # revisit if a real workload needs threaded history with JSON.
         strategy = self._resolve_memory_strategy()
-        if (
-            self._config.memory is not None
-            and episode_id is not None
-            and strategy != "messages"
-        ):
+        if strategy == "messages":
+            raise ConfigurationError(
+                "memory_strategy='messages' is not supported for "
+                "function_kind='json' — JSON functions are single-shot. "
+                "Use memory_strategy='prepended_message' (the default) "
+                "or 'system_template' instead."
+            )
+
+        memory_records: list[MemoryRecord] = []
+        if self._config.memory is not None and episode_id is not None:
             try:
                 raw_records = await self._config.memory.load(episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
@@ -759,19 +770,6 @@ class Agent:
             user_message, memory_records, episode_id=episode_id,
         )
         self._merge_caller_system_arguments(extra_kwargs, system_arguments)
-
-        # ``run_structured_inference`` is single-shot and has no
-        # ``prior_messages`` kwarg — TZ's JSON functions take exactly one
-        # user message.  Reject ``memory_strategy="messages"`` for JSON
-        # runs rather than silently dropping the loaded history.  M3+ may
-        # revisit if a real workload needs threaded history with JSON.
-        if "prior_messages" in extra_kwargs:
-            raise ConfigurationError(
-                "memory_strategy='messages' is not supported for "
-                "function_kind='json' — JSON functions are single-shot. "
-                "Use memory_strategy='prepended_message' (the default) "
-                "or 'system_template' instead."
-            )
 
         # --- 3. Set up guardrail scaffolding ---
         # JSON has no tool loop, so the tool-provider is never wrapped

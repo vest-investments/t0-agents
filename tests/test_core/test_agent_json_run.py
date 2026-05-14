@@ -27,7 +27,6 @@ from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
-from t0_agents.memory.base import MemoryRecord
 from t0_agents.memory.in_memory import InMemoryMemory
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
@@ -59,7 +58,7 @@ def _fake_json_response(
         episode_id=episode_id or uuid4(),
         variant_name="test-variant",
         output=JsonInferenceOutput(raw=raw, parsed=parsed_value),
-        usage=Usage(input_tokens=10, output_tokens=20),  # type: ignore[call-arg]
+        usage=Usage(input_tokens=10, output_tokens=20),
     )
 
 
@@ -321,7 +320,7 @@ class TestMemory:
 
         records = await memory.load(str(episode))
         assert len(records) == 1
-        record = cast(MemoryRecord, records[0])
+        record = records[0]
         assert record.agent_response == '{"x": 1}'
         assert record.agent_response == result.response
         assert record.turns == 1
@@ -345,9 +344,20 @@ class TestEpisodePropagation:
 
 
 class TestMessagesMemoryStrategy:
-    async def test_messages_strategy_rejected_for_json_runs(self) -> None:
-        # ``memory_strategy='messages'`` requires a ``load_history`` method
-        # on the memory provider; build a minimal stub that satisfies it.
+    """Reject ``memory_strategy='messages'`` for JSON runs uniformly.
+
+    The rejection is keyed off the resolved strategy rather than the
+    presence of loaded history, so an episode with no prior messages
+    (or no ``episode_id`` at all) still surfaces the misconfiguration
+    instead of running silently.
+    """
+
+    @staticmethod
+    def _messages_memory(
+        *, history: list[dict[str, str]],
+    ) -> Any:
+        """Build a minimal memory provider that implements load_history."""
+
         class _MessagesMemory:
             async def load(self, episode_id: str) -> list[Any]:
                 return []
@@ -360,9 +370,14 @@ class TestMessagesMemoryStrategy:
                 return []
 
             async def load_history(self, episode_id: str) -> list[Any]:
-                return [{"role": "user", "content": "prior"}]
+                return list(history)
 
-        memory = _MessagesMemory()
+        return _MessagesMemory()
+
+    async def test_rejected_with_non_empty_history(self) -> None:
+        memory = self._messages_memory(
+            history=[{"role": "user", "content": "prior"}],
+        )
         episode = uuid4()
         t0 = FakeJsonT0([_fake_json_response()])
         agent = _json_agent(
@@ -373,3 +388,33 @@ class TestMessagesMemoryStrategy:
 
         with pytest.raises(ConfigurationError, match="messages"):
             await agent.run("hi", episode_id=str(episode))
+
+    async def test_rejected_with_empty_history(self) -> None:
+        # Before applying the strategy-level check, an empty history
+        # would have let the misconfigured run proceed silently because
+        # ``extra_kwargs`` never picked up ``prior_messages``.
+        memory = self._messages_memory(history=[])
+        episode = uuid4()
+        t0 = FakeJsonT0([_fake_json_response()])
+        agent = _json_agent(
+            t0=t0,
+            memory=cast(Any, memory),
+            memory_strategy="messages",
+        )
+
+        with pytest.raises(ConfigurationError, match="messages"):
+            await agent.run("hi", episode_id=str(episode))
+
+    async def test_rejected_without_episode_id(self) -> None:
+        # No ``episode_id`` ⇒ no memory load happens at all; the check
+        # still fires because it keys off the configured strategy.
+        memory = self._messages_memory(history=[])
+        t0 = FakeJsonT0([_fake_json_response()])
+        agent = _json_agent(
+            t0=t0,
+            memory=cast(Any, memory),
+            memory_strategy="messages",
+        )
+
+        with pytest.raises(ConfigurationError, match="messages"):
+            await agent.run("hi")

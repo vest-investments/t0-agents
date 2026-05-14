@@ -119,10 +119,22 @@ and `system_template` as the supported strategies for JSON runs and is
 silent on `"messages"`.  `run_structured_inference` has no
 `prior_messages` kwarg (TZ's JSON functions are single-shot), so a
 loaded conversation history could not be forwarded to the gateway.
-Rather than silently dropping the loaded history, `_run_json` inspects
-`extra_kwargs` after `_prepare_memory_injection` returns and raises
-`ConfigurationError` when it contains `"prior_messages"`.  Tested in
-`TestMessagesMemoryStrategy::test_messages_strategy_rejected_for_json_runs`.
+`_run_json` rejects the strategy at the top of the method —
+immediately after `_resolve_memory_strategy()` returns `"messages"`,
+before any `memory.load` round-trip — and raises
+`ConfigurationError` with a message pointing at `"prepended_message"`
+or `"system_template"`.  The strategy-level check is uniform across
+episode states: a misconfigured agent fails the same way whether the
+caller provides no `episode_id`, an `episode_id` with empty history,
+or an `episode_id` with non-empty history.
+
+Initial implementation keyed the check off `"prior_messages" in
+extra_kwargs` (after `_prepare_memory_injection`), which silently
+passed when the history was empty or `episode_id` was `None`.
+Switched to the strategy-level check after gemini-code-assist flagged
+the inconsistency in PR review.  Three tests in
+`TestMessagesMemoryStrategy` lock the new behaviour in
+(non-empty-history, empty-history, no-episode-id).
 
 **Impact on M3:** M3's retry loop reuses `_run_json` (per contract §4.4
 the retry orchestration lives inside `Agent.run`'s JSON path); the
