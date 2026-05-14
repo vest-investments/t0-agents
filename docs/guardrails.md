@@ -771,6 +771,27 @@ because they mutate before the first `await` point in `before_tool`.
 Custom guardrails that mutate shared state through an `await` boundary
 need an `asyncio.Lock` — see [Concurrency](#concurrency) above.
 
+**`require_approval` is not safe under `parallel_tools=True`.** When
+the model emits N tool calls in a single assistant turn, the parallel
+executor fans them out via `asyncio.gather`, and every gated call enters
+its `before_tool` hook concurrently. The hook awaits a human
+response per call, so the user sees N approval prompts simultaneously
+for the same logical action — there is no native coalescing in the
+guardrail today. The supported configurations are:
+
+- Keep `parallel_tools=False` (the default) when any tool may be wrapped
+  with `require_approval`, or
+- Flip `parallel_tools=True` only when **no** active guardrail awaits
+  human input (built-in: `max_cost`, `max_tool_calls`, `block_tools`).
+
+Custom approval-style guardrails inherit the same caveat: if your hook
+awaits an external decision (human, queue, remote policy engine), do
+not pair it with `parallel_tools=True`. Cross-references: the broader
+mental model around when to enable the flag lives in
+[Concurrency](concurrency.md); the deployment-side checklist (rate
+limits, transactional tools) lives in
+[Production / Parallel vs sequential tool execution](production.md#parallel-vs-sequential-tool-execution).
+
 ### Cost-tracking caveats
 
 `max_cost` reads `Usage.cost` directly from the gateway's response. That

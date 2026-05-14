@@ -92,11 +92,11 @@ result = await run_agent(
 
 ## Parallel vs sequential tool execution
 
-`run_agent` accepts `parallel_tools: bool` (default `False`).
+`run_agent` and `AgentConfig` accept `parallel_tools: bool` (default `False`). The flag selects between two executors in `t0_agents.mcp.loop`:
 
-**Sequential** (default): tools execute one at a time via a list comprehension of awaited calls. Safer for tools that share resources or have side effects.
+**Sequential** (default): `execute_tool_calls` awaits each `ToolCall` block in turn. Safer for tools that share resources or have side effects.
 
-**Parallel** (`parallel_tools=True`): tool calls dispatch concurrently via `asyncio.gather`. Faster for I/O-bound tools. Result order is preserved regardless of completion order.
+**Parallel** (`parallel_tools=True`): `execute_tool_calls_parallel` dispatches concurrently via `asyncio.gather`. Faster for I/O-bound tools. Result order is preserved regardless of completion order.
 
 ```python
 result = await run_agent(
@@ -104,6 +104,18 @@ result = await run_agent(
     parallel_tools=True,  # Concurrent tool execution
 )
 ```
+
+### Checklist before flipping `parallel_tools=True`
+
+Confirm each of the following for the agents that will run with the flag on. If any item fails, leave the flag at its default.
+
+- [ ] **Tool idempotency.** Every tool the agent might call in the same turn is either read-only or safe to run alongside its siblings. A retry of the same call should not corrupt state.
+- [ ] **No shared mutable state across same-turn calls.** Tools do not write to the same record, file, or in-memory cache that another tool in the same turn reads.
+- [ ] **Guardrails are race-safe.** Built-in `max_cost`, `max_tool_calls`, and `block_tools` are. **`require_approval` is not** (see [Guardrails / `parallel_tools=True`](guardrails.md#parallel_toolstrue)) — it fans out N approval prompts to one human. Custom guardrails that mutate shared state across an `await` boundary need an `asyncio.Lock`.
+- [ ] **Provider rate limits absorb the burst.** Parallel dispatch collapses N latency budgets into one but multiplies your peak QPS to the tool backend and the LLM provider. Confirm your quotas and circuit breakers can take it.
+- [ ] **Tracing tolerates concurrent calls.** TensorZero tags propagate per inference, not per parallel tool call. ClickHouse traces will show overlapping `call_tool` spans under the same `inference_id`; downstream dashboards should not assume serial ordering inside one turn.
+
+The full mental model — including what parallelism cannot fix (inter-turn dependencies) and how multi-agent dispatch composes with the flag — lives in [Concurrency](concurrency.md).
 
 ## Elicitation timeout
 

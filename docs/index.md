@@ -41,6 +41,7 @@ Cross-cutting references that span every chapter above. Reach for them when you 
 - **[Observability](observability.md)** — episode and inference correlation, the `t0.feedback` API, structured logging conventions, and ClickHouse analytics hooks.
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.
 - **[Multi-Server Composition](multi-server.md)** — mounting multiple FastMCP servers behind one agent with namespace prefixes, plus the TensorZero configuration to match.
+- **[Concurrency](concurrency.md)** — the three places parallelism lives in the stack (intra-turn `parallel_tools`, batch tools, multi-agent dispatch), with the decision table and the patterns the library deliberately does not provide.
 
 ## Public API
 
