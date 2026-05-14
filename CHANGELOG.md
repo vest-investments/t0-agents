@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0-M2] — Unreleased
+
+Milestone 2 of the structured-outputs roadmap — `Agent.run` now
+dispatches JSON functions through `run_structured_inference` whenever
+`AgentConfig.function_kind == "json"`.  Permissive parsing, the retry
+loop, and the streaming guard still land in M3 and M4 respectively.
+
+### Added
+
+- **`Agent.run` JSON dispatch.**  When `config.function_kind == "json"`,
+  the method routes to `run_structured_inference` instead of the MCP
+  tool loop and returns an `AgentResult` with `function_kind="json"`,
+  `parsed` populated, `response` set to the raw JSON string, `turns ==
+  1`, and a single entry in `inference_ids`.  The chat path is
+  byte-identical to v0.9.0 for callers that do not pass the new
+  kwargs.
+- **Per-call `output_schema` and `json_mode` kwargs on `Agent.run`.**
+  Both override the corresponding `AgentConfig` fields for a single
+  call.  Passing either on a chat-flavoured agent raises
+  `ConfigurationError`.
+- **Run-level guardrails fire on JSON runs.**  `Guardrail.before_run`
+  and `Guardrail.after_run` execute exactly as on the chat path —
+  same fatal/non-fatal contract, same `guardrail_log` shape.  Tool
+  hooks (`before_tool`/`after_tool`) never fire because JSON
+  functions are single-shot and call no tools.
+- **Memory load/save on the JSON path.**  `memory_strategy` values
+  `"prepended_message"` (the default) and `"system_template"` work
+  unchanged.  `MemoryRecord.agent_response` carries the raw JSON
+  string returned by the model.  `memory_strategy="messages"` is
+  rejected at runtime with `ConfigurationError` because
+  `run_structured_inference` has no `prior_messages` kwarg — M3 may
+  revisit if a real workload requires threaded history.
+- **Example**: `examples/17_structured/structured_agent.py` — the
+  `Agent`-flavour counterpart to `main.py`.  Same TensorZero function,
+  same docker-compose setup; demonstrates `agent.run(...)` twice in a
+  row and surfaces the new `AgentResult` fields.
+- **Docs**: `docs/structured-outputs.md` gains a "Structured `Agent`"
+  section, per-call override examples, a dispatch diagram, and the
+  memory/guardrails behaviour table.  `docs/agent.md` documents the
+  expanded `Agent.run` signature, the per-call kwarg validation, and
+  the JSON values for `AgentResult.function_kind` / `parsed`.
+
 ## [0.10.0-M1] — Unreleased
 
 Milestone 1 of the structured-outputs roadmap — single-shot helper plus

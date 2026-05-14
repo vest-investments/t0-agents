@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, Literal, cast
 
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
-from tensorzero.types import ChatInferenceResponse
+from tensorzero.types import ChatInferenceResponse, JsonInferenceResponse
 
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError, T0AgentsFatalError
+from t0_agents.core.structured import StructuredOutput, run_structured_inference
 from t0_agents.core.types import (
     AgentResult,
     GuardrailLogEntry,
@@ -46,6 +47,28 @@ def _make_cost_tracker(
     """
 
     async def _on_inference(response: ChatInferenceResponse) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            ctx.cost_so_far += usage.cost or 0.0
+        ctx.turn += 1
+
+    return _on_inference
+
+
+def _make_json_cost_tracker(
+    ctx: GuardrailContext,
+) -> Callable[[JsonInferenceResponse], Awaitable[None]]:
+    """JSON-function analogue of :func:`_make_cost_tracker`.
+
+    Deliberate duplication of the chat tracker — both ``ChatInferenceResponse``
+    and ``JsonInferenceResponse`` expose a ``usage`` attribute but they are
+    not related by inheritance, and parameterising the chat tracker with a
+    structural ``Union`` would push the typing burden onto every caller.  M3
+    introduces a second JSON inference path (retry); revisit consolidation
+    once the duplication actually grows.
+    """
+
+    async def _on_inference(response: JsonInferenceResponse) -> None:
         usage = getattr(response, "usage", None)
         if usage is not None:
             ctx.cost_so_far += usage.cost or 0.0
@@ -146,8 +169,23 @@ class Agent:
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
     ) -> AgentResult:
         """Run the agent loop and return the final response.
+
+        Dispatches on ``config.function_kind``:
+
+        - ``"chat"`` (default) — runs the existing tool loop via
+          :func:`~t0_agents.mcp.loop.run_agent`.  Behaviour is byte-identical
+          to v0.9.0 for any caller that does not set the new
+          ``output_schema`` / ``json_mode`` kwargs.
+        - ``"json"`` — single-shot JSON inference via
+          :func:`~t0_agents.core.structured.run_structured_inference`.
+          The resulting :class:`AgentResult` carries
+          ``function_kind="json"``, ``parsed`` (the JSON-parsed object or
+          ``None`` when TensorZero could not parse the model output), and
+          ``response`` set to the raw JSON string.
 
         When ``config.memory`` is set, memory records are loaded before the
         loop (if *episode_id* is provided) and a new record is persisted
@@ -155,7 +193,10 @@ class Agent:
         the tool provider is wrapped in a :class:`GuardedToolProvider` that
         fires every hook around every ``call_tool`` and tracks per-run
         counters on a fresh :class:`GuardrailContext`; the resulting
-        :class:`AgentResult` carries a populated ``guardrail_log``.
+        :class:`AgentResult` carries a populated ``guardrail_log``.  The
+        JSON path skips the tool-level hooks (``before_tool``/``after_tool``)
+        because JSON functions never call tools, but ``before_run`` and
+        ``after_run`` fire normally.
 
         Args:
             user_message: The user's query as a plain string.
@@ -179,16 +220,54 @@ class Agent:
                 produced by ``memory_strategy="system_template"``: caller
                 keys take precedence on collision.  ``None`` (the
                 default) preserves today's behaviour exactly.
+            output_schema: Per-call override for the JSON function's static
+                schema (TZ guide §4).  Only valid when
+                ``config.function_kind == "json"``; raises
+                :class:`ConfigurationError` on chat agents.  Takes
+                precedence over ``config.output_schema`` when both are set.
+            json_mode: Per-call override for the TensorZero ``json_mode``
+                (TZ guide §5).  Only valid when
+                ``config.function_kind == "json"``; raises
+                :class:`ConfigurationError` on chat agents.  Takes
+                precedence over ``config.json_mode`` when both are set.
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
             text of the terminating turn, episode metadata, turn count,
             and (when guardrails are configured) the per-hook audit log.
+            For JSON runs ``response`` is the raw JSON string, ``parsed``
+            carries the parsed object, ``turns`` is always ``1``, and
+            ``inference_ids`` has a single entry.
 
         Raises:
             MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
             GuardrailBlockedError: If any guardrail hard-aborts the run.
+            ConfigurationError: If ``output_schema`` or ``json_mode`` is
+                passed on an agent with ``config.function_kind == "chat"``,
+                or if a JSON run is configured with
+                ``memory_strategy == "messages"`` (use ``"prepended_message"``
+                or ``"system_template"`` instead).
         """
+        # Structured-output dispatch: JSON functions bypass the tool loop
+        # and route to ``run_structured_inference``.  The chat path below
+        # is unchanged from v0.9.0 for any caller that does not pass the
+        # new kwargs.
+        if self._config.function_kind == "json":
+            return await self._run_json(
+                user_message,
+                episode_id=episode_id,
+                tags=tags,
+                system_arguments=system_arguments,
+                output_schema=output_schema,
+                json_mode=json_mode,
+            )
+        if output_schema is not None or json_mode is not None:
+            raise ConfigurationError(
+                "output_schema/json_mode kwargs are only valid when "
+                "AgentConfig.function_kind == 'json'; got function_kind="
+                f"{self._config.function_kind!r}."
+            )
+
         # --- 1. Load memory ---
         # ``messages`` strategy uses load_history (called from
         # _prepare_memory_injection); records are unused on that path so
@@ -632,6 +711,194 @@ class Agent:
         # --- 8. Terminal DoneEvent (outside try so after_run fires first) ---
         if done_result is not None:
             yield DoneEvent(result=done_result)
+
+    async def _run_json(
+        self,
+        user_message: str,
+        *,
+        episode_id: str | None,
+        tags: dict[str, str] | None,
+        system_arguments: dict[str, Any] | None,
+        output_schema: Mapping[str, Any] | None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None,
+    ) -> AgentResult:
+        """JSON-function dispatch path for :meth:`run`.
+
+        Single-shot call to :func:`run_structured_inference` wrapped in the
+        same memory + run-level guardrail scaffolding as the chat path.
+        No tool loop, no sub-agent orchestration, no
+        ``before_tool``/``after_tool`` hooks — JSON functions are
+        single-shot by contract.
+
+        Sub-agent composition is rejected at config construction
+        (``AgentConfig.__post_init__`` raises when
+        ``function_kind == "json"`` is combined with ``sub_agents``), so
+        this method does not exercise the ``_OrchestrationToolProvider``
+        path used by chat.
+        """
+        # --- 1. Load memory (mirrors chat run()) ---
+        memory_records: list[MemoryRecord] = []
+        strategy = self._resolve_memory_strategy()
+        if (
+            self._config.memory is not None
+            and episode_id is not None
+            and strategy != "messages"
+        ):
+            try:
+                raw_records = await self._config.memory.load(episode_id)
+                memory_records = cast(list[MemoryRecord], raw_records)
+            except Exception:
+                logger.warning(
+                    "Memory load failed for episode %s; proceeding without context",
+                    episode_id,
+                    exc_info=True,
+                )
+
+        # --- 2. Prepare memory injection ---
+        effective_message, extra_kwargs = await self._prepare_memory_injection(
+            user_message, memory_records, episode_id=episode_id,
+        )
+        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
+
+        # ``run_structured_inference`` is single-shot and has no
+        # ``prior_messages`` kwarg — TZ's JSON functions take exactly one
+        # user message.  Reject ``memory_strategy="messages"`` for JSON
+        # runs rather than silently dropping the loaded history.  M3+ may
+        # revisit if a real workload needs threaded history with JSON.
+        if "prior_messages" in extra_kwargs:
+            raise ConfigurationError(
+                "memory_strategy='messages' is not supported for "
+                "function_kind='json' — JSON functions are single-shot. "
+                "Use memory_strategy='prepended_message' (the default) "
+                "or 'system_template' instead."
+            )
+
+        # --- 3. Set up guardrail scaffolding ---
+        # JSON has no tool loop, so the tool-provider is never wrapped
+        # and ``before_tool``/``after_tool`` never fire.  Run-level
+        # hooks (``before_run``/``after_run``) fire just like the chat
+        # path so cost-tracking and policy guardrails work uniformly.
+        guard_ctx: GuardrailContext | None = None
+        guard_log: list[GuardrailLogEntry] = []
+        on_inference: (
+            Callable[[JsonInferenceResponse], Awaitable[None]] | None
+        ) = None
+
+        if self._config.guardrails:
+            guard_ctx = GuardrailContext(
+                agent_name=self._config.name,
+                function_name=self._config.function_name,
+                user_message=user_message,
+            )
+            on_inference = _make_json_cost_tracker(guard_ctx)
+
+        # --- 4. Resolve effective output_schema / json_mode ---
+        # Per-call kwargs take precedence over the config-level fields.
+        # ``AgentConfig.__post_init__`` resolves ``Path`` schemas into
+        # ``Mapping`` at construction time, so the config field is
+        # ``Mapping | None`` here.
+        config_schema = self._config.output_schema
+        effective_schema: Mapping[str, Any] | None
+        if output_schema is not None:
+            effective_schema = output_schema
+        elif config_schema is not None:
+            effective_schema = cast(Mapping[str, Any], config_schema)
+        else:
+            effective_schema = None
+        effective_mode = (
+            json_mode if json_mode is not None else self._config.json_mode
+        )
+
+        # --- 5. Delegate to run_structured_inference ---
+        result: AgentResult | None = None
+        try:
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.before_run(guard_ctx)
+                    except T0AgentsFatalError:
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r before_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="before_run",
+                                kind="pass",
+                            )
+                        )
+
+            structured: StructuredOutput = await run_structured_inference(
+                self._t0,
+                function_name=self._config.function_name,
+                user_message=effective_message,
+                output_schema=effective_schema,
+                json_mode=effective_mode,
+                system_arguments=extra_kwargs.get("system_arguments"),
+                episode_id=episode_id,
+                tags=self._merge_tags(tags),
+                namespace=self._config.namespace,
+                dryrun=self._config.dryrun,
+                on_inference=on_inference,
+            )
+            result = AgentResult(
+                response=structured.raw,
+                episode_id=structured.episode_id,
+                inference_ids=[structured.inference_id],
+                turns=1,
+                function_kind="json",
+                parsed=structured.parsed,
+            )
+        finally:
+            if guard_ctx is not None:
+                for guardrail in self._config.guardrails:
+                    try:
+                        await guardrail.after_run(guard_ctx, result)
+                    except Exception:
+                        logger.exception(
+                            "Guardrail %r after_run raised a non-fatal exception; "
+                            "continuing",
+                            guardrail.name,
+                        )
+                    else:
+                        guard_log.append(
+                            GuardrailLogEntry(
+                                guardrail_name=guardrail.name,
+                                hook="after_run",
+                                kind="pass",
+                            )
+                        )
+                if result is not None:
+                    result.guardrail_log = list(guard_log)
+
+        # Control reaches here only when the structured inference returned
+        # normally (no exception propagated past the ``try``).
+        assert result is not None
+
+        # --- 6. Save memory (mirrors chat run() ordering) ---
+        if self._config.memory is not None and result.episode_id:
+            record = MemoryRecord(
+                episode_id=result.episode_id,
+                user_message=user_message,
+                agent_response=result.response,
+                turns=result.turns,
+                inference_ids=list(result.inference_ids),
+            )
+            try:
+                await self._config.memory.save(record)
+            except Exception:
+                logger.warning(
+                    "Memory save failed for episode %s; run result is still valid",
+                    result.episode_id,
+                    exc_info=True,
+                )
+
+        return result
 
     # ------------------------------------------------------------------
     # Private helpers
