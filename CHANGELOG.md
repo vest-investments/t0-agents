@@ -4,6 +4,77 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0-M4] — Unreleased
+
+Milestone 4 of the structured-outputs roadmap — JSON-flavoured agents
+fail fast on incompatible combinations, emit a once-per-instance
+Anthropic compatibility warning, and gain the opt-in
+`require_parsed()` guardrail.  Also realigns the `after_run`
+exception-handler contract with the docs (previously documented but
+not enforced).  Chat-path behaviour is byte-identical to v0.9.0;
+`mcp/` is untouched.
+
+### Added
+
+- **`require_parsed()`** (`t0_agents.guardrails.require_parsed`) —
+  opt-in guardrail whose `after_run` raises
+  `GuardrailBlockedError` when a JSON run completes with
+  `result.parsed is None`.  No-op on chat runs (`parsed` is
+  structurally absent on the chat path).  Lives in
+  `src/t0_agents/guardrails/structured.py`.
+- **JSON `Agent.stream(...)` guard.**  Iterating
+  `agent.stream(...)` on an agent with `function_kind == "json"`
+  raises `ConfigurationError` at the first `__anext__` with a
+  message pointing at `Agent.run(...)`.  TensorZero does not emit
+  `output.parsed` mid-stream (guide §7.1, §11.3), so surfacing a
+  stream of `parsed=None` events would be a worse contract than
+  refusing.  Chat streams are byte-identical to v0.9.0.
+- **`json_mode="tool"` + tool-provider conflict check.**
+  `AgentConfig(function_kind="json", json_mode="tool")` combined
+  with a `tool_provider` that advertises tools raises
+  `ConfigurationError` on the first `Agent.run(...)` (TZ guide
+  §11.1 — `"tool"` mode cannot share a request with other tools).
+  The check is async, so it runs once at the top of `_run_json` and
+  is cached on the Agent instance.
+- **Anthropic extended-thinking warning.**  A `WARNING`-level log
+  is emitted on the `t0_agents.core.agent` logger the first time
+  an agent with `json_mode in {"on", "tool"}` runs.  Once per Agent
+  instance.  TZ guide §11.4 documents the incompatibility; the SDK
+  does not expose provider routing, so the warning is generic.
+
+### Changed
+
+- **`Agent.run` / `Agent.stream` / `Agent._run_json` realign
+  `after_run` exception handling with the documented contract.**
+  Per `docs/guardrails.md` ("A custom hook that needs to abort
+  should raise a subclass of `T0AgentsFatalError`, which bypasses
+  the non-fatal trap"), fatal hooks raised from `after_run` must
+  propagate past the broad `except Exception` belt-and-braces trap.
+  Until M4 the three `after_run` loops swallowed every exception,
+  silently neutering the documented hard-abort path.  M4 adds
+  `except T0AgentsFatalError: raise` ahead of the existing
+  `except Exception` at each site, mirroring the `before_run`
+  precedent.  Required for `require_parsed()` to actually abort a
+  run.
+
+### Compatibility
+
+- **Chat path byte-identical to v0.9.0.**  All new safety surfaces
+  short-circuit on `function_kind == "chat"`.  No existing test in
+  `tests/test_mcp/`, `tests/test_core/`, `tests/test_stream/`,
+  `tests/test_serve/`, `tests/test_compose/`, `tests/test_guardrails/`,
+  `tests/test_memory/`, `tests/test_cli/`, or `tests/test_testing/`
+  changed behaviour.
+- **`mcp/` byte-identical to v0.9.0.**  No source changes;
+  contract §2.1 invariant holds.
+- **`after_run` realignment is observationally compatible for every
+  existing guardrail.**  None of the built-in guardrails
+  (`require_approval`, `max_cost`, `max_tool_calls`, `block_tools`)
+  raise fatal errors from `after_run`; user-supplied guardrails
+  that depend on the old swallow-everything behaviour can replace
+  the hard-raise with a `logger.error` in their own implementation
+  to retain v0.10.0-M3 semantics.
+
 ## [0.10.0-M3] — Unreleased
 
 Milestone 3 of the structured-outputs roadmap — JSON-function runs

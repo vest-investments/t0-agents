@@ -264,7 +264,20 @@ we detect a likely combination at runtime.
 provider compatibility.  This is no worse than what TensorZero itself
 documents.  No auto-detection.
 
-**Status:** open.  Resolution expected during M4.
+**Status:** resolved during M4 (2026-05-14).
+
+**Resolution:** implemented exactly as hypothesised.  `Agent` emits a
+`logger.warning` on the `t0_agents.core.agent` logger the first time
+`Agent.run(...)` fires on an instance whose `config.json_mode` is
+`"on"` or `"tool"`.  Once-per-instance latch
+(`Agent._warned_anthropic_combination`) keeps long-lived agents from
+spamming the log.  Modes `"strict"` and `"off"` are safe across every
+provider and do not warn.  No provider auto-detection — the SDK does
+not expose provider routing (validated at
+`.venv/.../tensorzero/tensorzero.pyi`).  Implementation in
+`src/t0_agents/core/agent.py::Agent._maybe_warn_anthropic_quirk`;
+test coverage in `tests/test_core/test_agent_json_safety.py`
+(`TestAnthropicWarning`, three tests).
 
 ---
 
