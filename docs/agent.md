@@ -174,6 +174,9 @@ Frozen-shape dataclass (slots, no inheritance). Validation runs in `__post_init_
 | `memory_strategy` | `Literal["auto", "system_template", "prepended_message"]` | `"auto"` | Controls how loaded memory is injected into the prompt. See [memory.md](memory.md). |
 | `guardrails` | `list[Guardrail]` | `[]` | Declarative policy layer. See [guardrails.md](guardrails.md). |
 | `sub_agents` | `list[Agent]` | `[]` | Exposes nested agents as MCP tools on an orchestrator. See [multi-agent.md](multi-agent.md). |
+| `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function. Wiring for `Agent.run` JSON dispatch lands in M2 — for now, call `t0_agents.core.structured.run_structured_inference()` directly. See [structured-outputs.md](structured-outputs.md). |
+| `output_schema` | `Mapping[str, Any] \| Path \| None` | `None` | Optional dynamic schema for JSON functions. `Path` is read as JSON at construction time (relative paths resolve against `cwd`). Forbidden when `function_kind == "chat"`. |
+| `json_mode` | `Literal["off", "on", "strict", "tool"] \| None` | `None` | TensorZero `json_mode` override. Required when `function_kind == "json"`; forbidden when `function_kind == "chat"`. |
 
 ### `Agent`
 

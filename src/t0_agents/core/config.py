@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from tensorzero import ToolChoice
 
@@ -68,6 +71,23 @@ class AgentConfig:
             ``fastmcp.Client`` wrapping an in-process ``FastMCP``
             instance.  The default empty list leaves single-agent
             configurations unaffected.
+        function_kind: Declares the TensorZero function type for
+            dispatch.  ``"chat"`` (the default) preserves v0.9.0
+            behaviour byte-identically.  ``"json"`` marks the function
+            as a single-shot JSON function — wiring lands in M2; M1
+            only validates the configuration shape.
+        output_schema: Optional dynamic schema for JSON functions.
+            Accepts either an inline ``Mapping[str, Any]`` (sent
+            verbatim) or a :class:`~pathlib.Path` (read as JSON at
+            construction time; relative paths resolve against the
+            current working directory — absolute paths recommended).
+            Forbidden when ``function_kind == "chat"``.
+        json_mode: TensorZero ``json_mode`` override for the variant
+            (``"off"``, ``"on"``, ``"strict"``, ``"tool"``).  Required
+            when ``function_kind == "json"``; forbidden when
+            ``function_kind == "chat"`` (TZ guide §11.2 — setting
+            ``json_mode`` on a chat function is a configuration
+            error).
     """
 
     # Identity
@@ -96,6 +116,11 @@ class AgentConfig:
 
     # Multi-agent composition
     sub_agents: list[Agent] = field(default_factory=list)
+
+    # Structured outputs (M1 foundations — Agent.run dispatch lands in M2)
+    function_kind: Literal["chat", "json"] = "chat"
+    output_schema: Mapping[str, Any] | Path | None = None
+    json_mode: Literal["off", "on", "strict", "tool"] | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -147,3 +172,59 @@ class AgentConfig:
                         f"AgentConfig.sub_agents[{idx}] must be an Agent "
                         f"instance, got {type(sa).__name__}"
                     )
+
+        # Structured-output validations (contract §3.1 / §5.1)
+        if self.function_kind == "json":
+            if self.json_mode is None:
+                raise ConfigurationError(
+                    "AgentConfig(function_kind='json') requires json_mode "
+                    "to be one of 'off', 'on', 'strict', or 'tool'. TZ "
+                    "guide §11.2: json_mode is required for json functions."
+                )
+            if self.sub_agents:
+                raise ConfigurationError(
+                    "AgentConfig(function_kind='json') is incompatible with "
+                    "sub_agents. JSON functions are single-shot — sub-agent "
+                    "tools would be unreachable. Compose chat → json "
+                    "manually instead."
+                )
+        else:  # function_kind == "chat"
+            if self.json_mode is not None:
+                raise ConfigurationError(
+                    "AgentConfig(function_kind='chat') forbids json_mode. "
+                    "TZ guide §11.2: setting json_mode on a chat function "
+                    "is a configuration error."
+                )
+            if self.output_schema is not None:
+                raise ConfigurationError(
+                    "AgentConfig(function_kind='chat') forbids output_schema. "
+                    "Set function_kind='json' to use a JSON function."
+                )
+
+        # Resolve output_schema: Path → Mapping at construction time so
+        # downstream code can treat the field as a Mapping.
+        if isinstance(self.output_schema, Path):
+            schema_path = self.output_schema
+            if not schema_path.is_absolute():
+                schema_path = (Path.cwd() / schema_path).resolve()
+            try:
+                schema_text = schema_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ConfigurationError(
+                    f"AgentConfig.output_schema points at {schema_path!s}, "
+                    f"which could not be read: {exc}"
+                ) from exc
+            try:
+                schema_data = json.loads(schema_text)
+            except json.JSONDecodeError as exc:
+                raise ConfigurationError(
+                    f"AgentConfig.output_schema at {schema_path!s} is not "
+                    f"valid JSON: {exc}"
+                ) from exc
+            if not isinstance(schema_data, dict):
+                raise ConfigurationError(
+                    f"AgentConfig.output_schema at {schema_path!s} must be a "
+                    f"JSON object at the top level, got "
+                    f"{type(schema_data).__name__}."
+                )
+            self.output_schema = schema_data

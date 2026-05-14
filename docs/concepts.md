@@ -17,6 +17,10 @@ The previous chapter introduced the [`Agent`](agent.md) class as the declarative
 
 **FastMCP Server(s)** -- MCP servers that expose tools (functions) via the Model Context Protocol. Tools are discovered at runtime through `list_tools()` and executed via `call_tool()`. See [FastMCP docs](https://gofastmcp.com/).
 
+## Chat vs JSON functions
+
+TensorZero distinguishes two function types: `chat` (the default — returns free-form text plus optional tool calls) and `json` (single-shot — returns a JSON object validated against a schema). The agent loop documented in the rest of this chapter is the `chat` path; `t0_agents.core.structured.run_structured_inference()` is the sibling helper for `json` functions, and `AgentConfig(function_kind="json", json_mode=...)` marks an agent as JSON-flavoured. JSON functions have no tool loop and no termination criterion — the gateway parses the model's output against the schema and surfaces `output.raw` (the JSON string) and `output.parsed` (the parsed mapping or `None`). See [Structured outputs](structured-outputs.md) for details.
+
 ## Agent loop lifecycle
 
 The `run_agent` function implements a turn-based loop with 7 logical steps:

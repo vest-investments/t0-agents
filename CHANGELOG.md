@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0-M1] — Unreleased
+
+Milestone 1 of the structured-outputs roadmap — single-shot helper plus
+the `AgentConfig` and `AgentResult` foundations.  `Agent.run` JSON
+dispatch lands in M2.
+
+### Added
+
+- **`run_structured_inference()` and `StructuredOutput` dataclass**
+  (`from t0_agents.core.structured import run_structured_inference,
+  StructuredOutput`).  Single-shot helper for TensorZero JSON functions
+  — the sibling of `run_agent` for `type = "json"` functions.  Accepts
+  per-call `output_schema` (dynamic schema override) and `json_mode`
+  (`off`/`on`/`strict`/`tool`), threads through `system_arguments`,
+  `episode_id`, `tags`, `namespace`, and `dryrun`, and fires an
+  optional `on_inference` callback that mirrors `run_agent`'s.
+- **`AgentConfig` fields for JSON functions**: `function_kind`
+  (`Literal["chat", "json"]`, default `"chat"`), `output_schema`
+  (`Mapping[str, Any] | Path | None`), `json_mode`
+  (`Literal["off", "on", "strict", "tool"] | None`).  `__post_init__`
+  enforces the four required combinations (JSON requires `json_mode`,
+  chat forbids `json_mode` and `output_schema`, JSON forbids
+  `sub_agents`).  `output_schema: Path` is read as JSON at
+  construction time; relative paths resolve against `cwd` (absolute
+  paths recommended).
+- **`AgentResult` fields**: `function_kind` (`Literal["chat", "json"]`,
+  default `"chat"`) and `parsed` (`Any | None`, default `None`).
+  Defaults preserve byte-identity for chat-function callers.
+- **Public re-export**: `from t0_agents import StructuredOutput`.
+- **Docs**: new `docs/structured-outputs.md` covers the helper, the
+  configuration shape, the `json_mode` provider matrix, and the
+  roadmap.  `docs/concepts.md` gained a one-paragraph "Chat vs JSON
+  functions" primer.  `docs/agent.md` gained forward-references for the
+  three new `AgentConfig` fields.
+- **Example**: `examples/17_structured/` — runnable
+  `extract_customer_info` demo with its own gateway config and
+  docker-compose.
+
 ## [0.9.0] — Unreleased
 
 ### Fixed
