@@ -782,7 +782,8 @@ guardrail today. The supported configurations are:
 - Keep `parallel_tools=False` (the default) when any tool may be wrapped
   with `require_approval`, or
 - Flip `parallel_tools=True` only when **no** active guardrail awaits
-  human input (built-in: `max_cost`, `max_tool_calls`, `block_tools`).
+  human input (the safe built-ins are `max_cost`, `max_tool_calls`,
+  and `block_tools`).
 
 Custom approval-style guardrails inherit the same caveat: if your hook
 awaits an external decision (human, queue, remote policy engine), do
