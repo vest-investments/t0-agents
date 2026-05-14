@@ -177,6 +177,8 @@ Frozen-shape dataclass (slots, no inheritance). Validation runs in `__post_init_
 | `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function and routes `Agent.run` through `run_structured_inference` (since v0.10.0-M2). See [structured-outputs.md](structured-outputs.md). |
 | `output_schema` | `Mapping[str, Any] \| Path \| None` | `None` | Optional dynamic schema for JSON functions. `Path` is read as JSON at construction time (relative paths resolve against `cwd`). Forbidden when `function_kind == "chat"`. |
 | `json_mode` | `Literal["off", "on", "strict", "tool"] \| None` | `None` | TensorZero `json_mode` override. Required when `function_kind == "json"`; forbidden when `function_kind == "chat"`. |
+| `permissive_json_parsing` | `bool` | `True` | When `True`, JSON runs whose `output.parsed` came back `None` fall through an in-Python recovery layer that scans the raw text for balanced `{}` / `[]` spans and fenced code blocks. `False` matches v0.10.0-M2 behaviour exactly. See [structured-outputs.md](structured-outputs.md). |
+| `max_json_retries` | `int` | `2` | Bounds the number of extra inferences the JSON path may emit when both TZ's parser and the permissive layer fail. `0` disables retries; negative values raise `ConfigurationError`. Per-call `Agent.run(max_json_retries=…)` overrides this for one call. See [structured-outputs.md](structured-outputs.md). |
 
 ### `Agent`
 
@@ -202,6 +204,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = None,
         output_schema: Mapping[str, Any] | None = None,
         json_mode: Literal["off", "on", "strict", "tool"] | None = None,
+        max_json_retries: int | None = None,
     ) -> AgentResult: ...
 
     async def stream(
@@ -220,7 +223,7 @@ class Agent:
 |---|---|
 | `__init__` | Validates `tool_provider` against the `ToolProvider` protocol and (when configured) `config.memory` against `MemoryProvider`. Registers any `config.sub_agents` on an in-process FastMCP server. Never opens connections. |
 | `config` | Read-only property returning the `AgentConfig` passed to the constructor. |
-| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. When `config.function_kind == "json"`, the tool loop is replaced by a single call to `run_structured_inference` — `before_run` / `after_run` guardrails still fire, but `before_tool` / `after_tool` never do. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system` for the system-template render (the dict matches the function's system schema directly — no `arguments` wrapper); shallow-merged with the memory strategy's contribution, with caller keys winning on collision. Optional `output_schema` / `json_mode` override the config-level values for one call; both are forbidden on chat agents and raise `ConfigurationError` if supplied there. |
+| `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. When `config.function_kind == "json"`, the tool loop is replaced by a bounded JSON inference orchestration (`run_structured_inference` called up to `max_json_retries + 1` times, with the permissive layer and a corrective hint between attempts) — `before_run` / `after_run` guardrails still fire, but `before_tool` / `after_tool` never do. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system` for the system-template render (the dict matches the function's system schema directly — no `arguments` wrapper); shallow-merged with the memory strategy's contribution, with caller keys winning on collision. Optional `output_schema` / `json_mode` override the config-level values for one call; both are forbidden on chat agents and raise `ConfigurationError` if supplied there. Optional `max_json_retries` overrides `config.max_json_retries` for one call (JSON agents only; harmless on chat agents). |
 | `stream` | Streaming analogue. Yields `AgentEvent`s in real time and ends with a terminal `DoneEvent(result=AgentResult(...))`. Same `tags` / `system_arguments` per-call kwargs as `run`. See [streaming.md](streaming.md). |
 | `warmup` | Optional lifespan-phase readiness hook called by `t0_agents.serve.create_app` at startup. Default implementation is a no-op; override in a subclass to front-load probes. See [serving.md](serving.md). |
 
@@ -230,12 +233,14 @@ class Agent:
 |---|---|---|
 | `response` | `str` | Final text from the terminating turn. Joined from `Text` blocks, or `Thought` blocks if no text was produced. For JSON runs (`function_kind == "json"`) it is the raw JSON string the model produced. |
 | `episode_id` | `str \| None` | TensorZero episode id. Captured from the first inference response. `None` only if no inference ran. |
-| `inference_ids` | `list[str]` | One inference id per turn, in order. Pass these to `t0.feedback(...)` to attribute outcomes to specific turns. JSON runs always have exactly one entry. |
-| `turns` | `int` | Number of inference turns the loop executed. `1` means a single inference with no tool calls. JSON runs are always `1`. |
+| `inference_ids` | `list[str]` | One inference id per turn, in order. Pass these to `t0.feedback(...)` to attribute outcomes to specific turns. JSON runs accumulate one id per retry attempt: `1 + json_parse_attempts` entries total. |
+| `turns` | `int` | Number of inference turns the loop executed. `1` means a single inference with no tool calls. JSON runs use `1 + json_parse_attempts` to reflect each retry as a fresh turn. |
 | `response_source` | `Literal["text", "thought"]` | `"text"` when the response came from `Text` blocks; `"thought"` when it fell back to reasoning blocks. JSON runs stay `"text"` — they emit no thought blocks. |
 | `guardrail_log` | `list[GuardrailLogEntry]` | Per-hook audit record (empty when no guardrails are configured). See [guardrails.md](guardrails.md). |
 | `function_kind` | `Literal["chat", "json"]` | Echoes `AgentConfig.function_kind`. `"chat"` for the tool-loop path, `"json"` for single-shot JSON runs. |
-| `parsed` | `Any \| None` | The JSON object TensorZero produced for a JSON run. `None` for chat runs and also for JSON runs where the model output failed to parse (M3 adds permissive recovery). See [structured-outputs.md](structured-outputs.md). |
+| `parsed` | `Any \| None` | The JSON object recovered for a JSON run. `None` for chat runs and for JSON runs where every recovery layer failed (`parse_strategy == "none"`). See [structured-outputs.md](structured-outputs.md). |
+| `parse_strategy` | `Literal["strict", "permissive", "retry", "none"]` | For JSON runs, reports which layer produced `parsed`: `"strict"` (TensorZero's parser), `"permissive"` (the in-Python recovery layer), `"retry"` (a re-emitted inference succeeded), or `"none"` (every attempt and every layer failed; `parsed` is `None`). Defaults to `"strict"` for chat runs (semantically meaningless there). See [structured-outputs.md](structured-outputs.md). |
+| `json_parse_attempts` | `int` | For JSON runs, the number of *extra* inferences after the first.  `0` on the happy path, `max_json_retries` at most. `0` for chat runs. |
 
 ### Collaborator Protocols
 

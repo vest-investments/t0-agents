@@ -4,6 +4,95 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0-M3] — Unreleased
+
+Milestone 3 of the structured-outputs roadmap — JSON-function runs
+gain two opt-out-able value-add layers on top of TensorZero's strict
+parser: an in-Python permissive recovery layer that extracts JSON from
+prose- or fence-wrapped model output, and a bounded retry loop that
+re-emits the inference with a schema-aware corrective hint when both
+the strict and permissive layers fail.  Chat-path behaviour is
+byte-identical to v0.9.0; `mcp/` is untouched.
+
+### Added
+
+- **`permissive_parse(raw)`** (`t0_agents.permissive_parse`,
+  `t0_agents.core.structured.permissive_parse`) — pure-function utility
+  that tries a three-layer recovery ladder on a raw model string
+  (`json.loads(raw)` → balanced `{…}`/`[…]` scan → fenced code block)
+  and returns `(value, strategy)` where `strategy ∈ {"strict",
+  "permissive", "none"}`.  Never raises.
+- **`AgentConfig.permissive_json_parsing: bool = True`** — toggles the
+  in-Python recovery layer for JSON runs.  `False` matches the M2
+  behaviour exactly: an invalid TZ response surfaces as `parsed is
+  None` without any in-Python fallback.
+- **`AgentConfig.max_json_retries: int = 2`** — bounds the number of
+  *extra* inferences after the first.  `0` disables retries; negative
+  values raise `ConfigurationError`.
+- **`Agent.run(max_json_retries=...)`** — per-call override for
+  `AgentConfig.max_json_retries`.  `None` (the default) uses the
+  configured value.
+- **`AgentResult.parse_strategy: Literal["strict","permissive","retry","none"]`**
+  — reports which layer produced `parsed`: `"strict"` (TensorZero on
+  the first attempt), `"permissive"` (in-Python recovery on the first
+  attempt), `"retry"` (a re-emitted inference succeeded), or `"none"`
+  (every layer and every attempt failed).
+- **`AgentResult.json_parse_attempts: int = 0`** — count of *extra*
+  inferences after the first.  Bounded by `max_json_retries`.
+- **`run_structured_inference(prior_messages=...)`** — optional list
+  of `{role, content}` dicts that the helper prepends before the
+  `user_message` turn.  Reserved for the M3 retry orchestration;
+  direct callers should leave it at `None`.
+- **Examples**: `examples/17_structured/recovery_demo.py` (local
+  in-process fake gateway, runs in < 1 s, scripts all four
+  `parse_strategy` outcomes) and
+  `examples/17_structured/recovery_real_provider.py` (real Groq
+  provider via docker compose; `json_mode="off"` per call to exercise
+  the recovery layers in production-like conditions).
+- **Docs**: `docs/structured-outputs.md` gains a "Robust JSON parsing"
+  section with the three-layer diagram, the config/observability
+  tables, two worked examples (permissive and retry), the opt-out
+  callout, and a note on the schema-aware retry hint.  `docs/agent.md`
+  documents the two new `AgentConfig` fields, the new `Agent.run`
+  kwarg, the new `AgentResult` fields, and the updated `turns` /
+  `inference_ids` semantics for JSON runs.
+
+### Changed
+
+- **`Agent._run_json` now orchestrates up to `max_json_retries + 1`
+  inferences.**  When TensorZero's strict parser returns `parsed ==
+  None`, the orchestration consults `permissive_parse(output.raw)`
+  (when the layer is enabled); when that also fails and the retry
+  budget is non-zero, it re-emits the inference with the previous
+  (invalid) assistant turn and a corrective user-turn hint.
+  `before_run` / `after_run` guardrails still fire exactly once around
+  the whole orchestration; the cost-tracker closure fires once per
+  inference, so cost accumulation across retries is automatic.
+- **`AgentResult.turns` and `AgentResult.inference_ids` for JSON runs**
+  now reflect every attempt: `turns == 1 + json_parse_attempts` and
+  `len(inference_ids) == 1 + json_parse_attempts` (always equal).
+- **Retry-hint phrasing**: the corrective hint sent on every retry
+  starts with a fixed base sentence and, when an `output_schema`
+  exposes them, appends the schema's top-level `title` and `required`
+  field names.  Hard-coded English; an i18n / per-call override hook
+  is deferred.
+
+### Compatibility
+
+- **Chat path byte-identical to v0.9.0.**  `function_kind == "chat"`
+  agents see no behavioural change: the new `AgentConfig` and
+  `AgentResult` fields default to values that match the v0.9.0
+  shape, and the chat dispatch ignores `max_json_retries`.
+- **JSON path with defaults is a superset of M2.**  When the model
+  returns valid JSON on the first try (`parse_strategy == "strict"`),
+  the new `AgentResult` fields default to the same values as M2 would
+  have produced.  Existing M2 tests pass unchanged.
+- **TensorZero-pure mode.**
+  `AgentConfig(..., permissive_json_parsing=False, max_json_retries=0)`
+  reproduces M2 behaviour byte-for-byte.
+- **`mcp/` byte-identical to v0.9.0.**  No new imports, no signature
+  changes, no new optional kwargs to any `mcp/` function.
+
 ## [0.10.0-M2] — Unreleased
 
 Milestone 2 of the structured-outputs roadmap — `Agent.run` now

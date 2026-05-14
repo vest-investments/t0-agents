@@ -19,7 +19,7 @@ from t0_agents.core.exceptions import (
     T0AgentsError,
     T0AgentsFatalError,
 )
-from t0_agents.core.structured import StructuredOutput
+from t0_agents.core.structured import StructuredOutput, permissive_parse
 from t0_agents.core.types import (
     AgentResult,
     Guardrail,
@@ -76,6 +76,7 @@ __all__ = [
     "TurnEndEvent",
     "TurnStreamAssembler",
     "agent_as_tool",
+    "permissive_parse",
     "run_agent",
 ]
 

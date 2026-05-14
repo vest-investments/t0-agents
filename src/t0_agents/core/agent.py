@@ -13,7 +13,12 @@ from tensorzero.types import ChatInferenceResponse, JsonInferenceResponse
 
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError, T0AgentsFatalError
-from t0_agents.core.structured import StructuredOutput, run_structured_inference
+from t0_agents.core.structured import (
+    ParseStrategy,
+    StructuredOutput,
+    permissive_parse,
+    run_structured_inference,
+)
 from t0_agents.core.types import (
     AgentResult,
     GuardrailLogEntry,
@@ -63,9 +68,10 @@ def _make_json_cost_tracker(
     Deliberate duplication of the chat tracker — both ``ChatInferenceResponse``
     and ``JsonInferenceResponse`` expose a ``usage`` attribute but they are
     not related by inheritance, and parameterising the chat tracker with a
-    structural ``Union`` would push the typing burden onto every caller.  M3
-    introduces a second JSON inference path (retry); revisit consolidation
-    once the duplication actually grows.
+    structural ``Union`` would push the typing burden onto every caller.  The
+    closure fires once per inference, so a JSON run that retries N times
+    invokes it ``1 + N`` times and accumulates cost across every attempt
+    without additional wiring.
     """
 
     async def _on_inference(response: JsonInferenceResponse) -> None:
@@ -75,6 +81,47 @@ def _make_json_cost_tracker(
         ctx.turn += 1
 
     return _on_inference
+
+
+_RETRY_HINT_BASE = (
+    "Your previous response was not valid JSON. "
+    "Return ONLY a valid JSON object that matches the schema, "
+    "with no commentary or prose."
+)
+
+
+def _build_retry_hint(schema: Mapping[str, Any] | None) -> str:
+    """Compose the corrective user-turn message sent on a JSON retry.
+
+    Starts from :data:`_RETRY_HINT_BASE` (the cross-call invariant the
+    retry tests can pattern-match on), then optionally enriches the hint
+    with schema metadata when a non-trivial ``schema`` is available:
+
+    - ``title`` — when the schema's top-level ``title`` is a non-empty
+      string, the hint mentions it so the model has a name to anchor on.
+    - ``required`` — when the top-level ``required`` array is a non-empty
+      list of strings, the hint enumerates the required field names.
+
+    Anything else (nested ``required``, ``properties``, ``oneOf``) is
+    deliberately ignored: surfacing it would balloon prompt cost on every
+    retry and risk crowding out the model's context.  Diverges from the
+    M3 spec §4.5 (which proposed a fixed hard-coded English hint); the
+    additive enrichment is opt-out-able by setting
+    ``permissive_json_parsing=False, max_json_retries=0``.
+    """
+    parts: list[str] = [_RETRY_HINT_BASE]
+    if schema is None:
+        return parts[0]
+    title = schema.get("title")
+    if isinstance(title, str) and title:
+        parts.append(f"The schema is named '{title}'.")
+    required = schema.get("required")
+    if isinstance(required, list):
+        names = [str(n) for n in required if isinstance(n, str)]
+        if names:
+            joined = ", ".join(repr(n) for n in names)
+            parts.append(f"Required top-level fields: {joined}.")
+    return " ".join(parts)
 
 
 class Agent:
@@ -171,6 +218,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = None,
         output_schema: Mapping[str, Any] | None = None,
         json_mode: Literal["off", "on", "strict", "tool"] | None = None,
+        max_json_retries: int | None = None,
     ) -> AgentResult:
         """Run the agent loop and return the final response.
 
@@ -230,14 +278,33 @@ class Agent:
                 ``config.function_kind == "json"``; raises
                 :class:`ConfigurationError` on chat agents.  Takes
                 precedence over ``config.json_mode`` when both are set.
+            max_json_retries: Per-call override for
+                ``config.max_json_retries``.  ``None`` (the default)
+                uses the configured value.  ``0`` disables the retry
+                loop for this call only — the permissive layer still
+                runs unless ``config.permissive_json_parsing`` is
+                ``False``.  Only meaningful for JSON agents; ignored on
+                chat agents (no error: chat callers may pass it
+                unconditionally without branching).
 
         Returns:
             :class:`~t0_agents.core.types.AgentResult` with the joined
             text of the terminating turn, episode metadata, turn count,
             and (when guardrails are configured) the per-hook audit log.
-            For JSON runs ``response`` is the raw JSON string, ``parsed``
-            carries the parsed object, ``turns`` is always ``1``, and
-            ``inference_ids`` has a single entry.
+            For JSON runs ``response`` is the raw text of the final
+            attempt (valid or not), ``parsed`` carries the recovered
+            object or ``None``, ``turns`` is ``1 + json_parse_attempts``,
+            ``inference_ids`` contains one id per attempt in order, and
+            ``parse_strategy`` reports which layer produced ``parsed``:
+
+            - ``"strict"`` — TensorZero's parser succeeded on the first
+              attempt.
+            - ``"permissive"`` — the in-Python recovery layer extracted
+              JSON from prose or a fenced block on the first attempt.
+            - ``"retry"`` — at least one retry was needed before a valid
+              ``parsed`` was produced (by either strict or permissive).
+            - ``"none"`` — every layer and every attempt failed;
+              ``parsed`` is ``None``.
 
         Raises:
             MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
@@ -260,6 +327,7 @@ class Agent:
                 system_arguments=system_arguments,
                 output_schema=output_schema,
                 json_mode=json_mode,
+                max_json_retries=max_json_retries,
             )
         if output_schema is not None or json_mode is not None:
             raise ConfigurationError(
@@ -721,14 +789,27 @@ class Agent:
         system_arguments: dict[str, Any] | None,
         output_schema: Mapping[str, Any] | None,
         json_mode: Literal["off", "on", "strict", "tool"] | None,
+        max_json_retries: int | None = None,
     ) -> AgentResult:
         """JSON-function dispatch path for :meth:`run`.
 
-        Single-shot call to :func:`run_structured_inference` wrapped in the
-        same memory + run-level guardrail scaffolding as the chat path.
+        Wraps up to ``max_json_retries + 1`` calls to
+        :func:`run_structured_inference` in the same memory + run-level
+        guardrail scaffolding as the chat path.  When TensorZero's
+        strict parser returns ``parsed == None``, the orchestration
+        consults the in-Python recovery layer (:func:`permissive_parse`,
+        gated by ``AgentConfig.permissive_json_parsing``); when that
+        also fails and the retry budget is non-zero, it re-emits the
+        inference with the previous (invalid) assistant turn and a
+        corrective user-turn hint until either a valid parse is
+        produced or the budget is exhausted.
+
         No tool loop, no sub-agent orchestration, no
-        ``before_tool``/``after_tool`` hooks — JSON functions are
-        single-shot by contract.
+        ``before_tool``/``after_tool`` hooks — JSON functions never call
+        tools.  ``before_run`` and ``after_run`` fire exactly once
+        around the whole retry sequence; the cost-tracker closure fires
+        once per inference and so accumulates cost across every attempt
+        automatically.
 
         Sub-agent composition is rejected at config construction
         (``AgentConfig.__post_init__`` raises when
@@ -737,13 +818,13 @@ class Agent:
         path used by chat.
         """
         # --- 1. Load memory (mirrors chat run()) ---
-        # ``run_structured_inference`` is single-shot and has no
-        # ``prior_messages`` kwarg — TZ's JSON functions take exactly one
-        # user message.  Reject ``memory_strategy="messages"`` at the
-        # strategy level (rather than after a load round-trip that
-        # might silently see an empty history) so the misconfiguration
-        # is caught uniformly regardless of episode state.  M3+ may
-        # revisit if a real workload needs threaded history with JSON.
+        # ``memory_strategy="messages"`` would require turning prior-episode
+        # records into ``prior_messages`` for the helper, which the M3
+        # surface deliberately does not do — ``prior_messages`` is reserved
+        # for the retry loop below.  Reject the strategy here at the
+        # strategy level (rather than after a load round-trip that might
+        # silently see an empty history) so the misconfiguration is caught
+        # uniformly regardless of episode state.
         strategy = self._resolve_memory_strategy()
         if strategy == "messages":
             raise ConfigurationError(
@@ -807,7 +888,26 @@ class Agent:
             json_mode if json_mode is not None else self._config.json_mode
         )
 
-        # --- 5. Delegate to run_structured_inference ---
+        # --- 5. Delegate to run_structured_inference (with retry loop) ---
+        # Per-call ``max_json_retries`` wins over the config value, and ``0``
+        # disables the retry layer entirely (the permissive layer still
+        # runs unless it too is disabled at the config level).
+        retry_budget = (
+            max_json_retries
+            if max_json_retries is not None
+            else self._config.max_json_retries
+        )
+        permissive_enabled = self._config.permissive_json_parsing
+
+        attempts = 0
+        prior_msgs: list[Mapping[str, Any]] = []
+        current_user = effective_message
+        inference_ids: list[str] = []
+        captured_episode: str | None = None
+        final_parsed: Any | None = None
+        final_raw: str = ""
+        final_strategy: ParseStrategy = "none"
+
         result: AgentResult | None = None
         try:
             if guard_ctx is not None:
@@ -831,26 +931,73 @@ class Agent:
                             )
                         )
 
-            structured: StructuredOutput = await run_structured_inference(
-                self._t0,
-                function_name=self._config.function_name,
-                user_message=effective_message,
-                output_schema=effective_schema,
-                json_mode=effective_mode,
-                system_arguments=extra_kwargs.get("system_arguments"),
-                episode_id=episode_id,
-                tags=self._merge_tags(tags),
-                namespace=self._config.namespace,
-                dryrun=self._config.dryrun,
-                on_inference=on_inference,
-            )
+            while True:
+                # ``captured_episode`` is None on attempt 0 — use the
+                # caller-supplied ``episode_id`` so the first inference may
+                # mint a fresh episode (when both are None) or continue an
+                # existing one.  Subsequent attempts always reuse the id
+                # TZ assigned the first response, so the whole retry chain
+                # belongs to one episode.
+                structured: StructuredOutput = await run_structured_inference(
+                    self._t0,
+                    function_name=self._config.function_name,
+                    user_message=current_user,
+                    prior_messages=prior_msgs if prior_msgs else None,
+                    output_schema=effective_schema,
+                    json_mode=effective_mode,
+                    system_arguments=extra_kwargs.get("system_arguments"),
+                    episode_id=(
+                        captured_episode
+                        if captured_episode is not None
+                        else episode_id
+                    ),
+                    tags=self._merge_tags(tags),
+                    namespace=self._config.namespace,
+                    dryrun=self._config.dryrun,
+                    on_inference=on_inference,
+                )
+                inference_ids.append(structured.inference_id)
+                if captured_episode is None:
+                    captured_episode = structured.episode_id
+                final_raw = structured.raw
+
+                if structured.parsed is not None:
+                    final_parsed = structured.parsed
+                    final_strategy = "retry" if attempts > 0 else "strict"
+                    break
+
+                if permissive_enabled:
+                    candidate, _ = permissive_parse(structured.raw)
+                    if candidate is not None:
+                        final_parsed = candidate
+                        final_strategy = (
+                            "retry" if attempts > 0 else "permissive"
+                        )
+                        break
+
+                if attempts >= retry_budget:
+                    final_parsed = None
+                    final_strategy = "none"
+                    break
+
+                prior_msgs.append(
+                    {"role": "user", "content": current_user}
+                )
+                prior_msgs.append(
+                    {"role": "assistant", "content": structured.raw}
+                )
+                current_user = _build_retry_hint(effective_schema)
+                attempts += 1
+
             result = AgentResult(
-                response=structured.raw,
-                episode_id=structured.episode_id,
-                inference_ids=[structured.inference_id],
-                turns=1,
+                response=final_raw,
+                episode_id=captured_episode,
+                inference_ids=inference_ids,
+                turns=1 + attempts,
                 function_kind="json",
-                parsed=structured.parsed,
+                parsed=final_parsed,
+                parse_strategy=final_strategy,
+                json_parse_attempts=attempts,
             )
         finally:
             if guard_ctx is not None:

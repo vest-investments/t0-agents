@@ -6,25 +6,28 @@ there is no tool loop, no tool dispatch, no termination criterion to
 evaluate; the gateway returns ``output.raw`` (the model's JSON string)
 and ``output.parsed`` (a JSON-parsed mapping or ``None``).  This module
 exposes that one inference call with the kwargs that make sense for a
-JSON function.
+JSON function, plus an in-Python :func:`permissive_parse` recovery
+function used by :meth:`Agent._run_json` when TensorZero returned
+``parsed == None`` but ``raw`` still contains JSON wrapped in prose or
+a fenced code block.
 
 The helper deliberately omits ``parallel_tools``, ``tool_choice``,
-``tool_timeout``, ``prior_messages``, and ``max_turns`` — none of them
-are meaningful for a single-shot JSON inference.
+``tool_timeout``, and ``max_turns`` — none of them are meaningful for a
+JSON inference.  ``prior_messages`` *is* exposed so the retry
+orchestration in :meth:`Agent._run_json` can thread a corrective hint
+back into the conversation after an invalid attempt; callers using the
+helper directly should leave it at its ``None`` default unless they
+have built their own retry loop.
 
 Only ``mcp/`` is forbidden from importing higher-level modules.  This
 ``core/structured.py`` lives alongside ``core/agent.py``,
 ``core/config.py``, and ``core/types.py`` and follows the same dependency
 hygiene: it imports only from ``tensorzero`` and the standard library.
-
-The ``parse_strategy`` field carries the four-value vocabulary the
-later milestones will populate.  In M1 the helper produces only
-``"strict"`` (TZ parsed the JSON) or ``"none"`` (TZ returned ``parsed
-== None``).  M3 will fill in ``"permissive"`` and ``"retry"``.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -39,12 +42,23 @@ ParseStrategy = Literal["strict", "permissive", "retry", "none"]
 """How :class:`StructuredOutput.parsed` came to be populated.
 
 - ``"strict"`` — TensorZero's own parse populated ``output.parsed``.
-- ``"permissive"`` — M3's in-Python recovery layer extracted JSON from
+- ``"permissive"`` — the in-Python recovery layer extracted JSON from
   ``output.raw`` after TZ returned ``parsed == None``.
-- ``"retry"`` — M3's retry loop re-ran the inference (with a corrective
-  user-turn hint) and one of the subsequent attempts produced
-  parseable output.
+- ``"retry"`` — the retry orchestration in :meth:`Agent._run_json`
+  re-ran the inference (with a corrective user-turn hint) and one of
+  the subsequent attempts produced parseable output.
 - ``"none"`` — every layer failed; ``parsed`` is ``None``.
+"""
+
+PermissiveStrategy = Literal["strict", "permissive", "none"]
+""":func:`permissive_parse`'s outcome.
+
+A narrower alias of :data:`ParseStrategy` — :func:`permissive_parse` is a
+pure-string utility and never observes the orchestrator-level ``"retry"``
+outcome.  :class:`AgentResult` and :class:`StructuredOutput` carry the
+wider :data:`ParseStrategy` alias because the orchestrator may upgrade a
+``"strict"`` or ``"permissive"`` outcome to ``"retry"`` when it took
+more than one attempt to get there.
 """
 
 
@@ -73,6 +87,145 @@ class StructuredOutput:
     retry_attempts: int = 0
 
 
+def _extract_first_balanced(text: str, opener: str, closer: str) -> str | None:
+    """Return the first balanced ``opener``…``closer`` span in ``text``.
+
+    Tracks JSON string-literal state (``"…"`` with ``\\``-escapes) so that
+    delimiters appearing inside a string do not affect the depth counter.
+    Returns the span *including* its delimiters, or ``None`` if no balanced
+    span is found (e.g. unbalanced input or no opener present).
+    """
+    start = text.find(opener)
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None
+
+
+def _extract_fenced_code(text: str) -> str | None:
+    """Return the contents of the first fenced code block in ``text``.
+
+    Recognises both `````json … ````` and
+    plain ````` … ````` blocks; any optional
+    language tag on the opening fence is skipped (the scanner advances past
+    the first newline after the opening backticks).  Returns the inner
+    content with trailing ``\\n`` stripped, or ``None`` if no complete
+    fenced block is found.
+    """
+    open_idx = text.find("```")
+    if open_idx < 0:
+        return None
+    content_start = open_idx + 3
+    newline = text.find("\n", content_start)
+    if newline < 0:
+        return None
+    content_start = newline + 1
+    close_idx = text.find("```", content_start)
+    if close_idx < 0:
+        return None
+    return text[content_start:close_idx].rstrip("\n")
+
+
+def _ordered_pairs_for(text: str) -> list[tuple[str, str]]:
+    """Return ``[("{", "}"), ("[", "]")]`` ordered by which opener
+    appears first in ``text``.
+
+    Used by :func:`permissive_parse` so a top-level array containing
+    objects (``"[{"k": 1}, {"k": 2}]"``) extracts the array rather than
+    the first object — whichever opener appears first in the source
+    wins.  Pairs whose opener does not appear in ``text`` are still
+    included (at the back) so the fall-back path can still try them
+    when the earlier opener produced an unbalanced span.
+    """
+    brace = text.find("{")
+    bracket = text.find("[")
+    if brace < 0 and bracket < 0:
+        return [("{", "}"), ("[", "]")]
+    if brace < 0:
+        return [("[", "]"), ("{", "}")]
+    if bracket < 0:
+        return [("{", "}"), ("[", "]")]
+    if brace <= bracket:
+        return [("{", "}"), ("[", "]")]
+    return [("[", "]"), ("{", "}")]
+
+
+def permissive_parse(raw: str) -> tuple[Any | None, PermissiveStrategy]:
+    """Try increasingly relaxed JSON extraction strategies on ``raw``.
+
+    The recovery ladder, applied in order:
+
+    1. ``json.loads(raw)`` — when the model returned valid JSON directly,
+       even if TensorZero's parser disagreed (shouldn't happen, but cheap
+       to verify).  Returns ``(value, "strict")``.
+    2. Balanced-brace scan for the first ``{…}`` or ``[…]`` span,
+       preferring whichever opener appears earliest in ``raw`` — so a
+       top-level array containing objects is recovered as the array.
+       Returns ``(value, "permissive")``.
+    3. First fenced code block (`````json … `````
+       or plain ````` … `````) — recovers
+       Markdown-wrapped JSON.  Returns ``(value, "permissive")``.
+
+    No exceptions escape: every ``json.JSONDecodeError`` along the way is
+    silently swallowed and the next strategy is attempted.  When all
+    strategies fail, returns ``(None, "none")``.
+    """
+    if raw:
+        try:
+            return json.loads(raw), "strict"
+        except json.JSONDecodeError:
+            pass
+
+    for opener, closer in _ordered_pairs_for(raw):
+        span = _extract_first_balanced(raw, opener, closer)
+        if span is not None:
+            try:
+                return json.loads(span), "permissive"
+            except json.JSONDecodeError:
+                pass
+
+    fenced = _extract_fenced_code(raw)
+    if fenced is not None:
+        try:
+            return json.loads(fenced), "permissive"
+        except json.JSONDecodeError:
+            pass
+        for opener, closer in _ordered_pairs_for(fenced):
+            span = _extract_first_balanced(fenced, opener, closer)
+            if span is not None:
+                try:
+                    return json.loads(span), "permissive"
+                except json.JSONDecodeError:
+                    pass
+
+    return None, "none"
+
+
 async def run_structured_inference(
     t0: AsyncTensorZeroGateway,
     function_name: str,
@@ -81,6 +234,7 @@ async def run_structured_inference(
     output_schema: Mapping[str, Any] | None = None,
     json_mode: Literal["off", "on", "strict", "tool"] | None = None,
     system_arguments: dict[str, Any] | None = None,
+    prior_messages: list[Mapping[str, Any]] | None = None,
     episode_id: str | None = None,
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
@@ -113,6 +267,13 @@ async def run_structured_inference(
         system_arguments: Template arguments forwarded as
             ``input.system``.  Matches the semantics of
             :func:`t0_agents.mcp.loop.run_agent`'s ``system_arguments``.
+        prior_messages: Optional list of ``{role, content}`` message
+            dicts to prepend before the ``user_message`` turn.  Used by
+            :meth:`Agent._run_json`'s retry orchestration to thread the
+            previous (invalid) assistant turn and the corrective hint
+            back into the conversation.  ``None`` (the default) sends a
+            single-turn ``[{"role": "user", "content": user_message}]``
+            payload — byte-identical to the M2 shape.
         episode_id: Continues an existing TensorZero episode when set;
             ``None`` lets the gateway mint a fresh one.
         tags: Free-form tags forwarded for observability.
@@ -137,9 +298,11 @@ async def run_structured_inference(
             call returned a streaming iterator (we never set
             ``stream=True``, but the SDK declares the union).
     """
-    input_dict: dict[str, Any] = {
-        "messages": [{"role": "user", "content": user_message}],
-    }
+    messages: list[Mapping[str, Any]] = []
+    if prior_messages:
+        messages.extend(prior_messages)
+    messages.append({"role": "user", "content": user_message})
+    input_dict: dict[str, Any] = {"messages": messages}
     if system_arguments is not None:
         input_dict["system"] = system_arguments
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
+from t0_agents.core.structured import ParseStrategy
+
 
 @runtime_checkable
 class ToolProvider(Protocol):
@@ -113,11 +115,15 @@ class GuardrailLogEntry:
 class AgentResult:
     """Result of an agent run.
 
-    ``function_kind`` and ``parsed`` are the M1 surface for structured
-    outputs.  Their defaults (``"chat"`` and ``None``) preserve
-    byte-identical behaviour for callers that ran against v0.9.0 — a
-    chat agent's result reads the same as before.  Wiring lands in M2;
-    M1 ships only the dataclass surface.
+    ``function_kind`` and ``parsed`` are the structured-outputs surface
+    landed in M1 (dataclass) and M2 (wiring).  ``parse_strategy`` and
+    ``json_parse_attempts`` extend that surface in M3 with permissive
+    parsing and bounded retry-on-invalid-json.  All four fields default
+    to byte-identical chat behaviour: a chat agent's result reads the
+    same as v0.9.0 (``function_kind="chat"``, ``parsed=None``,
+    ``parse_strategy="strict"`` — semantically meaningless for chat but
+    chosen to match the JSON happy-path default — and
+    ``json_parse_attempts=0``).
     """
 
     response: str
@@ -128,3 +134,5 @@ class AgentResult:
     guardrail_log: list[GuardrailLogEntry] = field(default_factory=list)
     function_kind: Literal["chat", "json"] = "chat"
     parsed: Any | None = None
+    parse_strategy: ParseStrategy = "strict"
+    json_parse_attempts: int = 0
