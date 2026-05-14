@@ -2,7 +2,7 @@
 
 TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour and what each upcoming milestone adds to the surface.
 
-> **Milestones 1 and 2 (M1, M2):** M1 shipped the single-shot `run_structured_inference()` helper, the new `AgentConfig` fields (`function_kind`, `output_schema`, `json_mode`), and the new `AgentResult` fields (`function_kind`, `parsed`).  M2 wires `Agent.run(...)` to dispatch JSON functions through the helper transparently and surfaces per-call `output_schema` / `json_mode` kwargs.  Permissive parsing and the retry loop land in M3; provider-safety warnings and the `Agent.stream(...)` guard land in M4; testing helpers and the dynamic-schema NER example land in M5.
+> **Milestones 1–3 (M1, M2, M3):** M1 shipped the single-shot `run_structured_inference()` helper, the new `AgentConfig` fields (`function_kind`, `output_schema`, `json_mode`), and the new `AgentResult` fields (`function_kind`, `parsed`).  M2 wires `Agent.run(...)` to dispatch JSON functions through the helper transparently and surfaces per-call `output_schema` / `json_mode` kwargs.  M3 adds the in-Python permissive parsing layer, the bounded retry loop with a schema-aware corrective hint, and the `AgentResult.parse_strategy` / `AgentResult.json_parse_attempts` observability fields.  Provider-safety warnings and the `Agent.stream(...)` guard land in M4; testing helpers and the dynamic-schema NER example land in M5.
 
 ## What are JSON functions?
 
@@ -198,6 +198,119 @@ JSON functions are single-shot — there is no tool loop, no parallel tool dispa
 
 The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.run` raises `ConfigurationError` at runtime whenever a JSON-flavoured agent is configured with that strategy, regardless of whether a prior history exists. Use `"prepended_message"` (the default) or `"system_template"` instead.
 
+## Robust JSON parsing
+
+Real models sometimes ignore the JSON-mode contract: a Groq model wraps its reply in prose, a fenced ` ```json ` block, or an apology before the JSON.  TensorZero's strict parser returns `parsed == None` in those cases, even though the JSON is right there in `output.raw`.  M3 adds two in-Python layers that recover the JSON without losing the byte-for-byte TensorZero-pure path.
+
+```
+        TensorZero strict parse        ← layer 1: parse_strategy="strict"
+                  │ parsed is None
+                  ▼
+        permissive_parse(output.raw)   ← layer 2: parse_strategy="permissive"
+                  │ parsed is None
+                  ▼
+        retry with corrective hint     ← layer 3: parse_strategy="retry"
+        (up to max_json_retries extra attempts)
+                  │ every attempt failed
+                  ▼
+        result.parsed is None,         ← terminal: parse_strategy="none"
+        caller inspects strategy
+```
+
+The layers are configured per-agent on `AgentConfig`:
+
+| Field                       | Default | What it controls                                                                 |
+|-----------------------------|---------|----------------------------------------------------------------------------------|
+| `permissive_json_parsing`   | `True`  | Enables the in-Python recovery layer when TensorZero returned `parsed == None`. |
+| `max_json_retries`          | `2`     | Maximum number of *extra* inferences after the first.  `0` disables retries.    |
+| `Agent.run(max_json_retries=…)` | `None` | Per-call override.  `None` uses the config value, `0` disables retry for this call. |
+
+Each call reports which layer produced the result on the new `AgentResult` fields:
+
+| Field                          | Meaning                                                                                     |
+|--------------------------------|---------------------------------------------------------------------------------------------|
+| `result.parse_strategy`        | `"strict"`, `"permissive"`, `"retry"`, or `"none"` — which layer produced `parsed`.        |
+| `result.json_parse_attempts`   | Count of *extra* inferences after the first.  `0` on the happy path, `max_json_retries` at most. |
+| `len(result.inference_ids)`    | `1 + json_parse_attempts` — every attempt's inference id is recorded, in order.            |
+| `result.turns`                 | Same as `len(result.inference_ids)` for JSON runs.                                          |
+
+### Worked example: permissive recovery
+
+The model wraps its JSON in a fenced code block:
+
+```python
+result = await agent.run("Tell me about Sarah Johnson, sarah.j@example.com.")
+# Model returned: 'Sure! Here it is:\n```json\n{"name": "Sarah", "email": "sarah.j@example.com"}\n```'
+# TensorZero says: output.parsed == None
+# In-Python permissive layer extracts the JSON span and parses it.
+
+result.parsed         # {"name": "Sarah", "email": "sarah.j@example.com"}
+result.parse_strategy # "permissive"
+result.json_parse_attempts  # 0  (no retry was needed)
+len(result.inference_ids)   # 1
+```
+
+### Worked example: retry
+
+The model produces invalid output twice, then succeeds on the third attempt:
+
+```python
+config = AgentConfig(
+    name="extractor",
+    function_name="extract_customer_info",
+    function_kind="json",
+    json_mode="strict",
+    max_json_retries=2,                # the default
+    permissive_json_parsing=True,      # the default
+)
+result = await agent.run("Tell me about a famous engineer.")
+# Attempt 0: "Sorry, I cannot answer that."  → parsed=None, no recoverable JSON.
+# Attempt 1: another non-JSON apology         → still no JSON.
+# Attempt 2: '{"name": "...", "email": "..."}' → parsed.
+
+result.parse_strategy        # "retry"
+result.json_parse_attempts   # 2  (two extra inferences after the first)
+result.turns                 # 3
+len(result.inference_ids)    # 3
+```
+
+### Opt out for TensorZero-pure mode
+
+To get byte-identical TensorZero behaviour — no in-Python recovery, no retries — set both knobs to off:
+
+```python
+config = AgentConfig(
+    ...,
+    permissive_json_parsing=False,
+    max_json_retries=0,
+)
+```
+
+In that mode an invalid TZ response surfaces as `result.parsed is None` and `result.parse_strategy == "none"` on the first attempt, exactly like v0.10.0-M2.
+
+### The corrective hint
+
+Every retry sends a corrective `user` message after the failed assistant turn.  The hint starts with a fixed base sentence (`"Your previous response was not valid JSON. Return ONLY a valid JSON object..."`) and, when an `output_schema` is in play, appends:
+
+- The schema's top-level `title` when present (`"The schema is named 'Customer'."`).
+- The top-level `required` field names when present (`"Required top-level fields: 'name', 'email'."`).
+
+The hint is hard-coded English in this milestone; if you need a different wording, the cleanest path today is to disable retries (`max_json_retries=0`) and build the loop in your application code.  An i18n / per-agent override hook is a candidate for a future milestone.
+
+### Calling `permissive_parse` directly
+
+The permissive parser is exported at the package root and is a pure-function utility — no TensorZero gateway required.  Use it when you have already obtained a raw model string from elsewhere and want to apply the same recovery ladder:
+
+```python
+from t0_agents import permissive_parse
+
+value, strategy = permissive_parse('Sure! ```json\n{"a": 1}\n```')
+# value    == {"a": 1}
+# strategy == "permissive"
+```
+
+The function never raises — every JSON decode error along the recovery ladder is swallowed and the next layer is tried.
+
 ## `json_mode` provider matrix
 
 | Mode       | What it does                                                                       | Best for                                                       |
@@ -217,9 +330,8 @@ See [the gateway guide §8](https://www.tensorzero.com/docs/gateway/generate-str
 
 ## What's coming
 
-The structured-outputs roadmap ships in five milestones; M1 and M2 are closed.
+The structured-outputs roadmap ships in five milestones; M1, M2, and M3 are closed.
 
-- **M3** — adds `permissive_json_parsing` (in-Python recovery when the gateway returns `parsed == None`) and `max_json_retries` (re-emit the inference with a corrective hint).  `parse_strategy` will report which layer produced the parse.
 - **M4** — adds the `Agent.stream(...) + function_kind == "json"` guard (TZ does not emit `parsed` for streaming JSON), the opt-in `require_parsed()` guardrail, and provider-safety warnings.
 - **M5** — adds `MockGateway` support for JSON shapes, the `assert_parsed_*` testing helpers, and the dynamic-schema NER example.
 

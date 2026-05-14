@@ -121,7 +121,16 @@ helps weak models but spends tokens.  Default to short; allow the
 caller to override via a hook (deferred — not in M3 scope unless
 it surfaces as a need).
 
-**Status:** open.  Resolution expected during M3.
+**Status:** resolved during M3 (2026-05-14).
+
+**Resolution:** the M3 spec proposed a fixed short English hint.
+During M3 planning the user opted for a slightly richer hint: the
+fixed base sentence plus, when an `output_schema` exposes them, the
+schema's top-level `title` and `required` field names.  Implemented
+as `_build_retry_hint(schema)` in
+`src/t0_agents/core/agent.py` (M3 dev-log §2).  An i18n / per-call
+override hook remains deferred — the cleanest workaround today is to
+set `max_json_retries=0` and build the loop in caller code.
 
 ---
 
@@ -136,7 +145,17 @@ code blocks.  Top-level scalars (`"a string"`, `true`, `42`) are
 out of scope — those are valid JSON but rarely a meaningful
 "structured output".
 
-**Status:** open.  Resolution expected during M3.
+**Status:** resolved during M3 (2026-05-14).
+
+**Resolution:** `permissive_parse` supports both top-level objects and
+top-level arrays.  The naive "always try `{...}` first" approach failed
+the deterministic sweep for arrays-of-objects (the scanner extracted
+the inner `{...}` and missed the outer array), so M3 added
+`_ordered_pairs_for(text)`: when both openers are present, the one
+that appears earliest in the raw text wins.  Top-level scalars are
+still out of scope.  Implementation in
+`src/t0_agents/core/structured.py`; coverage in
+`tests/test_core/test_permissive_parse.py`.
 
 ---
 
@@ -151,7 +170,13 @@ familiar problem with prior art (`max_cost` in M3 of the agentic-feature
 roadmap shipped per-run cost ceilings); a `max_json_retry_seconds`
 field could be added in a follow-up if real workloads demand it.
 
-**Status:** open.  Decision pending M3 implementation experience.
+**Status:** resolved during M3 (2026-05-14).
+
+**Resolution:** attempt-count-only in v1, per the hypothesis.  No
+`max_json_retry_seconds` field was added; callers who need a wall-clock
+ceiling can wrap `Agent.run(...)` in `asyncio.wait_for(..., timeout=…)`
+on the call site.  Revisit if production workloads demand a
+per-attempt budget.
 
 ---
 
@@ -187,7 +212,15 @@ subsequent retries.  Each retry adds a user-turn hint message and
 the prior model response as an assistant turn (so the model sees
 its own bad output and the correction request).
 
-**Status:** open.  Resolution expected during M3.
+**Status:** resolved during M3 (2026-05-14).
+
+**Resolution:** implemented exactly as hypothesised.  `Agent._run_json`
+tracks `captured_episode: str | None`; on the first attempt it threads
+the caller's `episode_id` (possibly `None`) into the helper, then
+captures `structured.episode_id` and reuses it on every subsequent
+attempt.  Coverage:
+`tests/test_core/test_agent_json_retry.py::test_retry_preserves_episode_id`
+asserts the second call observes the first response's episode id.
 
 ---
 
@@ -204,7 +237,17 @@ for full traceability.
 run has `agent_response = final_output.raw`, `inference_ids = [id_0,
 id_1, ..., id_N]`, `turns = 1 + json_parse_attempts`.
 
-**Status:** open.  Resolution expected during M3.
+**Status:** resolved during M3 (2026-05-14).
+
+**Resolution:** implemented exactly as hypothesised.  The memory-save
+block at the bottom of `Agent._run_json` writes
+`agent_response=result.response` (the raw of the final attempt, valid
+or not), `inference_ids=list(result.inference_ids)` (every attempt's
+id in order), and `turns=result.turns` (`1 + json_parse_attempts`).
+Memory-strategy `"messages"` remains rejected at strategy-resolution
+time for JSON functions — `prior_messages` is now plumbed through the
+helper, but it is reserved for the retry loop, not for cross-episode
+history threading.  Lifting the guard is a future-milestone candidate.
 
 ---
 

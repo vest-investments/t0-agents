@@ -117,10 +117,13 @@ class AgentConfig:
     # Multi-agent composition
     sub_agents: list[Agent] = field(default_factory=list)
 
-    # Structured outputs (M1 foundations — Agent.run dispatch lands in M2)
+    # Structured outputs (M1 foundations · M2 Agent.run dispatch · M3
+    # permissive parsing + retry)
     function_kind: Literal["chat", "json"] = "chat"
     output_schema: Mapping[str, Any] | Path | None = None
     json_mode: Literal["off", "on", "strict", "tool"] | None = None
+    permissive_json_parsing: bool = True
+    max_json_retries: int = 2
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -174,6 +177,11 @@ class AgentConfig:
                     )
 
         # Structured-output validations (contract §3.1 / §5.1)
+        if self.max_json_retries < 0:
+            raise ConfigurationError(
+                f"AgentConfig.max_json_retries must be ≥ 0, "
+                f"got {self.max_json_retries}"
+            )
         if self.function_kind == "json":
             if self.json_mode is None:
                 raise ConfigurationError(
