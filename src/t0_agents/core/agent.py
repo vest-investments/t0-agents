@@ -185,6 +185,19 @@ class Agent:
                 default_tool_name(sub): sub for sub in config.sub_agents
             }
 
+        # M4 safety state.  ``_tool_provider_verified_empty`` is a
+        # positive latch — set to ``True`` after the first successful
+        # ``list_tools()`` round-trip that confirms the provider is
+        # empty.  We cannot decide at construction time whether the
+        # check is needed: ``Agent.run`` accepts a per-call
+        # ``json_mode`` override, so a config-level ``"strict"`` agent
+        # may still receive ``run(..., json_mode="tool")`` and must
+        # verify the provider lazily.  ``_warned_anthropic_combination``
+        # latches the once-per-instance Anthropic extended-thinking
+        # compatibility warning (TZ guide §11.4).
+        self._tool_provider_verified_empty = False
+        self._warned_anthropic_combination = False
+
     @property
     def config(self) -> AgentConfig:
         """Read-only access to the agent's configuration."""
@@ -488,6 +501,15 @@ class Agent:
                 for guardrail in self._config.guardrails:
                     try:
                         await guardrail.after_run(guard_ctx, result)
+                    except T0AgentsFatalError:
+                        # Fatal hooks (e.g. ``require_parsed``) must
+                        # propagate past the broad ``except Exception``
+                        # belt-and-braces trap so policy aborts surface
+                        # to the caller instead of being silently logged.
+                        # Documented at ``docs/guardrails.md`` §"Return
+                        # semantics" and mirrors the ``before_run``
+                        # precedent above.
+                        raise
                     except Exception:
                         logger.exception(
                             "Guardrail %r after_run raised a non-fatal exception; "
@@ -577,7 +599,27 @@ class Agent:
         Raises:
             MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
             GuardrailBlockedError: If any guardrail hard-aborts the run.
+            ConfigurationError: If ``config.function_kind == "json"`` —
+                TensorZero does not emit ``output.parsed`` mid-stream
+                (guide §7.1, §11.3), so streaming JSON functions is
+                refused before any event is yielded.  Use
+                :meth:`run` instead.
         """
+        # --- 0. JSON guard (M4) ---
+        # TZ does not emit ``output.parsed`` mid-stream (guide §7.1,
+        # §11.3), so surfacing a stream of ``parsed=None`` events would
+        # be a worse contract than refusing.  The check runs at the very
+        # top of the async-generator body, which means it fires at the
+        # caller's first ``__anext__``, before any setup work or token
+        # emission.
+        if self._config.function_kind == "json":
+            raise ConfigurationError(
+                "Agent.stream() is not supported for "
+                "function_kind='json'.  TensorZero does not emit "
+                "`output.parsed` mid-stream (guide §7.1, §11.3); use "
+                "Agent.run() instead."
+            )
+
         # --- 1. Load memory --- (mirrors run())
         # ``messages`` strategy uses load_history; skip the records load
         # for that path.
@@ -737,6 +779,12 @@ class Agent:
                 for guardrail in self._config.guardrails:
                     try:
                         await guardrail.after_run(guard_ctx, done_result)
+                    except T0AgentsFatalError:
+                        # See chat ``run()``'s after_run loop for the
+                        # rationale: fatal hooks must propagate past the
+                        # broad ``except Exception`` belt-and-braces trap
+                        # so policy aborts surface to the caller.
+                        raise
                     except Exception:
                         logger.exception(
                             "Guardrail %r after_run raised a non-fatal exception; "
@@ -817,6 +865,41 @@ class Agent:
         this method does not exercise the ``_OrchestrationToolProvider``
         path used by chat.
         """
+        # --- 0. Safety checks (M4) ---
+        # Resolve the effective json_mode for this call so the safety
+        # surfaces observe per-call overrides.  Per contract §3.2 a
+        # caller may override ``config.json_mode`` on a per-run basis,
+        # which means a config-level ``"strict"`` agent can still
+        # legitimately receive ``run(..., json_mode="tool")`` and must
+        # be checked.  The full ``effective_schema`` / ``effective_mode``
+        # resolution lives below in step 4; this is the early-bind for
+        # the safety pass only.  Operators see the clearest possible
+        # error: the Anthropic warning is informational (no abort);
+        # the tool-mode check is a hard error.
+        effective_mode_for_safety = (
+            json_mode if json_mode is not None else self._config.json_mode
+        )
+        self._maybe_warn_anthropic_quirk(effective_mode_for_safety)
+        if (
+            effective_mode_for_safety == "tool"
+            and not self._tool_provider_verified_empty
+        ):
+            # ``list_tools()`` is async, so ``Agent.__init__`` could not
+            # perform this check itself — it is verified the first time
+            # the agent actually needs ``"tool"`` mode, then cached.
+            # ``json_mode == "tool"`` against a tool provider that
+            # advertises tools is forbidden by TZ guide §11.1.
+            advertised_tools = await self._tool_provider.list_tools()
+            if advertised_tools:
+                raise ConfigurationError(
+                    "function_kind='json' with json_mode='tool' is "
+                    "incompatible with a tool_provider that advertises "
+                    "tools (TensorZero guide §11.1).  Either change "
+                    "json_mode to 'strict'/'on'/'off' or use an empty "
+                    "tool_provider."
+                )
+            self._tool_provider_verified_empty = True
+
         # --- 1. Load memory (mirrors chat run()) ---
         # ``memory_strategy="messages"`` would require turning prior-episode
         # records into ``prior_messages`` for the helper, which the M3
@@ -1004,6 +1087,12 @@ class Agent:
                 for guardrail in self._config.guardrails:
                     try:
                         await guardrail.after_run(guard_ctx, result)
+                    except T0AgentsFatalError:
+                        # Fatal hooks (e.g. ``require_parsed``) must
+                        # propagate past the broad ``except Exception``
+                        # belt-and-braces trap.  See chat ``run()``'s
+                        # after_run loop for the full rationale.
+                        raise
                     except Exception:
                         logger.exception(
                             "Guardrail %r after_run raised a non-fatal exception; "
@@ -1048,6 +1137,38 @@ class Agent:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _maybe_warn_anthropic_quirk(
+        self,
+        effective_mode: Literal["off", "on", "strict", "tool"] | None,
+    ) -> None:
+        """Emit the Anthropic extended-thinking compatibility warning once.
+
+        TensorZero guide §11.4 documents that Anthropic's
+        extended-thinking models reject ``json_mode`` values other than
+        ``"strict"`` or ``"off"``.  The SDK does not expose provider
+        routing, so the warning is generic — operators verify the
+        deployment themselves.  The latch (``_warned_anthropic_combination``)
+        keeps the warning to once per :class:`Agent` instance so a
+        long-lived agent that calls :meth:`run` repeatedly does not
+        emit log spam.  Modes ``"strict"`` and ``"off"`` are safe and
+        do not trigger the warning.
+
+        Takes the *effective* mode (per-call override resolved against
+        the config field) so a chat-agent-style config that gets
+        ``run(..., json_mode="on")`` per call still surfaces the
+        warning.
+        """
+        if self._warned_anthropic_combination:
+            return
+        if effective_mode in {"on", "tool"}:
+            logger.warning(
+                "AgentConfig/Agent.run(json_mode=%r) — Anthropic "
+                "extended-thinking models reject this combination "
+                "(TensorZero guide §11.4).  Verify your provider routing.",
+                effective_mode,
+            )
+            self._warned_anthropic_combination = True
 
     def _merge_tags(
         self,

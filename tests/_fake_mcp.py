@@ -34,13 +34,22 @@ class FakeMCPClient:
         call_outcomes: list[CallToolResult | Exception] | None = None,
         side_effect: Any = None,
     ) -> None:
-        self._tools = tools or [
-            MCPTool(
-                name="add",
-                description="add tool",
-                inputSchema={"type": "object", "properties": {}},
-            )
-        ]
+        # ``tools is None`` falls back to a default one-tool list for
+        # tests that don't care about advertisement; an explicit
+        # ``tools=[]`` must be honoured so safety checks (e.g. the M4
+        # ``json_mode='tool'`` conflict guard) can verify the
+        # empty-provider path.
+        self._tools = (
+            tools
+            if tools is not None
+            else [
+                MCPTool(
+                    name="add",
+                    description="add tool",
+                    inputSchema={"type": "object", "properties": {}},
+                )
+            ]
+        )
         self._call_results = call_results or {}
         self._call_outcomes = list(call_outcomes) if call_outcomes else None
         self._side_effect = side_effect

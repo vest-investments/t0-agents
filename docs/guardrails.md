@@ -336,6 +336,56 @@ block_tools(["drop_database", "wire_transfer"])
   wrapper's `list_tools` byte-identical to the inner provider and catches
   LLMs that hallucinate tool names the server does not advertise.
 
+### `require_parsed`
+
+Opt-in counterpart to the M3 permissive-parsing layer for JSON / structured-
+output agents. Hard-aborts a JSON run that completes with `result.parsed is
+None` — i.e. TensorZero's strict parser, the in-Python permissive layer, and
+every retry attempt all failed. Chat runs are a strict no-op because
+`parsed` is structurally absent on the chat path.
+
+```python
+from t0_agents.guardrails import require_parsed
+
+AgentConfig(
+    function_kind="json",
+    json_mode="strict",
+    guardrails=[require_parsed()],
+)
+```
+
+**Behaviour**
+
+- Fires in `after_run`; raises `GuardrailBlockedError` when
+  `result.function_kind == "json"` and `result.parsed is None`.
+- The error message carries the run's `parse_strategy` and
+  `json_parse_attempts` for debugging the layer that "should have" recovered.
+- For chat runs the hook returns `None` immediately — adding the guardrail
+  to a `function_kind="chat"` config is safe (no false positives).
+
+**When to use it**
+
+- Interactive workflows that must surface a structured object to the user —
+  silently returning `parsed=None` is worse than an explicit failure.
+- Batch jobs whose downstream consumer cannot handle a null payload — pair
+  with the M3 `max_json_retries` knob to define exactly how hard the agent
+  tries before giving up.
+- Schema-validation pipelines where "parseable JSON" is a strictly weaker
+  guarantee than "schema-conforming JSON" — combine with a Pydantic
+  validator on `result.parsed` for the conformance check (TZ guide §11.15
+  documents that schema conformance is not validated server-side in every
+  configuration).
+
+**Edge cases**
+
+- `result is None` (fatal abort teardown) short-circuits; `require_parsed`
+  does not synthesise a second exception on top of an existing one.
+- The guardrail's `after_run` raises a `T0AgentsFatalError` subclass; per
+  the [Return semantics](#return-semantics) section, the fatal trap
+  propagates out of `Agent.run(...)` and `Agent.stream(...)`'s lifecycle.
+- See [`docs/structured-outputs.md`](structured-outputs.md#opt-in-hard-failure-require_parsed)
+  for the structured-outputs angle (recovery layers, when to opt in vs out).
+
 ---
 
 ## API reference
@@ -348,6 +398,7 @@ block_tools(["drop_database", "wire_transfer"])
 | `max_cost` | `max_cost(*, per_episode: float, currency: str = "USD") -> Guardrail` | Cumulative cost cap. Raises `ValueError` if `per_episode <= 0`. |
 | `max_tool_calls` | `max_tool_calls(*, per_run: int) -> Guardrail` | Per-run invocation cap. Raises `ValueError` if `per_run < 0`. |
 | `block_tools` | `block_tools(names: list[str]) -> Guardrail` | Soft deny-list. |
+| `require_parsed` | `require_parsed(*, name: str = "require_parsed") -> Guardrail` | Hard-abort when a JSON run produces `parsed is None`. No-op on chat runs. |
 
 ### Protocol (`from t0_agents import Guardrail` or `from t0_agents.guardrails import Guardrail`)
 
