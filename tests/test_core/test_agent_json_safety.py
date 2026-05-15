@@ -179,6 +179,63 @@ class TestToolModeCheck:
 
         assert client.list_tools_calls == 1
 
+    async def test_per_call_tool_override_triggers_check(self) -> None:
+        """Per-call ``json_mode='tool'`` triggers the check even if config is 'strict'.
+
+        Regression for the post-review bypass: an agent configured
+        with ``json_mode='strict'`` (so the init-time flag was False
+        in the pre-review implementation) must still verify the
+        provider when a caller overrides per-run to ``"tool"``.
+        """
+        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        client = FakeMCPClient(
+            tools=[
+                MCPTool(
+                    name="add",
+                    description="add tool",
+                    inputSchema={"type": "object", "properties": {}},
+                )
+            ],
+        )
+        agent = _json_agent(
+            t0=t0,
+            tool_provider=cast(ToolProvider, client),
+            json_mode="strict",  # config says strict
+        )
+
+        with pytest.raises(ConfigurationError, match="§11.1"):
+            await agent.run("go", json_mode="tool")  # per-call overrides to tool
+
+    async def test_per_call_strict_skips_check_when_config_is_tool(self) -> None:
+        """Per-call ``json_mode='strict'`` skips the check even if config is 'tool'.
+
+        Mirror of the previous test: when the effective mode resolves
+        to ``"strict"``, the tool-mode list_tools() round-trip is
+        unnecessary.  ``_CountingFakeMCPClient`` records the call
+        count to confirm no round-trip happens.
+        """
+        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        # Non-empty provider — would raise if the check fired.
+        client = _CountingFakeMCPClient(
+            tools=[
+                MCPTool(
+                    name="add",
+                    description="add tool",
+                    inputSchema={"type": "object", "properties": {}},
+                )
+            ],
+        )
+        agent = _json_agent(
+            t0=t0,
+            tool_provider=cast(ToolProvider, client),
+            json_mode="tool",  # config says tool
+        )
+
+        result = await agent.run("go", json_mode="strict")  # per-call overrides
+
+        assert result.parsed == {"a": 1}
+        assert client.list_tools_calls == 0
+
 
 # ---------------------------------------------------------------------------
 # Streaming guard
@@ -290,6 +347,28 @@ class TestAnthropicWarning:
             if "Anthropic extended-thinking" in rec.getMessage()
         ]
         assert warnings == []
+
+    async def test_warning_fires_on_per_call_override(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A per-call ``json_mode='on'`` override warns even if config is 'strict'.
+
+        Regression for the post-review bypass: the safety warning
+        must observe the effective mode, not the config-level field.
+        """
+        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        agent = _json_agent(t0=t0, json_mode="strict")  # config says strict
+
+        with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
+            await agent.run("go", json_mode="on")  # per-call override
+
+        warnings = [
+            rec
+            for rec in caplog.records
+            if "Anthropic extended-thinking" in rec.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "'on'" in warnings[0].getMessage()
 
 
 # ---------------------------------------------------------------------------

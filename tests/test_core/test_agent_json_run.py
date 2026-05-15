@@ -196,8 +196,17 @@ class TestPerCallOverrides:
         assert kwargs["output_schema"] == per_call_schema
 
     async def test_per_call_json_mode_override(self) -> None:
+        # ``json_mode="tool"`` requires an empty tool provider per the
+        # M4 safety surface (TZ guide §11.1).  The test's intent is to
+        # confirm the per-call override is threaded into ``params``,
+        # not to exercise the (forbidden) tool-mode + advertised-tools
+        # combo.
         t0 = FakeJsonT0([_fake_json_response()])
-        agent = _json_agent(t0=t0, json_mode="strict")
+        agent = _json_agent(
+            t0=t0,
+            json_mode="strict",
+            client=FakeMCPClient(tools=[]),
+        )
 
         await agent.run("hello", json_mode="tool")
 

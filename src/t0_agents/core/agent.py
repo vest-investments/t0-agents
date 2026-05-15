@@ -185,18 +185,17 @@ class Agent:
                 default_tool_name(sub): sub for sub in config.sub_agents
             }
 
-        # M4 safety state.  ``_needs_tool_mode_check`` is set when the
-        # config combination requires a runtime ``list_tools()`` round-trip
-        # to confirm the tool provider is empty (TZ guide §11.1 forbids
-        # ``json_mode = "tool"`` with other tools).  The check itself is
-        # async, so ``Agent.__init__`` cannot await it — verification is
-        # deferred to the top of ``_run_json`` and cached after the first
-        # successful pass.  ``_warned_anthropic_combination`` latches the
-        # once-per-instance Anthropic extended-thinking compatibility
-        # warning (TZ guide §11.4).
-        self._needs_tool_mode_check = (
-            config.function_kind == "json" and config.json_mode == "tool"
-        )
+        # M4 safety state.  ``_tool_provider_verified_empty`` is a
+        # positive latch — set to ``True`` after the first successful
+        # ``list_tools()`` round-trip that confirms the provider is
+        # empty.  We cannot decide at construction time whether the
+        # check is needed: ``Agent.run`` accepts a per-call
+        # ``json_mode`` override, so a config-level ``"strict"`` agent
+        # may still receive ``run(..., json_mode="tool")`` and must
+        # verify the provider lazily.  ``_warned_anthropic_combination``
+        # latches the once-per-instance Anthropic extended-thinking
+        # compatibility warning (TZ guide §11.4).
+        self._tool_provider_verified_empty = False
         self._warned_anthropic_combination = False
 
     @property
@@ -867,26 +866,39 @@ class Agent:
         path used by chat.
         """
         # --- 0. Safety checks (M4) ---
-        # Config-level safety surfaces before memory or inference work so
-        # operators see the clearest possible error.  The Anthropic
-        # warning is informational (no abort); the tool-mode check is a
-        # hard error.
-        self._maybe_warn_anthropic_quirk()
-        if self._needs_tool_mode_check:
+        # Resolve the effective json_mode for this call so the safety
+        # surfaces observe per-call overrides.  Per contract §3.2 a
+        # caller may override ``config.json_mode`` on a per-run basis,
+        # which means a config-level ``"strict"`` agent can still
+        # legitimately receive ``run(..., json_mode="tool")`` and must
+        # be checked.  The full ``effective_schema`` / ``effective_mode``
+        # resolution lives below in step 4; this is the early-bind for
+        # the safety pass only.  Operators see the clearest possible
+        # error: the Anthropic warning is informational (no abort);
+        # the tool-mode check is a hard error.
+        effective_mode_for_safety = (
+            json_mode if json_mode is not None else self._config.json_mode
+        )
+        self._maybe_warn_anthropic_quirk(effective_mode_for_safety)
+        if (
+            effective_mode_for_safety == "tool"
+            and not self._tool_provider_verified_empty
+        ):
             # ``list_tools()`` is async, so ``Agent.__init__`` could not
-            # perform this check itself — it is verified once here, then
-            # cached.  ``json_mode == "tool"`` against a tool provider
-            # that advertises tools is forbidden by TZ guide §11.1.
+            # perform this check itself — it is verified the first time
+            # the agent actually needs ``"tool"`` mode, then cached.
+            # ``json_mode == "tool"`` against a tool provider that
+            # advertises tools is forbidden by TZ guide §11.1.
             advertised_tools = await self._tool_provider.list_tools()
             if advertised_tools:
                 raise ConfigurationError(
-                    "AgentConfig(function_kind='json', json_mode='tool') "
-                    "is incompatible with a tool_provider that advertises "
+                    "function_kind='json' with json_mode='tool' is "
+                    "incompatible with a tool_provider that advertises "
                     "tools (TensorZero guide §11.1).  Either change "
                     "json_mode to 'strict'/'on'/'off' or use an empty "
                     "tool_provider."
                 )
-            self._needs_tool_mode_check = False
+            self._tool_provider_verified_empty = True
 
         # --- 1. Load memory (mirrors chat run()) ---
         # ``memory_strategy="messages"`` would require turning prior-episode
@@ -1126,7 +1138,10 @@ class Agent:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _maybe_warn_anthropic_quirk(self) -> None:
+    def _maybe_warn_anthropic_quirk(
+        self,
+        effective_mode: Literal["off", "on", "strict", "tool"] | None,
+    ) -> None:
         """Emit the Anthropic extended-thinking compatibility warning once.
 
         TensorZero guide §11.4 documents that Anthropic's
@@ -1138,15 +1153,20 @@ class Agent:
         long-lived agent that calls :meth:`run` repeatedly does not
         emit log spam.  Modes ``"strict"`` and ``"off"`` are safe and
         do not trigger the warning.
+
+        Takes the *effective* mode (per-call override resolved against
+        the config field) so a chat-agent-style config that gets
+        ``run(..., json_mode="on")`` per call still surfaces the
+        warning.
         """
         if self._warned_anthropic_combination:
             return
-        if self._config.json_mode in {"on", "tool"}:
+        if effective_mode in {"on", "tool"}:
             logger.warning(
-                "AgentConfig(json_mode=%r) — Anthropic extended-thinking "
-                "models reject this combination (TensorZero guide §11.4). "
-                "Verify your provider routing.",
-                self._config.json_mode,
+                "AgentConfig/Agent.run(json_mode=%r) — Anthropic "
+                "extended-thinking models reject this combination "
+                "(TensorZero guide §11.4).  Verify your provider routing.",
+                effective_mode,
             )
             self._warned_anthropic_combination = True
 

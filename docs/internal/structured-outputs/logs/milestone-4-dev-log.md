@@ -15,9 +15,9 @@
   `require_parsed()` factory: returns a `Guardrail` whose `after_run`
   raises `GuardrailBlockedError` when a JSON run completes with
   `result.parsed is None`.  Chat runs are a strict no-op.
-- `tests/test_core/test_agent_json_safety.py` (347 lines) — 10 unit
-  tests across four classes: `TestToolModeCheck` (3),
-  `TestStreamGuard` (2), `TestAnthropicWarning` (3),
+- `tests/test_core/test_agent_json_safety.py` (~420 lines) — 13 unit
+  tests across four classes: `TestToolModeCheck` (5),
+  `TestStreamGuard` (2), `TestAnthropicWarning` (4),
   `TestAfterRunFatalPropagation` (2).  Carries a local `FakeJsonT0` /
   `_fake_json_response` (M5 will consolidate into `MockGateway`).
 - `tests/test_guardrails/test_require_parsed.py` (144 lines) — 3
@@ -50,6 +50,9 @@
   Switched to `tools if tools is not None else [...]`.  No test had
   semantically relied on the previous behaviour — all callers either
   passed a non-empty list or did not invoke `list_tools()`.
+- `tests/test_core/test_agent_json_run.py` — single test narrowed
+  to `FakeMCPClient(tools=[])` so the M4 safety surface does not
+  reject what M2 was asserting.  See §2.6 for the rationale.
 - `docs/structured-outputs.md` — new "Safety & provider quirks"
   section with four subsections (configuration errors, why no
   streaming JSON, Anthropic warning, undetectable provider quirks,
@@ -79,15 +82,15 @@
 
 | File | Count |
 |------|------:|
-| `tests/test_core/test_agent_json_safety.py` | 10 unit |
+| `tests/test_core/test_agent_json_safety.py` | 13 unit |
 | `tests/test_guardrails/test_require_parsed.py` | 3 unit |
 | `tests/test_core/test_agent_json_safety_integration.py` | 1 integration |
-| **Total (M4)** | **14 new tests** |
+| **Total (M4)** | **17 new tests** |
 
 Combined with M1's 19 + M2's 13 + M3's 31, the structured-outputs
-surface now ships ~77 tests across `tests/test_core/` and
-`tests/test_guardrails/`.  Offline suite total: 609 (M3 baseline
-596 + 13 new offline tests).
+surface now ships ~80 tests across `tests/test_core/` and
+`tests/test_guardrails/`.  Offline suite total: 612 (M3 baseline
+596 + 16 new offline tests).
 
 ### Docs added or modified
 
@@ -197,16 +200,83 @@ still pass.
 
 **Impact on subsequent milestones:** none.
 
-### §2.6 14 tests instead of the spec's ~10
+### §2.6 Post-review: safety checks now observe per-call ``json_mode`` override
 
-The spec called for ~10 tests.  M4 ships 14 because:
+The initial M4 implementation made two safety decisions at
+``Agent.__init__`` based on ``config.json_mode``:
 
-- `TestToolModeCheck` grew to 3 tests instead of 2 — added the
+- ``_needs_tool_mode_check = (function_kind == "json" and json_mode == "tool")``
+- The Anthropic warning helper read ``self._config.json_mode`` directly.
+
+PR #25 review flagged three high-priority comments from
+``gemini-code-assist[bot]`` pointing out that ``Agent.run(...)``
+accepts a per-call ``json_mode`` kwarg (contract §3.2) — so a
+config-level ``"strict"`` agent that gets
+``run(..., json_mode="tool")`` would bypass both safety checks
+under the init-time gating.
+
+**What changed:**
+
+- ``_needs_tool_mode_check`` (init-time predicate) → replaced by
+  ``_tool_provider_verified_empty`` (positive latch, ``False`` at
+  init, flipped to ``True`` the first time the empty-provider
+  invariant is verified).  Cache semantic stays — once the provider
+  is confirmed empty for this Agent instance, future runs skip the
+  ``list_tools()`` round-trip regardless of mode.
+- ``_maybe_warn_anthropic_quirk(effective_mode)`` now takes the
+  effective mode as a parameter rather than reading
+  ``self._config.json_mode``.  Per-call overrides flow through.
+- ``_run_json``'s "Step 0" safety block now resolves
+  ``effective_mode_for_safety = json_mode or config.json_mode``
+  before calling either helper.  The full schema/mode resolution
+  for the inference call stays at the original step 4 — the early
+  bind is exclusively for the safety pass.
+
+**Why:** the contract explicitly permits per-call overrides; safety
+surfaces that ignore them are buggy.  The fix is mechanical (two
+helper signatures, one new local) and observationally compatible
+with every test that was already passing (the init-time predicate
+collapses to the same boolean when no override is in play).
+
+**Tests added** to lock in the new behaviour:
+
+- ``test_per_call_tool_override_triggers_check`` — config
+  ``"strict"``, call ``run(json_mode="tool")`` with non-empty
+  provider → raises.
+- ``test_per_call_strict_skips_check_when_config_is_tool`` —
+  config ``"tool"``, call ``run(json_mode="strict")`` → check
+  skipped, no ``list_tools()`` round-trip.
+- ``test_warning_fires_on_per_call_override`` — config
+  ``"strict"``, call ``run(json_mode="on")`` → exactly one
+  Anthropic warning emitted (message references the per-call
+  override value).
+
+**Collateral test update:** M2's
+``TestPerCallOverrides::test_per_call_json_mode_override`` exercised
+``run(json_mode="tool")`` against a ``FakeMCPClient()`` with the
+default ``[MCPTool("add")]`` — a combination that the M4 safety
+surface (correctly) now forbids.  The test's intent was orthogonal
+(verify the per-call override threads into ``params``), so M4
+narrows the test to use ``FakeMCPClient(tools=[])`` and preserves
+the original assertion.  No M2 contract change.
+
+**Impact on subsequent milestones:** none — M5+ inherits the
+corrected behaviour.  Existing per-call-override tests in
+``test_agent_json_run.py::TestPerCallOverrides`` (M2) continue to
+exercise the same dispatch surface.
+
+### §2.7 17 tests instead of the spec's ~10
+
+The spec called for ~10 tests.  M4 ships 17 because:
+
+- `TestToolModeCheck` grew to 5 tests instead of 2 — added the
   caching assertion so the M4 "verify once, cache after" design is
-  pinned (the spec's risks table calls this out as a follow-up).
-- `TestAnthropicWarning` grew to 3 tests instead of 2 — split the
+  pinned (the spec's risks table calls this out as a follow-up),
+  plus two regression tests for the per-call-override fix in §2.6.
+- `TestAnthropicWarning` grew to 4 tests instead of 2 — split the
   "fires for json_mode in {on, tool}" case into two tests so each
-  branch is independently verifiable.
+  branch is independently verifiable, plus one regression test for
+  the per-call-override fix in §2.6.
 - `TestAfterRunFatalPropagation` (2 tests, both new) covers the
   pre-existing-bug fix that landed alongside M4 (see §2.4).  Without
   these, the fix would be unprotected against regression.
@@ -301,8 +371,8 @@ Commands run during M4 close-out (all from the repo root,
 |---------|---------|
 | `uv run ruff check src/` | passed — `All checks passed!` |
 | `uv run mypy src/` | passed — `Success: no issues found in 55 source files` |
-| `uv run pytest -m "not integration"` | passed — 609 passed, 2 skipped, 53 deselected (2.74 s).  M3 baseline was 596 passed / 52 deselected; the +13 offline and +1 deselected match the 13 new offline tests and 1 new integration test added by M4. |
-| `uv run pytest tests/test_core/test_agent_json_safety.py -v` | passed — 10/10 green in 0.09 s. |
+| `uv run pytest -m "not integration"` | passed — 612 passed, 2 skipped, 53 deselected (2.63 s).  M3 baseline was 596 passed / 52 deselected; the +16 offline and +1 deselected match the 16 new offline tests and 1 new integration test added by M4. |
+| `uv run pytest tests/test_core/test_agent_json_safety.py -v` | passed — 13/13 green in 0.10 s. |
 | `uv run pytest tests/test_guardrails/test_require_parsed.py -v` | passed — 3/3 green in 0.08 s. |
 | `git diff src/t0_agents/mcp/` | empty (contract §2.1 invariant holds). |
 | `git diff tests/test_mcp/ tests/test_stream/ tests/test_serve/ tests/test_compose/ tests/test_memory/ tests/test_cli/ tests/test_testing/` | empty (chat-byte-identity invariant holds for every existing test surface). |
