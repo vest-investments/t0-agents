@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "people": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Full names of people mentioned in the text."
+    },
+    "locations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Geographic locations (cities, countries, landmarks, regions)."
+    },
+    "organizations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Organizations, companies, universities, or institutions mentioned."
+    },
+    "topics": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "High-level subjects or topics discussed in the text."
+    }
+  },
+  "required": ["people", "locations", "organizations", "topics"],
+  "additionalProperties": false
+}

@@ -19,62 +19,23 @@ Coverage:
 from __future__ import annotations
 
 from typing import Any, cast
-from uuid import UUID, uuid4
 
 import pytest
-from tensorzero import (
-    AsyncTensorZeroGateway,
-    JsonInferenceResponse,
-    Text,
-    Usage,
-)
-from tensorzero.types import JsonInferenceOutput
+from tensorzero import AsyncTensorZeroGateway, Text
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import GuardrailBlockedError
 from t0_agents.core.types import ToolProvider
 from t0_agents.guardrails import require_parsed
+from t0_agents.testing import MockGateway
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
 
 
-def _fake_json_response(
-    *,
-    raw: str | None,
-    parsed: dict[str, Any] | None,
-    inference_id: UUID | None = None,
-    episode_id: UUID | None = None,
-) -> JsonInferenceResponse:
-    return JsonInferenceResponse(
-        inference_id=inference_id or uuid4(),
-        episode_id=episode_id or uuid4(),
-        variant_name="test-variant",
-        output=JsonInferenceOutput(raw=raw, parsed=parsed),
-        usage=Usage(input_tokens=10, output_tokens=20),
-    )
-
-
-class FakeJsonT0:
-    """Scriptable async gateway — pops one response per ``inference()`` call."""
-
-    def __init__(
-        self, responses: list[JsonInferenceResponse | Exception]
-    ) -> None:
-        self._queue: list[JsonInferenceResponse | Exception] = list(responses)
-
-    async def inference(self, **kwargs: Any) -> JsonInferenceResponse:
-        if not self._queue:
-            raise AssertionError("FakeJsonT0 ran out of canned responses")
-        item = self._queue.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-
 def _json_agent(
     *,
-    t0: FakeJsonT0,
+    t0: MockGateway,
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
@@ -94,7 +55,9 @@ def _json_agent(
 
 async def test_require_parsed_passes_when_parsed() -> None:
     """Valid JSON → guardrail does not abort the run."""
-    t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+    t0 = MockGateway.script_json(
+        [{"raw": '{"a": 1}', "parsed": {"a": 1}}]
+    )
     agent = _json_agent(t0=t0, guardrails=[require_parsed()])
 
     result = await agent.run("go")
@@ -111,7 +74,9 @@ async def test_require_parsed_passes_when_parsed() -> None:
 
 async def test_require_parsed_aborts_when_none() -> None:
     """Unrecoverable JSON + no retries → guardrail raises GuardrailBlockedError."""
-    t0 = FakeJsonT0([_fake_json_response(raw="totally not json", parsed=None)])
+    t0 = MockGateway.script_json(
+        [{"raw": "totally not json", "parsed": None}]
+    )
     agent = _json_agent(
         t0=t0,
         guardrails=[require_parsed()],

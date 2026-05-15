@@ -367,6 +367,38 @@ pointing at the same mutating list, and multi-turn assertions like
 the final state. With the deep copy, each entry is a true snapshot of
 what the loop passed on that turn.
 
+### Testing JSON agents
+
+`MockGateway` also covers the JSON dispatch path used by agents whose
+`AgentConfig.function_kind == "json"` — see
+[Structured outputs](structured-outputs.md#testing-your-json-agent) for
+the canonical reference.  The script-mode pattern mirrors `script()`:
+
+```python
+from t0_agents.testing import MockGateway
+
+gateway = MockGateway.script_json([
+    # parsed auto-derived from raw when the key is absent.
+    {"raw": '{"name": "Ada", "email": "ada@example.com"}'},
+])
+```
+
+Dict entries accept `raw`, `parsed`, `episode_id`, `inference_id`,
+`usage`, `variant_name`, and `finish_reason` (all optional except
+`raw`).  Pre-built `JsonInferenceResponse` instances pass through
+unchanged.  When `parsed` is omitted, the gateway runs a best-effort
+`json.loads(raw)` and falls back to `None` on failure; passing
+`parsed=None` explicitly preserves the "TZ returned the raw but
+couldn't parse" semantic used by the M3 retry tests.
+
+`canned_json(fn)` is the callable-driven sibling — `fn` receives the
+inference kwargs and returns either a dict or a pre-built
+`JsonInferenceResponse`.  Useful when the response must branch on the
+caller's per-call `output_schema` / `json_mode` overrides.
+
+Five JSON-aware assertion helpers complement the chat ones — see the
+[Assertions](#assertions) section below.
+
 ---
 
 ## `MockToolProvider`
@@ -468,9 +500,14 @@ for a runnable end-to-end test of this pattern.
 
 ## Assertions
 
-Five helpers, documented with their exact signatures. The tool-name
-arguments are positional; the source selector (`gateway=` /
-`tool_provider=`) is keyword-only.
+Ten helpers in two families — five chat-flavoured ones for tool-call
+and response shape, five JSON-flavoured ones for the `parsed` /
+`parse_strategy` / `json_parse_attempts` fields M5 ships alongside
+the structured-outputs roadmap.  The tool-name arguments are
+positional; the source selector (`gateway=` / `tool_provider=`) is
+keyword-only.
+
+### Chat assertions
 
 ```python
 from t0_agents.testing import (
@@ -508,9 +545,38 @@ gateway-side `ToolCall.arguments` is the *parsed* dict which can be
 pre-dispatch snapshot is the authoritative record of what the tool
 actually saw.
 
-All five helpers raise `AssertionError` on failure with messages that
+All chat helpers raise `AssertionError` on failure with messages that
 name the observed state (the list of tools called, the last-call
 arguments, the observed turn count, the actual response text).
+
+### JSON assertions
+
+```python
+from t0_agents.testing import (
+    assert_parsed_equals,
+    assert_parsed_matches_schema,
+    assert_invalid_json,
+    assert_parse_strategy,
+    assert_retry_attempts,
+)
+
+assert_parsed_equals(result, {"name": "Ada"})
+assert_parse_strategy(result, "retry")        # "strict" / "permissive" / "retry" / "none"
+assert_retry_attempts(result, 1)
+assert_invalid_json(result)                   # parsed is None AND parse_strategy == "none"
+assert_parsed_matches_schema(result, {"type": "object", "required": ["name"]})
+```
+
+`assert_parsed_matches_schema` soft-imports `jsonschema` inside the
+helper — it is **not** a hard dependency of t0-agents.  When the
+package is missing the helper raises `ImportError` with the install
+hint `pip install jsonschema`.  All five helpers raise `AssertionError`
+on failure with messages that include the observed `parse_strategy`
+so a passing test that suddenly degrades from `"strict"` to `"retry"`
+surfaces clearly.
+
+See [Structured outputs — Testing your JSON agent](structured-outputs.md#testing-your-json-agent)
+for the full worked example.
 
 ---
 

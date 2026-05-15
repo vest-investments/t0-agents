@@ -4,17 +4,99 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.10.0-M4] — Unreleased
+## [0.10.0] — Unreleased
 
-Milestone 4 of the structured-outputs roadmap — JSON-flavoured agents
-fail fast on incompatible combinations, emit a once-per-instance
-Anthropic compatibility warning, and gain the opt-in
-`require_parsed()` guardrail.  Also realigns the `after_run`
-exception-handler contract with the docs (previously documented but
-not enforced).  Chat-path behaviour is byte-identical to v0.9.0;
-`mcp/` is untouched.
+The structured-outputs roadmap.  Adds first-class support for TensorZero
+**JSON functions** to t0-agents while preserving every v0.9.0 invariant
+for chat callers: `function_kind`, `output_schema`, `json_mode`,
+`permissive_json_parsing`, `max_json_retries` on `AgentConfig`;
+`parsed`, `parse_strategy`, `json_parse_attempts`, `function_kind` on
+`AgentResult`; per-call kwargs on `Agent.run`; the opt-in
+`require_parsed()` guardrail; the `MockGateway.script_json` /
+`canned_json` testing primitives and five JSON-aware assertion helpers.
+Released in five internal milestones (M1 foundations, M2 `Agent.run`
+dispatch, M3 permissive parsing + retry, M4 safety + quirks, M5 testing
+helpers + polish); the consolidated bullets below preserve every
+concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
+`src/t0_agents/mcp/` is bit-for-bit untouched (contract §2.1).
 
 ### Added
+
+#### Core (foundations and dispatch)
+
+- **`run_structured_inference()` and `StructuredOutput` dataclass**
+  (`from t0_agents.core.structured import run_structured_inference,
+  StructuredOutput`).  Single-shot helper for TensorZero JSON functions
+  — the sibling of `run_agent` for `type = "json"` functions.  Accepts
+  per-call `output_schema` (dynamic schema override) and `json_mode`
+  (`off`/`on`/`strict`/`tool`), threads through `system_arguments`,
+  `episode_id`, `tags`, `namespace`, and `dryrun`, and fires an
+  optional `on_inference` callback that mirrors `run_agent`'s.
+- **`AgentConfig` fields for JSON functions**: `function_kind`
+  (`Literal["chat", "json"]`, default `"chat"`), `output_schema`
+  (`Mapping[str, Any] | Path | None`), `json_mode`
+  (`Literal["off", "on", "strict", "tool"] | None`),
+  `permissive_json_parsing` (`bool`, default `True`),
+  `max_json_retries` (`int`, default `2`).  `__post_init__` enforces
+  the five validation cases (JSON requires `json_mode`, chat forbids
+  `json_mode` and `output_schema`, JSON forbids `sub_agents`, JSON
+  forbids `memory_strategy="messages"`, `max_json_retries >= 0`).
+  `output_schema: Path` is read as JSON at construction time; relative
+  paths resolve against `cwd` (absolute paths recommended).
+- **`AgentResult` fields**: `function_kind` (`Literal["chat", "json"]`,
+  default `"chat"`), `parsed` (`Any | None`, default `None`),
+  `parse_strategy` (`Literal["strict","permissive","retry","none"]`),
+  `json_parse_attempts` (`int`, default `0`).  Defaults preserve
+  byte-identity for chat-function callers.
+- **`Agent.run` JSON dispatch.**  When `config.function_kind == "json"`,
+  the method routes to `run_structured_inference` instead of the MCP
+  tool loop and returns an `AgentResult` with `function_kind="json"`,
+  `parsed` populated, `response` set to the raw JSON string, and the
+  retry-aware `turns` / `inference_ids` semantics described below.
+  The chat path is byte-identical to v0.9.0 for callers that do not
+  pass the new kwargs.
+- **Per-call `output_schema`, `json_mode`, and `max_json_retries`
+  kwargs on `Agent.run`.**  Each overrides the corresponding
+  `AgentConfig` field for a single call.  Passing them on a
+  chat-flavoured agent raises `ConfigurationError`.
+- **Run-level guardrails fire on JSON runs.**  `Guardrail.before_run`
+  and `Guardrail.after_run` execute exactly as on the chat path —
+  same fatal/non-fatal contract, same `guardrail_log` shape.  Tool
+  hooks (`before_tool`/`after_tool`) never fire because JSON
+  functions are single-shot and call no tools.
+- **Memory load/save on the JSON path.**  `memory_strategy` values
+  `"prepended_message"` (the default) and `"system_template"` work
+  unchanged.  `MemoryRecord.agent_response` carries the raw JSON
+  string of the final attempt; `inference_ids` accumulates every
+  retry attempt's id in order; `turns` equals `1 + json_parse_attempts`.
+  `memory_strategy="messages"` is rejected at runtime with
+  `ConfigurationError` because the helper reserves `prior_messages`
+  for the retry orchestration.
+
+#### Robust parsing and retry
+
+- **`permissive_parse(raw)`** (`t0_agents.permissive_parse`,
+  `t0_agents.core.structured.permissive_parse`) — pure-function utility
+  that tries a three-layer recovery ladder on a raw model string
+  (`json.loads(raw)` → balanced `{…}`/`[…]` scan → fenced code block)
+  and returns `(value, strategy)` where `strategy ∈ {"strict",
+  "permissive", "none"}`.  Never raises.  Supports both top-level
+  objects and top-level arrays; an internal earliest-opener
+  disambiguator picks the right span when both are present.
+- **`run_structured_inference(prior_messages=...)`** — optional list
+  of `{role, content}` dicts that the helper prepends before the
+  `user_message` turn.  Reserved for the retry orchestration; direct
+  callers should leave it at `None`.
+- **Bounded retry orchestration in `Agent._run_json`.**  When
+  TensorZero's strict parser returns `parsed == None`, the orchestration
+  consults `permissive_parse(output.raw)` (when the layer is enabled);
+  when that also fails and the retry budget is non-zero, it re-emits
+  the inference with the previous (invalid) assistant turn and a
+  corrective user-turn hint.  The first response's `episode_id` is
+  captured and threaded into every subsequent attempt so retries stay
+  in the same TensorZero episode.
+
+#### Safety and provider quirks
 
 - **`require_parsed()`** (`t0_agents.guardrails.require_parsed`) —
   opt-in guardrail whose `after_run` raises
@@ -35,214 +117,123 @@ not enforced).  Chat-path behaviour is byte-identical to v0.9.0;
   `ConfigurationError` on the first `Agent.run(...)` (TZ guide
   §11.1 — `"tool"` mode cannot share a request with other tools).
   The check is async, so it runs once at the top of `_run_json` and
-  is cached on the Agent instance.
+  is cached on the Agent instance.  Per-call `json_mode` overrides
+  re-trigger the check when the effective mode resolves to `"tool"`.
 - **Anthropic extended-thinking warning.**  A `WARNING`-level log
   is emitted on the `t0_agents.core.agent` logger the first time
-  an agent with `json_mode in {"on", "tool"}` runs.  Once per Agent
-  instance.  TZ guide §11.4 documents the incompatibility; the SDK
-  does not expose provider routing, so the warning is generic.
+  an agent runs with an effective `json_mode in {"on", "tool"}`.
+  Once per Agent instance.  TZ guide §11.4 documents the
+  incompatibility; the SDK does not expose provider routing, so the
+  warning is generic.
+
+#### Testing helpers (M5)
+
+- **`MockGateway.script_json(turns)` and `MockGateway.canned_json(fn)`**
+  — JSON-flavoured siblings of the existing `script` / `canned`
+  classmethods.  Each script entry is either a dict (recognised keys:
+  `raw`, `parsed`, `episode_id`, `inference_id`, `usage`,
+  `variant_name`, `finish_reason`) or a pre-built
+  `JsonInferenceResponse`.  When a dict omits `parsed`, the gateway
+  best-effort-parses `raw`; an explicit `parsed: None` is preserved
+  verbatim for retry-script semantics.
+- **`MockJsonResponse` builder** — symmetric counterpart to
+  `MockChatResponse` for tests that want explicit `to_response()`
+  control over the materialised `JsonInferenceResponse`.
+- **Five JSON-aware assertion helpers** in `t0_agents.testing`:
+  `assert_parsed_equals`, `assert_parsed_matches_schema` (soft-imports
+  `jsonschema`; raises `ImportError` with install hint when missing —
+  not a hard dependency), `assert_invalid_json`,
+  `assert_parse_strategy`, `assert_retry_attempts`.
+
+#### Examples and docs
+
+- **`examples/17_structured/`** — five runnable demos:
+  - `main.py` (M1) — `run_structured_inference()` against the
+    `extract_customer_info` function.
+  - `structured_agent.py` (M2) — same function through `Agent.run`.
+  - `recovery_demo.py` (M3, no docker) — local fake gateway scripting
+    all four `parse_strategy` outcomes in under a second.
+  - `recovery_real_provider.py` (M3, docker) — real provider exercise
+    of the recovery ladder with `json_mode="off"`.
+  - `ner_dynamic_schema.py` (M5, docker) — NER agent against the new
+    `extract_entities` function showing per-call `output_schema`
+    overrides and a per-call `json_mode = "tool"` swap.
+- **`config/functions/extract_entities/`** and the mirrored
+  `examples/17_structured/config/functions/extract_entities/` —
+  four-category NER schema (people, locations, organizations, topics)
+  and system template, declared in both the repo-root and example-folder
+  `config/tensorzero.toml` under `[functions.extract_entities]`.
+- **`docs/structured-outputs.md`** — new public page covering the
+  helper, the configuration shape, the `Agent.run` dispatch, the
+  robust-parsing layer with the three-layer recovery diagram, the
+  safety surface (configuration errors, why JSON cannot stream, the
+  Anthropic warning, undetectable provider quirks, `require_parsed`),
+  the testing primitives, the Pydantic recipe, the `json_mode` provider
+  matrix, and the See-also footer linking to every adjacent doc.
+- **Cross-doc links**: `docs/concepts.md` (M1 chat-vs-json primer),
+  `docs/agent.md` (rows for every new `AgentConfig` and `AgentResult`
+  field, plus the per-call kwargs on `Agent.run`), `docs/guardrails.md`
+  (`require_parsed` reference), `docs/testing.md` (Testing JSON agents
+  + JSON assertions sections), `docs/streaming.md` (JSON-not-supported
+  note), `docs/memory.md` (JSON `agent_response` semantics),
+  `docs/index.md` (module table + Appendices link).
+- **Public re-exports**: `from t0_agents import StructuredOutput`,
+  `from t0_agents import permissive_parse`.
 
 ### Changed
 
-- **`Agent.run` / `Agent.stream` / `Agent._run_json` realign
-  `after_run` exception handling with the documented contract.**
-  Per `docs/guardrails.md` ("A custom hook that needs to abort
-  should raise a subclass of `T0AgentsFatalError`, which bypasses
-  the non-fatal trap"), fatal hooks raised from `after_run` must
-  propagate past the broad `except Exception` belt-and-braces trap.
-  Until M4 the three `after_run` loops swallowed every exception,
-  silently neutering the documented hard-abort path.  M4 adds
-  `except T0AgentsFatalError: raise` ahead of the existing
-  `except Exception` at each site, mirroring the `before_run`
-  precedent.  Required for `require_parsed()` to actually abort a
-  run.
-
-### Compatibility
-
-- **Chat path byte-identical to v0.9.0.**  All new safety surfaces
-  short-circuit on `function_kind == "chat"`.  No existing test in
-  `tests/test_mcp/`, `tests/test_core/`, `tests/test_stream/`,
-  `tests/test_serve/`, `tests/test_compose/`, `tests/test_guardrails/`,
-  `tests/test_memory/`, `tests/test_cli/`, or `tests/test_testing/`
-  changed behaviour.
-- **`mcp/` byte-identical to v0.9.0.**  No source changes;
-  contract §2.1 invariant holds.
-- **`after_run` realignment is observationally compatible for every
-  existing guardrail.**  None of the built-in guardrails
-  (`require_approval`, `max_cost`, `max_tool_calls`, `block_tools`)
-  raise fatal errors from `after_run`; user-supplied guardrails
-  that depend on the old swallow-everything behaviour can replace
-  the hard-raise with a `logger.error` in their own implementation
-  to retain v0.10.0-M3 semantics.
-
-## [0.10.0-M3] — Unreleased
-
-Milestone 3 of the structured-outputs roadmap — JSON-function runs
-gain two opt-out-able value-add layers on top of TensorZero's strict
-parser: an in-Python permissive recovery layer that extracts JSON from
-prose- or fence-wrapped model output, and a bounded retry loop that
-re-emits the inference with a schema-aware corrective hint when both
-the strict and permissive layers fail.  Chat-path behaviour is
-byte-identical to v0.9.0; `mcp/` is untouched.
-
-### Added
-
-- **`permissive_parse(raw)`** (`t0_agents.permissive_parse`,
-  `t0_agents.core.structured.permissive_parse`) — pure-function utility
-  that tries a three-layer recovery ladder on a raw model string
-  (`json.loads(raw)` → balanced `{…}`/`[…]` scan → fenced code block)
-  and returns `(value, strategy)` where `strategy ∈ {"strict",
-  "permissive", "none"}`.  Never raises.
-- **`AgentConfig.permissive_json_parsing: bool = True`** — toggles the
-  in-Python recovery layer for JSON runs.  `False` matches the M2
-  behaviour exactly: an invalid TZ response surfaces as `parsed is
-  None` without any in-Python fallback.
-- **`AgentConfig.max_json_retries: int = 2`** — bounds the number of
-  *extra* inferences after the first.  `0` disables retries; negative
-  values raise `ConfigurationError`.
-- **`Agent.run(max_json_retries=...)`** — per-call override for
-  `AgentConfig.max_json_retries`.  `None` (the default) uses the
-  configured value.
-- **`AgentResult.parse_strategy: Literal["strict","permissive","retry","none"]`**
-  — reports which layer produced `parsed`: `"strict"` (TensorZero on
-  the first attempt), `"permissive"` (in-Python recovery on the first
-  attempt), `"retry"` (a re-emitted inference succeeded), or `"none"`
-  (every layer and every attempt failed).
-- **`AgentResult.json_parse_attempts: int = 0`** — count of *extra*
-  inferences after the first.  Bounded by `max_json_retries`.
-- **`run_structured_inference(prior_messages=...)`** — optional list
-  of `{role, content}` dicts that the helper prepends before the
-  `user_message` turn.  Reserved for the M3 retry orchestration;
-  direct callers should leave it at `None`.
-- **Examples**: `examples/17_structured/recovery_demo.py` (local
-  in-process fake gateway, runs in < 1 s, scripts all four
-  `parse_strategy` outcomes) and
-  `examples/17_structured/recovery_real_provider.py` (real Groq
-  provider via docker compose; `json_mode="off"` per call to exercise
-  the recovery layers in production-like conditions).
-- **Docs**: `docs/structured-outputs.md` gains a "Robust JSON parsing"
-  section with the three-layer diagram, the config/observability
-  tables, two worked examples (permissive and retry), the opt-out
-  callout, and a note on the schema-aware retry hint.  `docs/agent.md`
-  documents the two new `AgentConfig` fields, the new `Agent.run`
-  kwarg, the new `AgentResult` fields, and the updated `turns` /
-  `inference_ids` semantics for JSON runs.
-
-### Changed
-
-- **`Agent._run_json` now orchestrates up to `max_json_retries + 1`
-  inferences.**  When TensorZero's strict parser returns `parsed ==
-  None`, the orchestration consults `permissive_parse(output.raw)`
-  (when the layer is enabled); when that also fails and the retry
-  budget is non-zero, it re-emits the inference with the previous
-  (invalid) assistant turn and a corrective user-turn hint.
-  `before_run` / `after_run` guardrails still fire exactly once around
-  the whole orchestration; the cost-tracker closure fires once per
-  inference, so cost accumulation across retries is automatic.
 - **`AgentResult.turns` and `AgentResult.inference_ids` for JSON runs**
-  now reflect every attempt: `turns == 1 + json_parse_attempts` and
+  reflect every attempt: `turns == 1 + json_parse_attempts` and
   `len(inference_ids) == 1 + json_parse_attempts` (always equal).
 - **Retry-hint phrasing**: the corrective hint sent on every retry
   starts with a fixed base sentence and, when an `output_schema`
   exposes them, appends the schema's top-level `title` and `required`
   field names.  Hard-coded English; an i18n / per-call override hook
   is deferred.
+- **`Agent.run` / `Agent.stream` / `Agent._run_json` realign
+  `after_run` exception handling with the documented contract.**
+  Per `docs/guardrails.md` ("A custom hook that needs to abort
+  should raise a subclass of `T0AgentsFatalError`, which bypasses
+  the non-fatal trap"), fatal hooks raised from `after_run` must
+  propagate past the broad `except Exception` belt-and-braces trap.
+  Until this release the three `after_run` loops swallowed every
+  exception, silently neutering the documented hard-abort path.
+  `except T0AgentsFatalError: raise` now sits ahead of the existing
+  `except Exception` at each site, mirroring the `before_run`
+  precedent.  Required for `require_parsed()` to actually abort a
+  run.
+- **`MockGateway.inference()` return type widened to
+  `ChatInferenceResponse | JsonInferenceResponse`** (the SDK's
+  `InferenceResponse` union).  Chat-only assertion helpers
+  (`assert_tool_called` / `assert_tool_not_called` / etc.) now skip
+  JSON responses when walking `gateway.responses`; JSON responses
+  carry no `ToolCall` blocks by contract.
 
 ### Compatibility
 
 - **Chat path byte-identical to v0.9.0.**  `function_kind == "chat"`
-  agents see no behavioural change: the new `AgentConfig` and
-  `AgentResult` fields default to values that match the v0.9.0
-  shape, and the chat dispatch ignores `max_json_retries`.
-- **JSON path with defaults is a superset of M2.**  When the model
-  returns valid JSON on the first try (`parse_strategy == "strict"`),
-  the new `AgentResult` fields default to the same values as M2 would
-  have produced.  Existing M2 tests pass unchanged.
+  agents see no behavioural change: every new `AgentConfig` and
+  `AgentResult` field defaults to a value that matches the v0.9.0
+  shape, and every chat dispatch path short-circuits before the JSON
+  surfaces.  Existing tests under `tests/test_mcp/`, `tests/test_core/`,
+  `tests/test_stream/`, `tests/test_serve/`, `tests/test_compose/`,
+  `tests/test_guardrails/`, `tests/test_memory/`, `tests/test_cli/`,
+  and `tests/test_testing/` stay green unchanged.
 - **TensorZero-pure mode.**
   `AgentConfig(..., permissive_json_parsing=False, max_json_retries=0)`
-  reproduces M2 behaviour byte-for-byte.
-- **`mcp/` byte-identical to v0.9.0.**  No new imports, no signature
-  changes, no new optional kwargs to any `mcp/` function.
-
-## [0.10.0-M2] — Unreleased
-
-Milestone 2 of the structured-outputs roadmap — `Agent.run` now
-dispatches JSON functions through `run_structured_inference` whenever
-`AgentConfig.function_kind == "json"`.  Permissive parsing, the retry
-loop, and the streaming guard still land in M3 and M4 respectively.
-
-### Added
-
-- **`Agent.run` JSON dispatch.**  When `config.function_kind == "json"`,
-  the method routes to `run_structured_inference` instead of the MCP
-  tool loop and returns an `AgentResult` with `function_kind="json"`,
-  `parsed` populated, `response` set to the raw JSON string, `turns ==
-  1`, and a single entry in `inference_ids`.  The chat path is
-  byte-identical to v0.9.0 for callers that do not pass the new
-  kwargs.
-- **Per-call `output_schema` and `json_mode` kwargs on `Agent.run`.**
-  Both override the corresponding `AgentConfig` fields for a single
-  call.  Passing either on a chat-flavoured agent raises
-  `ConfigurationError`.
-- **Run-level guardrails fire on JSON runs.**  `Guardrail.before_run`
-  and `Guardrail.after_run` execute exactly as on the chat path —
-  same fatal/non-fatal contract, same `guardrail_log` shape.  Tool
-  hooks (`before_tool`/`after_tool`) never fire because JSON
-  functions are single-shot and call no tools.
-- **Memory load/save on the JSON path.**  `memory_strategy` values
-  `"prepended_message"` (the default) and `"system_template"` work
-  unchanged.  `MemoryRecord.agent_response` carries the raw JSON
-  string returned by the model.  `memory_strategy="messages"` is
-  rejected at runtime with `ConfigurationError` because
-  `run_structured_inference` has no `prior_messages` kwarg — M3 may
-  revisit if a real workload requires threaded history.
-- **Example**: `examples/17_structured/structured_agent.py` — the
-  `Agent`-flavour counterpart to `main.py`.  Same TensorZero function,
-  same docker-compose setup; demonstrates `agent.run(...)` twice in a
-  row and surfaces the new `AgentResult` fields.
-- **Docs**: `docs/structured-outputs.md` gains a "Structured `Agent`"
-  section, per-call override examples, a dispatch diagram, and the
-  memory/guardrails behaviour table.  `docs/agent.md` documents the
-  expanded `Agent.run` signature, the per-call kwarg validation, and
-  the JSON values for `AgentResult.function_kind` / `parsed`.
-
-## [0.10.0-M1] — Unreleased
-
-Milestone 1 of the structured-outputs roadmap — single-shot helper plus
-the `AgentConfig` and `AgentResult` foundations.  `Agent.run` JSON
-dispatch lands in M2.
-
-### Added
-
-- **`run_structured_inference()` and `StructuredOutput` dataclass**
-  (`from t0_agents.core.structured import run_structured_inference,
-  StructuredOutput`).  Single-shot helper for TensorZero JSON functions
-  — the sibling of `run_agent` for `type = "json"` functions.  Accepts
-  per-call `output_schema` (dynamic schema override) and `json_mode`
-  (`off`/`on`/`strict`/`tool`), threads through `system_arguments`,
-  `episode_id`, `tags`, `namespace`, and `dryrun`, and fires an
-  optional `on_inference` callback that mirrors `run_agent`'s.
-- **`AgentConfig` fields for JSON functions**: `function_kind`
-  (`Literal["chat", "json"]`, default `"chat"`), `output_schema`
-  (`Mapping[str, Any] | Path | None`), `json_mode`
-  (`Literal["off", "on", "strict", "tool"] | None`).  `__post_init__`
-  enforces the four required combinations (JSON requires `json_mode`,
-  chat forbids `json_mode` and `output_schema`, JSON forbids
-  `sub_agents`).  `output_schema: Path` is read as JSON at
-  construction time; relative paths resolve against `cwd` (absolute
-  paths recommended).
-- **`AgentResult` fields**: `function_kind` (`Literal["chat", "json"]`,
-  default `"chat"`) and `parsed` (`Any | None`, default `None`).
-  Defaults preserve byte-identity for chat-function callers.
-- **Public re-export**: `from t0_agents import StructuredOutput`.
-- **Docs**: new `docs/structured-outputs.md` covers the helper, the
-  configuration shape, the `json_mode` provider matrix, and the
-  roadmap.  `docs/concepts.md` gained a one-paragraph "Chat vs JSON
-  functions" primer.  `docs/agent.md` gained forward-references for the
-  three new `AgentConfig` fields.
-- **Example**: `examples/17_structured/` — runnable
-  `extract_customer_info` demo with its own gateway config and
-  docker-compose.
+  reproduces the byte-for-byte behaviour the M2 dispatch produced before
+  the value-add layers landed: an invalid TZ response surfaces as
+  `parsed is None` and `parse_strategy == "none"` on the first attempt
+  with no in-Python fallback and no retries.
+- **`mcp/` byte-identical to v0.9.0.**  No source changes; contract
+  §2.1 invariant holds throughout the roadmap.
+- **`after_run` realignment is observationally compatible for every
+  existing guardrail.**  None of the built-in guardrails
+  (`require_approval`, `max_cost`, `max_tool_calls`, `block_tools`)
+  raise fatal errors from `after_run`; user-supplied guardrails that
+  depend on the old swallow-everything behaviour can replace the
+  hard-raise with a `logger.error` in their own implementation to
+  retain the pre-realignment semantics.
 
 ## [0.9.0] — Unreleased
 

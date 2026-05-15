@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ from mcp.types import Tool as MCPTool
 from tensorzero.types import (
     ChatInferenceResponse,
     ContentBlock,
+    JsonInferenceOutput,
+    JsonInferenceResponse,
     Text,
     Usage,
 )
@@ -39,10 +42,23 @@ from tensorzero.types import (
 # ---------------------------------------------------------------------------
 
 #: Return type of a :class:`MockGateway` ``source`` callable.  A source may
-#: return either a list of :class:`~tensorzero.types.ContentBlock` (wrapped
-#: into a fresh :class:`ChatInferenceResponse` by the gateway) or a fully
-#: built response when the caller needs to pin inference/episode IDs.
-_SourceReturn: TypeAlias = list[ContentBlock] | ChatInferenceResponse
+#: return any of:
+#:
+#: * a list of :class:`~tensorzero.types.ContentBlock` — wrapped into a fresh
+#:   :class:`ChatInferenceResponse` by the gateway (chat path);
+#: * a fully built :class:`ChatInferenceResponse` — used as-is (chat path);
+#: * a fully built :class:`JsonInferenceResponse` — used as-is (JSON path);
+#: * a ``dict`` payload with at least a ``raw`` key — materialised into a
+#:   :class:`JsonInferenceResponse` by the gateway (JSON path).  Extra keys
+#:   (``parsed``, ``episode_id``, ``inference_id``, ``usage``,
+#:   ``variant_name``, ``finish_reason``) override the defaults; an absent
+#:   ``parsed`` key triggers a best-effort :func:`json.loads` of ``raw``.
+_SourceReturn: TypeAlias = (
+    list[ContentBlock]
+    | ChatInferenceResponse
+    | JsonInferenceResponse
+    | dict[str, Any]
+)
 
 #: Handler registered in :class:`MockToolProvider`.  Receives the tool
 #: arguments as a dict and returns any JSON-serialisable payload (strings
@@ -92,6 +108,127 @@ class MockChatResponse:
 
 
 # ---------------------------------------------------------------------------
+# MockJsonResponse
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class MockJsonResponse:
+    """Builder for a single :class:`JsonInferenceResponse`-shaped object.
+
+    Symmetric counterpart to :class:`MockChatResponse` for JSON-flavoured
+    agents.  Keeps ``raw`` and ``parsed`` explicit so retry tests can
+    script precise invalid → valid transitions; the chat-builder pattern
+    of "list of content blocks" maps poorly to JSON functions, where the
+    response is a single (raw, parsed) pair.
+    """
+
+    raw: str | None
+    parsed: Any | None = None
+    usage: Usage | None = None
+    variant_name: str = "mock_variant"
+    finish_reason: Any = None
+
+    def to_response(
+        self,
+        *,
+        inference_id: UUID | None = None,
+        episode_id: UUID | None = None,
+    ) -> JsonInferenceResponse:
+        """Materialise a :class:`JsonInferenceResponse` from the builder."""
+        return JsonInferenceResponse(
+            inference_id=inference_id or uuid4(),
+            episode_id=episode_id or uuid4(),
+            variant_name=self.variant_name,
+            output=JsonInferenceOutput(raw=self.raw, parsed=self.parsed),
+            usage=self.usage or Usage(input_tokens=0, output_tokens=0),
+            finish_reason=self.finish_reason,
+        )
+
+
+# ---------------------------------------------------------------------------
+# JSON dict helpers
+# ---------------------------------------------------------------------------
+
+
+def _try_parse_json(raw: str | None) -> Any | None:
+    """Best-effort :func:`json.loads`; returns ``None`` on any failure."""
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _coerce_uuid(value: Any, fallback: UUID) -> UUID:
+    """Accept ``UUID``, ``str``, or ``None`` and return a ``UUID``.
+
+    ``None`` and the absence of a key both fall back to *fallback* so
+    callers can pin specific IDs when they care and leave the rest to
+    the gateway's defaults.
+    """
+    if value is None:
+        return fallback
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
+def _materialise_json_dict(
+    payload: dict[str, Any],
+    *,
+    sticky_episode_id: UUID,
+) -> JsonInferenceResponse:
+    """Build a :class:`JsonInferenceResponse` from a ``script_json`` dict.
+
+    Recognised keys (all optional except ``raw``):
+
+    * ``raw`` — required.  ``str | None``; the JSON string the model
+      "returned" (``None`` is legal for tests of the empty-output edge).
+    * ``parsed`` — when the key is **absent**, the gateway auto-derives
+      via :func:`json.loads` (returning ``None`` on parse failure); when
+      the key is **present** (even as ``None``), the value is used
+      verbatim so retry scripts can pin a `(valid raw, parsed=None)` pair
+      and observe the M3 permissive layer kick in.
+    * ``episode_id`` — ``UUID | str | None``; ``None`` reuses the
+      gateway's sticky episode id (mirrors the real gateway's contract
+      that an episode is allocated on inference #1 and reused).
+    * ``inference_id`` — ``UUID | str | None``; ``None`` mints a fresh
+      :func:`uuid.uuid4`.
+    * ``usage`` — :class:`~tensorzero.Usage` or ``None``; defaults to
+      ``Usage(input_tokens=0, output_tokens=0)``.
+    * ``variant_name`` — ``str``; defaults to ``"mock_variant"``.
+    * ``finish_reason`` — passed through unchanged.
+    """
+    if "raw" not in payload:
+        raise KeyError(
+            "MockGateway.script_json/canned_json: dict entry missing "
+            "required 'raw' key"
+        )
+    raw_value = payload["raw"]
+    if "parsed" in payload:
+        parsed_value = payload["parsed"]
+    else:
+        parsed_value = _try_parse_json(raw_value)
+
+    episode_id = _coerce_uuid(payload.get("episode_id"), sticky_episode_id)
+    inference_id = _coerce_uuid(payload.get("inference_id"), uuid4())
+    usage = payload.get("usage") or Usage(input_tokens=0, output_tokens=0)
+    variant_name = payload.get("variant_name", "mock_variant")
+    finish_reason = payload.get("finish_reason")
+
+    return JsonInferenceResponse(
+        inference_id=inference_id,
+        episode_id=episode_id,
+        variant_name=variant_name,
+        output=JsonInferenceOutput(raw=raw_value, parsed=parsed_value),
+        usage=usage,
+        finish_reason=finish_reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # MockGateway
 # ---------------------------------------------------------------------------
 
@@ -108,13 +245,13 @@ class _RecordedInference:
     """One captured ``(kwargs, response)`` pair from :class:`RecordingGateway`."""
 
     kwargs: dict[str, Any]
-    response: ChatInferenceResponse
+    response: ChatInferenceResponse | JsonInferenceResponse
 
 
 class MockGateway:
     """A duck-typed :class:`~tensorzero.AsyncTensorZeroGateway` for unit tests.
 
-    Three construction patterns:
+    Five construction patterns:
 
     * :meth:`script` — list of per-turn content blocks; each
       ``inference()`` call pops the next entry.  When the script is
@@ -124,6 +261,14 @@ class MockGateway:
       returning either a content list or a fully built response.
       Behaviour-driven; ideal when a test wants to branch on the
       assistant's previous message or tool results.
+    * :meth:`script_json` — JSON-mode sibling of :meth:`script`.  Each
+      script entry is either a dict (``{"raw": ..., "parsed": ...,
+      ...}``) or a pre-built :class:`JsonInferenceResponse`.  When the
+      script is exhausted, the gateway raises ``AssertionError`` —
+      JSON functions are single-shot per call, so an exhausted script
+      almost always means the test forgot to script a retry response.
+    * :meth:`canned_json` — JSON-mode sibling of :meth:`canned`.  Same
+      dict / pre-built return shape as :meth:`script_json`.
     * :meth:`recording` — wrap a real gateway, forward ``inference()``
       through it, and capture ``(kwargs, response)`` pairs.  Call
       :meth:`RecordingGateway.replay` afterwards to turn the capture
@@ -132,7 +277,8 @@ class MockGateway:
     The gateway records every call on :attr:`calls` (and
     :attr:`feedback_calls` for the feedback path) so tests can assert
     on the kwargs the loop passed — notably ``additional_tools``,
-    ``tool_choice``, ``tags``, and ``namespace``.
+    ``tool_choice``, ``tags``, ``namespace`` (chat path), and
+    ``output_schema``, ``params`` (JSON path).
     """
 
     def __init__(
@@ -145,14 +291,17 @@ class MockGateway:
         # MockGateway keeps the same episode id for every turn of a run
         # so ``Agent.run(episode_id=None)`` sees a stable id across turns,
         # matching the real gateway's contract (episode_id first allocated
-        # on inference #1, reused thereafter).
+        # on inference #1, reused thereafter).  The same id is reused for
+        # JSON retries via the script_json dict's ``episode_id: None``
+        # default — Agent._run_json reads ``structured.episode_id`` on
+        # the first attempt and threads it into subsequent retries.
         self._sticky_episode_id: UUID | None = episode_id
         self.calls: list[dict[str, Any]] = []
-        # Parallel to ``calls``: the ``ChatInferenceResponse`` the gateway
-        # returned for each entry.  Enables assertions on what the mock
-        # *model* emitted (tool calls, text, etc.) without requiring
-        # callers to replay the script themselves.
-        self.responses: list[ChatInferenceResponse] = []
+        # Parallel to ``calls``: the response object the gateway returned
+        # for each entry.  May be a chat or JSON response depending on
+        # the source; assertion helpers narrow with ``isinstance`` when
+        # they need a specific shape.
+        self.responses: list[ChatInferenceResponse | JsonInferenceResponse] = []
         self.feedback_calls: list[dict[str, Any]] = []
 
     # --- Factory methods ---------------------------------------------------
@@ -185,6 +334,59 @@ class MockGateway:
         return cls(fn, episode_id=episode_id)
 
     @classmethod
+    def script_json(
+        cls,
+        turns: list[dict[str, Any] | JsonInferenceResponse],
+        *,
+        episode_id: UUID | None = None,
+    ) -> MockGateway:
+        """Queue-driven JSON responses, one entry per ``inference()`` call.
+
+        Each entry is either a dict (see :func:`_materialise_json_dict`
+        for the recognised keys) or a pre-built
+        :class:`JsonInferenceResponse`.  Dicts are the common case for
+        single-shot tests; pre-built responses are useful when a test
+        needs to pin a specific :class:`~tensorzero.Usage` shape or
+        re-use the same response across attempts.
+
+        When the queue is empty and ``inference()`` is called again, the
+        gateway raises ``AssertionError`` — JSON functions do not have a
+        "graceful empty turn" the way the chat loop does, so an
+        exhausted JSON script almost always indicates the test scripted
+        too few responses for the retry budget.
+        """
+        queue: deque[dict[str, Any] | JsonInferenceResponse] = deque(turns)
+
+        def source(**_: Any) -> _SourceReturn:
+            if not queue:
+                raise AssertionError(
+                    "MockGateway.script_json: ran out of canned responses; "
+                    "scripted N retries but Agent._run_json requested "
+                    "more inferences than the script provides"
+                )
+            return queue.popleft()
+
+        return cls(source, episode_id=episode_id)
+
+    @classmethod
+    def canned_json(
+        cls,
+        fn: Callable[..., dict[str, Any] | JsonInferenceResponse],
+        *,
+        episode_id: UUID | None = None,
+    ) -> MockGateway:
+        """Callable-driven JSON responses; receives full inference kwargs.
+
+        ``fn`` returns either a dict (same shape as the entries
+        :meth:`script_json` accepts) or a pre-built
+        :class:`JsonInferenceResponse`.  Useful when the response must
+        depend on the captured kwargs — e.g. branching on
+        ``kwargs.get("output_schema")`` to verify that the per-call
+        override threaded through to the gateway.
+        """
+        return cls(fn, episode_id=episode_id)
+
+    @classmethod
     def recording(cls, real_gateway: Any) -> RecordingGateway:
         """Wrap a real gateway to capture ``(kwargs, response)`` pairs.
 
@@ -197,7 +399,9 @@ class MockGateway:
 
     # --- Gateway surface (duck-typed) --------------------------------------
 
-    async def inference(self, **kwargs: Any) -> ChatInferenceResponse:
+    async def inference(
+        self, **kwargs: Any
+    ) -> ChatInferenceResponse | JsonInferenceResponse:
         """Record the call and return the next scripted response.
 
         ``kwargs`` are deep-copied before being appended to :attr:`calls`
@@ -206,13 +410,27 @@ class MockGateway:
         ``input["messages"]`` in place across turns; without the deep
         copy every recorded entry would end up pointing at the same
         mutating list.
+
+        The return type is the SDK's ``InferenceResponse`` union —
+        chat sources yield :class:`ChatInferenceResponse`, JSON sources
+        yield :class:`JsonInferenceResponse`.  A single gateway instance
+        can mix both shapes if the source decides per-call (useful when
+        wrapping a real gateway that hosts both chat and JSON functions).
         """
         self.calls.append(copy.deepcopy(kwargs))
         result = self._source(**kwargs)
-        if isinstance(result, ChatInferenceResponse):
-            response: ChatInferenceResponse = result
+        response: ChatInferenceResponse | JsonInferenceResponse
+        if isinstance(result, ChatInferenceResponse | JsonInferenceResponse):
+            response = result
+        elif isinstance(result, dict):
+            # JSON dict shape — materialise into a JsonInferenceResponse.
+            if self._sticky_episode_id is None:
+                self._sticky_episode_id = uuid4()
+            response = _materialise_json_dict(
+                result, sticky_episode_id=self._sticky_episode_id
+            )
         else:
-            # The source returned a content list — wrap it with a stable episode id.
+            # Content-block list (chat path) — wrap with a stable episode id.
             if self._sticky_episode_id is None:
                 self._sticky_episode_id = uuid4()
             response = MockChatResponse(list(result)).to_response(
@@ -242,17 +460,21 @@ class RecordingGateway:
         self._real = real_gateway
         self._captured: list[_RecordedInference] = []
         self.calls: list[dict[str, Any]] = []
-        self.responses: list[ChatInferenceResponse] = []
+        self.responses: list[ChatInferenceResponse | JsonInferenceResponse] = []
         self.feedback_calls: list[dict[str, Any]] = []
 
-    async def inference(self, **kwargs: Any) -> ChatInferenceResponse:
+    async def inference(
+        self, **kwargs: Any
+    ) -> ChatInferenceResponse | JsonInferenceResponse:
         # One deep copy is used for both ``.calls`` and ``_captured`` so the
         # two records stay in sync and neither can be mutated by the loop's
         # in-place ``messages.append`` after the call returns.
         kwargs_snapshot = copy.deepcopy(kwargs)
         self.calls.append(kwargs_snapshot)
         raw = await self._real.inference(**kwargs)
-        response = cast(ChatInferenceResponse, raw)
+        response = cast(
+            "ChatInferenceResponse | JsonInferenceResponse", raw
+        )
         self._captured.append(
             _RecordedInference(kwargs=kwargs_snapshot, response=response)
         )
@@ -270,13 +492,16 @@ class RecordingGateway:
 
     def replay(self) -> MockGateway:
         """Build a deterministic :class:`MockGateway` from the capture."""
-        queue: deque[ChatInferenceResponse] = deque(
+        queue: deque[ChatInferenceResponse | JsonInferenceResponse] = deque(
             rec.response for rec in self._captured
         )
 
         def source(**_: Any) -> _SourceReturn:
             if queue:
                 return queue.popleft()
+            # Capture exhausted — fall back to an empty chat turn so the
+            # agent loop terminates cleanly.  Replay is a chat-leaning
+            # idiom; JSON callers should pad their capture explicitly.
             return [Text(text="")]
 
         return MockGateway(source)
@@ -388,6 +613,7 @@ class MockToolProvider:
 __all__ = [
     "MockChatResponse",
     "MockGateway",
+    "MockJsonResponse",
     "MockToolProvider",
     "RecordingGateway",
     "ToolHandler",

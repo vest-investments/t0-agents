@@ -1,100 +1,38 @@
 """Unit tests for ``Agent.run`` JSON-function dispatch (M2).
 
-Uses a hand-rolled ``FakeJsonT0`` that mirrors
-``tests/test_core/test_structured.py``'s fake.  ``MockGateway`` is
-chat-only in v0.9.0 — M5 will fold the JSON branch in and these local
-fakes will go away.  Chat-path byte-identity is exercised by reusing
-the same shared ``FakeT0`` / ``FakeMCPClient`` fakes the rest of the
-suite uses.
+Drives ``Agent.run`` against ``MockGateway.script_json`` for the JSON path
+and the shared ``tests/_fake_t0`` for the chat-byte-identity assertions.
+``MockGateway.script_json`` is the M5 JSON-flavoured sibling of
+``MockGateway.script`` — see ``tests/test_testing/test_json_helpers.py``
+for the dict-shape semantic (auto-derive ``parsed`` when the key is
+absent; honour explicit ``parsed`` when present).
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from mcp.types import Tool as MCPTool
-from tensorzero import (
-    AsyncTensorZeroGateway,
-    JsonInferenceResponse,
-    Text,
-    Usage,
-)
-from tensorzero.types import JsonInferenceOutput
+from tensorzero import AsyncTensorZeroGateway, Text
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
 from t0_agents.memory.in_memory import InMemoryMemory
+from t0_agents.testing import MockGateway
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
 
-# ---------------------------------------------------------------------------
-# JSON fakes — local until M5 generalises MockGateway.
-# ---------------------------------------------------------------------------
-
-
-def _fake_json_response(
-    *,
-    raw: str | None = '{"name": "Sarah", "email": "sarah@example.com"}',
-    parsed: dict[str, Any] | None = None,
-    inference_id: UUID | None = None,
-    episode_id: UUID | None = None,
-) -> JsonInferenceResponse:
-    """Build a real ``JsonInferenceResponse`` from SDK dataclasses."""
-    if parsed is None and raw is not None and raw.strip().startswith("{"):
-        import json as _json
-
-        try:
-            parsed_value = _json.loads(raw)
-        except _json.JSONDecodeError:
-            parsed_value = None
-    else:
-        parsed_value = parsed
-    return JsonInferenceResponse(
-        inference_id=inference_id or uuid4(),
-        episode_id=episode_id or uuid4(),
-        variant_name="test-variant",
-        output=JsonInferenceOutput(raw=raw, parsed=parsed_value),
-        usage=Usage(input_tokens=10, output_tokens=20),
-    )
-
-
-class FakeJsonT0:
-    """Records every ``inference()`` call; returns scripted JSON responses."""
-
-    def __init__(self, responses: list[JsonInferenceResponse | Exception]) -> None:
-        self._queue: list[JsonInferenceResponse | Exception] = list(responses)
-        self.calls: list[dict[str, Any]] = []
-
-    async def inference(self, **kwargs: Any) -> JsonInferenceResponse:
-        captured: dict[str, Any] = dict(kwargs)
-        if isinstance(captured.get("input"), dict):
-            captured["input"] = dict(captured["input"])
-            if isinstance(captured["input"].get("messages"), list):
-                captured["input"]["messages"] = [
-                    dict(m) if isinstance(m, dict) else m
-                    for m in captured["input"]["messages"]
-                ]
-        self.calls.append(captured)
-        if not self._queue:
-            raise AssertionError("FakeJsonT0 ran out of canned responses")
-        item = self._queue.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-
-# ---------------------------------------------------------------------------
-# Fixture builders
-# ---------------------------------------------------------------------------
+# Default raw payload used across the happy-path tests below.
+_OK_RAW = '{"name": "Sarah", "email": "sarah@example.com"}'
 
 
 def _json_agent(
     *,
-    t0: FakeJsonT0,
+    t0: MockGateway,
     client: FakeMCPClient | None = None,
     **config_overrides: Any,
 ) -> Agent:
@@ -144,7 +82,7 @@ def _mcp_tool(name: str = "add") -> MCPTool:
 
 class TestJsonDispatch:
     async def test_run_dispatches_to_json_when_function_kind_is_json(self) -> None:
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0)
 
         result = await agent.run("Hi, I'm Sarah at sarah@example.com")
@@ -154,7 +92,7 @@ class TestJsonDispatch:
             "name": "Sarah",
             "email": "sarah@example.com",
         }
-        assert result.response == '{"name": "Sarah", "email": "sarah@example.com"}'
+        assert result.response == _OK_RAW
         assert result.turns == 1
         assert len(result.inference_ids) == 1
         # Chat-only field default still preserved.
@@ -178,7 +116,7 @@ class TestJsonDispatch:
 
 class TestPerCallOverrides:
     async def test_per_call_output_schema_override(self) -> None:
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
             output_schema={"type": "object", "properties": {"x": {"type": "number"}}},
@@ -201,7 +139,7 @@ class TestPerCallOverrides:
         # confirm the per-call override is threaded into ``params``,
         # not to exercise the (forbidden) tool-mode + advertised-tools
         # combo.
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
             json_mode="strict",
@@ -214,7 +152,7 @@ class TestPerCallOverrides:
         assert kwargs["params"] == {"chat_completion": {"json_mode": "tool"}}
 
     async def test_config_schema_used_when_per_call_omits_override(self) -> None:
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         config_schema = {"type": "object", "properties": {"z": {"type": "boolean"}}}
         agent = _json_agent(t0=t0, output_schema=config_schema)
 
@@ -263,7 +201,7 @@ class TestGuardrails:
                 self.last_result = result
 
         spy = _SpyGuardrail()
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0, guardrails=[cast(Any, spy)])
 
         result = await agent.run("hi")
@@ -304,7 +242,7 @@ class TestGuardrails:
 
         spy = _ToolSpy()
         client = FakeMCPClient(tools=[_mcp_tool("add")])
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0, client=client, guardrails=[cast(Any, spy)])
 
         await agent.run("hi")
@@ -317,12 +255,15 @@ class TestMemory:
     async def test_memory_save_persists_raw_json(self) -> None:
         memory = InMemoryMemory()
         episode = uuid4()
-        canned = _fake_json_response(
-            raw='{"x": 1}',
-            parsed={"x": 1},
-            episode_id=episode,
+        t0 = MockGateway.script_json(
+            [
+                {
+                    "raw": '{"x": 1}',
+                    "parsed": {"x": 1},
+                    "episode_id": episode,
+                }
+            ]
         )
-        t0 = FakeJsonT0([canned])
         agent = _json_agent(t0=t0, memory=memory)
 
         result = await agent.run("hi", episode_id=str(episode))
@@ -339,8 +280,8 @@ class TestMemory:
 class TestEpisodePropagation:
     async def test_episode_id_propagation(self) -> None:
         episode = uuid4()
-        t0 = FakeJsonT0(
-            [_fake_json_response(episode_id=episode)],
+        t0 = MockGateway.script_json(
+            [{"raw": _OK_RAW, "episode_id": episode}]
         )
         agent = _json_agent(t0=t0)
 
@@ -388,7 +329,7 @@ class TestMessagesMemoryStrategy:
             history=[{"role": "user", "content": "prior"}],
         )
         episode = uuid4()
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
             memory=cast(Any, memory),
@@ -404,7 +345,7 @@ class TestMessagesMemoryStrategy:
         # ``extra_kwargs`` never picked up ``prior_messages``.
         memory = self._messages_memory(history=[])
         episode = uuid4()
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
             memory=cast(Any, memory),
@@ -418,7 +359,7 @@ class TestMessagesMemoryStrategy:
         # No ``episode_id`` ⇒ no memory load happens at all; the check
         # still fires because it keys off the configured strategy.
         memory = self._messages_memory(history=[])
-        t0 = FakeJsonT0([_fake_json_response()])
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
             memory=cast(Any, memory),

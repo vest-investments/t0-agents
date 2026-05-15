@@ -13,6 +13,15 @@ required when a tool calls `ctx.elicit()`).
 from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEvent
 ```
 
+> **Chat-only.**  `Agent.stream(...)` supports chat-flavoured agents
+> only.  For an agent whose `AgentConfig.function_kind == "json"`, the
+> stream raises `ConfigurationError` at first `__anext__` — TensorZero
+> does not emit `output.parsed` mid-stream, so a JSON stream would
+> yield events whose `parsed` is permanently `None`.  See
+> [Structured outputs — Why you cannot stream JSON functions](structured-outputs.md#why-you-cannot-stream-json-functions)
+> for the rationale and recommended pattern (call `Agent.run(...)` and
+> present the JSON on the consumer side once it lands).
+
 ## Why stream?
 
 - **UX** — tokens render as they arrive; tool calls surface as inline

@@ -13,25 +13,18 @@ Covers four concerns:
   Exception`` belt-and-braces trap so policy aborts surface to the
   caller, matching the documented contract at ``docs/guardrails.md``.
 
-Local ``FakeJsonT0`` / ``_fake_json_response`` helpers mirror M3 — M5
-will consolidate the JSON fakes into ``MockGateway``.
+Drives the JSON path through ``MockGateway.script_json``; the chat-byte-
+identity assertions still use the shared ``tests/_fake_t0`` helpers.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import Any, cast
-from uuid import UUID, uuid4
 
 import pytest
 from mcp.types import Tool as MCPTool
-from tensorzero import (
-    AsyncTensorZeroGateway,
-    JsonInferenceResponse,
-    Text,
-    Usage,
-)
-from tensorzero.types import JsonInferenceOutput
+from tensorzero import AsyncTensorZeroGateway, Text
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
@@ -41,47 +34,12 @@ from t0_agents.core.exceptions import (
 )
 from t0_agents.core.types import ToolProvider
 from t0_agents.stream.events import DoneEvent
+from t0_agents.testing import MockGateway
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0, chat_chunk, final_chunk, text_chunk
 
-# ---------------------------------------------------------------------------
-# JSON fakes — local copy, will be folded into MockGateway in M5.
-# ---------------------------------------------------------------------------
-
-
-def _fake_json_response(
-    *,
-    raw: str | None,
-    parsed: dict[str, Any] | None,
-    inference_id: UUID | None = None,
-    episode_id: UUID | None = None,
-) -> JsonInferenceResponse:
-    return JsonInferenceResponse(
-        inference_id=inference_id or uuid4(),
-        episode_id=episode_id or uuid4(),
-        variant_name="test-variant",
-        output=JsonInferenceOutput(raw=raw, parsed=parsed),
-        usage=Usage(input_tokens=10, output_tokens=20),
-    )
-
-
-class FakeJsonT0:
-    """Scriptable async gateway — pops one response per ``inference()`` call."""
-
-    def __init__(
-        self, responses: list[JsonInferenceResponse | Exception]
-    ) -> None:
-        self._queue: list[JsonInferenceResponse | Exception] = list(responses)
-        self.calls: list[dict[str, Any]] = []
-
-    async def inference(self, **kwargs: Any) -> JsonInferenceResponse:
-        self.calls.append(dict(kwargs))
-        if not self._queue:
-            raise AssertionError("FakeJsonT0 ran out of canned responses")
-        item = self._queue.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
+# Default valid-JSON dict entry used across the happy-path tests below.
+_OK_ENTRY: dict[str, Any] = {"raw": '{"a": 1}', "parsed": {"a": 1}}
 
 
 class _CountingFakeMCPClient(FakeMCPClient):
@@ -98,7 +56,7 @@ class _CountingFakeMCPClient(FakeMCPClient):
 
 def _json_agent(
     *,
-    t0: FakeJsonT0,
+    t0: MockGateway,
     tool_provider: ToolProvider | None = None,
     **config_overrides: Any,
 ) -> Agent:
@@ -126,7 +84,7 @@ def _json_agent(
 class TestToolModeCheck:
     async def test_tool_mode_with_tools_errors(self) -> None:
         """``json_mode='tool'`` + non-empty tool provider → ConfigurationError."""
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         client = FakeMCPClient(
             tools=[
                 MCPTool(
@@ -142,12 +100,12 @@ class TestToolModeCheck:
             json_mode="tool",
         )
 
-        with pytest.raises(ConfigurationError, match="§11.1"):
+        with pytest.raises(ConfigurationError, match=r"§11\.1"):
             await agent.run("go")
 
     async def test_tool_mode_with_empty_tools_works(self) -> None:
         """``json_mode='tool'`` + empty tool provider → run succeeds."""
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         client = FakeMCPClient(tools=[])
         agent = _json_agent(
             t0=t0,
@@ -161,10 +119,10 @@ class TestToolModeCheck:
 
     async def test_tool_mode_check_caches_after_first_run(self) -> None:
         """The list_tools() round-trip happens exactly once across runs."""
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw='{"a": 1}', parsed={"a": 1}),
-                _fake_json_response(raw='{"a": 2}', parsed={"a": 2}),
+                {"raw": '{"a": 1}', "parsed": {"a": 1}},
+                {"raw": '{"a": 2}', "parsed": {"a": 2}},
             ]
         )
         client = _CountingFakeMCPClient(tools=[])
@@ -187,7 +145,7 @@ class TestToolModeCheck:
         in the pre-review implementation) must still verify the
         provider when a caller overrides per-run to ``"tool"``.
         """
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         client = FakeMCPClient(
             tools=[
                 MCPTool(
@@ -203,7 +161,7 @@ class TestToolModeCheck:
             json_mode="strict",  # config says strict
         )
 
-        with pytest.raises(ConfigurationError, match="§11.1"):
+        with pytest.raises(ConfigurationError, match=r"§11\.1"):
             await agent.run("go", json_mode="tool")  # per-call overrides to tool
 
     async def test_per_call_strict_skips_check_when_config_is_tool(self) -> None:
@@ -214,7 +172,7 @@ class TestToolModeCheck:
         unnecessary.  ``_CountingFakeMCPClient`` records the call
         count to confirm no round-trip happens.
         """
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         # Non-empty provider — would raise if the check fired.
         client = _CountingFakeMCPClient(
             tools=[
@@ -245,7 +203,7 @@ class TestToolModeCheck:
 class TestStreamGuard:
     async def test_stream_on_json_agent_errors(self) -> None:
         """``Agent.stream`` on a JSON agent raises at first __anext__."""
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         agent = _json_agent(t0=t0)
         gen = agent.stream("go")
 
@@ -285,10 +243,10 @@ class TestAnthropicWarning:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """``json_mode='on'`` emits exactly one warning across two runs."""
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw='{"a": 1}', parsed={"a": 1}),
-                _fake_json_response(raw='{"a": 2}', parsed={"a": 2}),
+                {"raw": '{"a": 1}', "parsed": {"a": 1}},
+                {"raw": '{"a": 2}', "parsed": {"a": 2}},
             ]
         )
         agent = _json_agent(t0=t0, json_mode="on")
@@ -308,10 +266,10 @@ class TestAnthropicWarning:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """``json_mode='tool'`` (with an empty provider) also warns once."""
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw='{"a": 1}', parsed={"a": 1}),
-                _fake_json_response(raw='{"a": 2}', parsed={"a": 2}),
+                {"raw": '{"a": 1}', "parsed": {"a": 1}},
+                {"raw": '{"a": 2}', "parsed": {"a": 2}},
             ]
         )
         agent = _json_agent(
@@ -335,7 +293,7 @@ class TestAnthropicWarning:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """``json_mode='strict'`` is the safe path — no warning."""
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         agent = _json_agent(t0=t0, json_mode="strict")
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
@@ -356,7 +314,7 @@ class TestAnthropicWarning:
         Regression for the post-review bypass: the safety warning
         must observe the effective mode, not the config-level field.
         """
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         agent = _json_agent(t0=t0, json_mode="strict")  # config says strict
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
@@ -416,7 +374,7 @@ class TestAfterRunFatalPropagation:
 
     async def test_propagates_on_json_run(self) -> None:
         """``after_run`` raising ``GuardrailBlockedError`` aborts a JSON run."""
-        t0 = FakeJsonT0([_fake_json_response(raw='{"a": 1}', parsed={"a": 1})])
+        t0 = MockGateway.script_json([_OK_ENTRY])
         agent = _json_agent(
             t0=t0,
             guardrails=[cast(Any, _AfterRunFatalGuardrail())],

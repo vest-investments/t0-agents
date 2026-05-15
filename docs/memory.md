@@ -340,9 +340,9 @@ class MemoryRecord:
 |---|---|
 | `episode_id` | TensorZero episode id. Primary grouping key. |
 | `user_message` | The unmodified user input. Never the injected variant. |
-| `agent_response` | The agent's final reply for that turn. |
-| `turns` | Number of inference turns that produced `agent_response`. |
-| `inference_ids` | TensorZero inference ids for cross-reference with ClickHouse. |
+| `agent_response` | The agent's final reply for that turn.  For chat agents this is the joined terminating text; for JSON agents it is the raw JSON string of the final attempt (parsed or not) — see [Structured outputs](structured-outputs.md#structured-agent). |
+| `turns` | Number of inference turns that produced `agent_response`.  For JSON runs this equals `1 + json_parse_attempts` (one initial inference plus retries). |
+| `inference_ids` | TensorZero inference ids for cross-reference with ClickHouse.  For JSON runs the list contains every retry attempt's id in order. |
 | `created_at` | Timezone-aware UTC datetime. Populated at construction if omitted. |
 | `extra` | Free-form dict for application metadata (labels, tags, traces). |
 

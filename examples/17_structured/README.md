@@ -1,6 +1,6 @@
 # 17 - Structured Outputs
 
-Four complementary entry points covering the structured-outputs surface:
+Five complementary entry points covering the structured-outputs surface:
 
 - **`main.py`** (M1) — single-shot extraction with
   `run_structured_inference()`, the low-level sibling of `run_agent`
@@ -16,11 +16,17 @@ Four complementary entry points covering the structured-outputs surface:
   `structured_agent.py` but with `json_mode="off"` per call so the
   real model is free to emit prose-wrapped JSON; the in-Python
   permissive layer and the retry loop absorb the result.
+- **`ner_dynamic_schema.py`** (M5, docker) — NER agent exercising
+  per-call `output_schema` overrides and per-call `json_mode` swaps
+  against the `extract_entities` function (people, locations,
+  organizations, topics — five categories with the per-call override).
 
-The first two and `recovery_real_provider.py` target the
-`extract_customer_info` function declared in `config/tensorzero.toml`
-with a static `output_schema` and `json_mode = "strict"`.  No MCP
-tools are called — JSON functions are single-shot by contract.
+The first two, `recovery_real_provider.py`, and `ner_dynamic_schema.py`
+target functions declared in `config/tensorzero.toml`
+(`extract_customer_info` for the first three, `extract_entities` for
+the fifth) with a static `output_schema` and `json_mode = "strict"`
+at the variant level.  No MCP tools are called — JSON functions are
+single-shot by contract.
 
 ## Robust JSON recovery (M3)
 
@@ -88,10 +94,28 @@ for byte-perfect TensorZero-pure behaviour.
    whether a retry was needed.  Re-run a few times — model behaviour
    is non-deterministic.
 
+## What `ner_dynamic_schema.py` demonstrates
+
+1. **Default config** (scenario 1) — `function_kind="json"`,
+   `json_mode="strict"`, the gateway uses the static
+   `functions/extract_entities/output_schema.json` (four categories:
+   people, locations, organizations, topics).
+2. **Per-call schema override** (scenario 2) — passes
+   `output_schema=` at call time with a five-category schema (adds
+   `products`); TensorZero validates against the per-call schema
+   instead of the variant-level one (TZ guide §4).
+3. **Per-call `json_mode="tool"` swap** (scenario 3) — flips the
+   gateway-side strict mode to tool-call mode at call time.  Legal
+   because the agent's MCP tool provider is empty (M4 safety guard's
+   positive path).
+4. **Recovery demo** (scenario 4) — `json_mode="off"` per call so the
+   provider can emit prose-wrapped JSON; the M3 permissive parsing
+   layer recovers the result.
+
 See [`docs/structured-outputs.md`](../../docs/structured-outputs.md)
-for the full provider matrix, per-call override semantics, and the
-roadmap's later milestones (M4 streaming guard and provider warnings;
-M5 testing helpers and consolidation).
+for the full provider matrix, per-call override semantics, the
+testing helpers (M5 `MockGateway.script_json` and the
+`assert_parsed_*` family), and the Pydantic recipe.
 
 ## Prerequisites
 
@@ -120,6 +144,9 @@ uv run python examples/17_structured/recovery_demo.py
 
 # M3 — recovery against a real provider (needs docker)
 uv run python examples/17_structured/recovery_real_provider.py
+
+# M5 — dynamic schema override + json_mode swap (needs docker)
+uv run python examples/17_structured/ner_dynamic_schema.py
 ```
 
 ## Stop the gateway
@@ -176,6 +203,21 @@ For `recovery_real_provider.py`:
 - `inference_ids` accumulates every attempt's id in order, including
   the ones that produced invalid output — useful when grepping the
   TensorZero dashboard for the conversation.
+
+For `ner_dynamic_schema.py`:
+
+- Scenario 1 prints a four-key `parsed` (`people`, `locations`,
+  `organizations`, `topics`).
+- Scenario 2 prints a five-key `parsed` (the four above plus
+  `products`).  The script `assert`s on `"products" in parsed` to
+  prove the per-call override threaded through the gateway.
+- Scenario 3 prints the same shape as scenario 1; the value of
+  `parse_strategy` should be `"strict"`.  If you adapt the example to
+  attach a non-empty tool provider, the per-call `json_mode="tool"`
+  swap raises `ConfigurationError` per the M4 safety guard.
+- Scenario 4 typically reports `parse_strategy="permissive"` because
+  Groq's model wraps the JSON in prose under `json_mode="off"`.  Re-
+  run a few times — the value is non-deterministic.
 
 ## Notes on `json_mode`
 

@@ -23,6 +23,7 @@ from typing import Any
 from fastmcp.client.client import CallToolResult
 from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway
+from tensorzero.types import JsonInferenceResponse
 
 from t0_agents.core.types import ToolProvider
 from t0_agents.testing import MockGateway, MockToolProvider
@@ -39,6 +40,22 @@ _INFERENCE_KWARGS = [
     "tool_choice",
     "tags",
     "namespace",
+]
+
+# Kwargs ``run_structured_inference`` (the JSON dispatch helper used by
+# ``Agent._run_json``) passes to ``t0.inference(...)``
+# (``src/t0_agents/core/structured.py``).  The JSON path drops the chat-
+# only ``additional_tools`` / ``tool_choice`` and adds ``output_schema`` /
+# ``params``.  Update when the helper gains a new kwarg.
+_JSON_INFERENCE_KWARGS = [
+    "function_name",
+    "episode_id",
+    "input",
+    "output_schema",
+    "params",
+    "tags",
+    "namespace",
+    "dryrun",
 ]
 
 
@@ -70,6 +87,57 @@ class TestMockGatewayShape:
         gateway = MockGateway.script([])
         result = await gateway.feedback(metric_name="m", value=True)
         assert result.feedback_id is not None
+
+
+class TestMockGatewayJsonShape:
+    async def test_script_json_accepts_every_loop_kwarg(self) -> None:
+        gateway = MockGateway.script_json([{"raw": '{"x": 1}'}])
+        kwargs: dict[str, Any] = {k: None for k in _JSON_INFERENCE_KWARGS}
+        # ``input`` cannot be None — the source ignores it but mypy /
+        # the loop assume a dict; pass the minimal valid shape.
+        kwargs["input"] = {"messages": []}
+        kwargs["function_name"] = "extract"
+
+        response = await gateway.inference(**kwargs)
+        assert response is not None
+
+    def test_real_inference_accepts_same_json_kwargs(self) -> None:
+        """Sanity: every JSON kwarg the dispatch passes is also real.
+
+        Guards against drift between ``run_structured_inference``'s
+        forwarded kwargs and the real ``AsyncTensorZeroGateway.inference``
+        signature — if either side changes, the test fails fast.
+        """
+        sig = inspect.signature(AsyncTensorZeroGateway.inference)
+        real_params = set(sig.parameters)
+        for kw in _JSON_INFERENCE_KWARGS:
+            assert kw in real_params, (
+                f"run_structured_inference passes {kw!r} to t0.inference, "
+                f"but the real method signature no longer accepts it. "
+                f"Helper and signature have drifted — update both together."
+            )
+
+    async def test_script_json_returns_required_response_fields(self) -> None:
+        """``Agent._run_json`` reads five fields off the JSON response.
+
+        The retry orchestration at ``src/t0_agents/core/agent.py`` reads
+        ``output.raw``, ``output.parsed``, ``episode_id``, ``inference_id``,
+        and ``usage`` (via the cost-tracker closure).  Pinning their
+        presence on ``MockGateway.script_json``'s output prevents silent
+        regression if the SDK reshapes ``JsonInferenceResponse``.
+        """
+        gateway = MockGateway.script_json(
+            [{"raw": '{"x": 1}', "parsed": {"x": 1}}]
+        )
+        response = await gateway.inference(
+            function_name="f", input={"messages": []}
+        )
+        assert isinstance(response, JsonInferenceResponse)
+        assert response.output.raw == '{"x": 1}'
+        assert response.output.parsed == {"x": 1}
+        assert response.episode_id is not None
+        assert response.inference_id is not None
+        assert response.usage is not None
 
 
 class TestMockToolProviderShape:
