@@ -190,7 +190,7 @@ def _materialise_json_dict(
       via :func:`json.loads` (returning ``None`` on parse failure); when
       the key is **present** (even as ``None``), the value is used
       verbatim so retry scripts can pin a `(valid raw, parsed=None)` pair
-      and observe the M3 permissive layer kick in.
+      and observe the permissive layer kick in.
     * ``episode_id`` — ``UUID | str | None``; ``None`` reuses the
       gateway's sticky episode id (mirrors the real gateway's contract
       that an episode is allocated on inference #1 and reused).

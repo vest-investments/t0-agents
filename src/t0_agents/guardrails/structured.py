@@ -1,11 +1,11 @@
 """Result-shape guardrails for JSON / structured-output agents.
 
 Today's single occupant — :func:`require_parsed` — is the opt-in
-counterpart to the M3 permissive-parsing layer.  Adding the guardrail
-to ``AgentConfig.guardrails`` upgrades the "``parsed is None`` is a
-runtime non-error" contract (integration-contract §5.2) into a hard
-:class:`GuardrailBlockedError` abort, for applications that cannot
-proceed without a parseable structured response.
+counterpart to the permissive-parsing layer.  Adding the guardrail to
+``AgentConfig.guardrails`` upgrades the "``parsed is None`` is a runtime
+non-error" contract into a hard :class:`GuardrailBlockedError` abort,
+for applications that cannot proceed without a parseable structured
+response.
 
 For chat (text) runs the guardrail is a no-op — ``parsed`` is
 permanently ``None`` for the chat path, so an unconditional fail

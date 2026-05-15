@@ -115,15 +115,14 @@ class GuardrailLogEntry:
 class AgentResult:
     """Result of an agent run.
 
-    ``function_kind`` and ``parsed`` are the structured-outputs surface
-    landed in M1 (dataclass) and M2 (wiring).  ``parse_strategy`` and
-    ``json_parse_attempts`` extend that surface in M3 with permissive
-    parsing and bounded retry-on-invalid-json.  All four fields default
-    to byte-identical chat behaviour: a chat agent's result reads the
-    same as v0.9.0 (``function_kind="chat"``, ``parsed=None``,
-    ``parse_strategy="strict"`` — semantically meaningless for chat but
-    chosen to match the JSON happy-path default — and
-    ``json_parse_attempts=0``).
+    ``function_kind`` and ``parsed`` carry the structured-outputs
+    payload; ``parse_strategy`` and ``json_parse_attempts`` expose the
+    JSON path's permissive-parsing and bounded-retry observability.  All
+    four fields default to byte-identical chat behaviour: a chat agent's
+    result reads the same as v0.9.0 (``function_kind="chat"``,
+    ``parsed=None``, ``parse_strategy="strict"`` — semantically
+    meaningless for chat but chosen to match the JSON happy-path default
+    — and ``json_parse_attempts=0``).
     """
 
     response: str

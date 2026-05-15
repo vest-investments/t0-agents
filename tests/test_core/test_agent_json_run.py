@@ -1,8 +1,8 @@
-"""Unit tests for ``Agent.run`` JSON-function dispatch (M2).
+"""Unit tests for ``Agent.run`` JSON-function dispatch.
 
 Drives ``Agent.run`` against ``MockGateway.script_json`` for the JSON path
 and the shared ``tests/_fake_t0`` for the chat-byte-identity assertions.
-``MockGateway.script_json`` is the M5 JSON-flavoured sibling of
+``MockGateway.script_json`` is the JSON-flavoured sibling of
 ``MockGateway.script`` — see ``tests/test_testing/test_json_helpers.py``
 for the dict-shape semantic (auto-derive ``parsed`` when the key is
 absent; honour explicit ``parsed`` when present).
@@ -135,8 +135,8 @@ class TestPerCallOverrides:
 
     async def test_per_call_json_mode_override(self) -> None:
         # ``json_mode="tool"`` requires an empty tool provider per the
-        # M4 safety surface (TZ guide §11.1).  The test's intent is to
-        # confirm the per-call override is threaded into ``params``,
+        # JSON safety surface (TZ guide §11.1).  The test's intent is
+        # to confirm the per-call override is threaded into ``params``,
         # not to exercise the (forbidden) tool-mode + advertised-tools
         # combo.
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])

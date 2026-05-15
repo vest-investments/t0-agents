@@ -338,7 +338,7 @@ block_tools(["drop_database", "wire_transfer"])
 
 ### `require_parsed`
 
-Opt-in counterpart to the M3 permissive-parsing layer for JSON / structured-
+Opt-in counterpart to the permissive-parsing layer for JSON / structured-
 output agents. Hard-aborts a JSON run that completes with `result.parsed is
 None` — i.e. TensorZero's strict parser, the in-Python permissive layer, and
 every retry attempt all failed. Chat runs are a strict no-op because
@@ -368,7 +368,7 @@ AgentConfig(
 - Interactive workflows that must surface a structured object to the user —
   silently returning `parsed=None` is worse than an explicit failure.
 - Batch jobs whose downstream consumer cannot handle a null payload — pair
-  with the M3 `max_json_retries` knob to define exactly how hard the agent
+  with the `max_json_retries` knob to define exactly how hard the agent
   tries before giving up.
 - Schema-validation pipelines where "parseable JSON" is a strictly weaker
   guarantee than "schema-conforming JSON" — combine with a Pydantic

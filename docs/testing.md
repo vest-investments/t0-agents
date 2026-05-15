@@ -389,12 +389,14 @@ Dict entries accept `raw`, `parsed`, `episode_id`, `inference_id`,
 unchanged.  When `parsed` is omitted, the gateway runs a best-effort
 `json.loads(raw)` and falls back to `None` on failure; passing
 `parsed=None` explicitly preserves the "TZ returned the raw but
-couldn't parse" semantic used by the M3 retry tests.
+couldn't parse" semantic used by the retry tests.
 
 `canned_json(fn)` is the callable-driven sibling — `fn` receives the
 inference kwargs and returns either a dict or a pre-built
 `JsonInferenceResponse`.  Useful when the response must branch on the
 caller's per-call `output_schema` / `json_mode` overrides.
+
+
 
 Five JSON-aware assertion helpers complement the chat ones — see the
 [Assertions](#assertions) section below.
@@ -502,10 +504,9 @@ for a runnable end-to-end test of this pattern.
 
 Ten helpers in two families — five chat-flavoured ones for tool-call
 and response shape, five JSON-flavoured ones for the `parsed` /
-`parse_strategy` / `json_parse_attempts` fields M5 ships alongside
-the structured-outputs roadmap.  The tool-name arguments are
-positional; the source selector (`gateway=` / `tool_provider=`) is
-keyword-only.
+`parse_strategy` / `json_parse_attempts` fields the structured-outputs
+surface exposes.  The tool-name arguments are positional; the source
+selector (`gateway=` / `tool_provider=`) is keyword-only.
 
 ### Chat assertions
 

@@ -104,10 +104,9 @@ def _build_retry_hint(schema: Mapping[str, Any] | None) -> str:
 
     Anything else (nested ``required``, ``properties``, ``oneOf``) is
     deliberately ignored: surfacing it would balloon prompt cost on every
-    retry and risk crowding out the model's context.  Diverges from the
-    M3 spec §4.5 (which proposed a fixed hard-coded English hint); the
-    additive enrichment is opt-out-able by setting
-    ``permissive_json_parsing=False, max_json_retries=0``.
+    retry and risk crowding out the model's context.  The enrichment is
+    additive on top of a fixed English base sentence; opt out entirely by
+    setting ``permissive_json_parsing=False, max_json_retries=0``.
     """
     parts: list[str] = [_RETRY_HINT_BASE]
     if schema is None:
@@ -185,8 +184,8 @@ class Agent:
                 default_tool_name(sub): sub for sub in config.sub_agents
             }
 
-        # M4 safety state.  ``_tool_provider_verified_empty`` is a
-        # positive latch — set to ``True`` after the first successful
+        # JSON-mode safety state.  ``_tool_provider_verified_empty`` is
+        # a positive latch — set to ``True`` after the first successful
         # ``list_tools()`` round-trip that confirms the provider is
         # empty.  We cannot decide at construction time whether the
         # check is needed: ``Agent.run`` accepts a per-call
@@ -605,7 +604,7 @@ class Agent:
                 refused before any event is yielded.  Use
                 :meth:`run` instead.
         """
-        # --- 0. JSON guard (M4) ---
+        # --- 0. JSON-mode guard ---
         # TZ does not emit ``output.parsed`` mid-stream (guide §7.1,
         # §11.3), so surfacing a stream of ``parsed=None`` events would
         # be a worse contract than refusing.  The check runs at the very
@@ -865,13 +864,13 @@ class Agent:
         this method does not exercise the ``_OrchestrationToolProvider``
         path used by chat.
         """
-        # --- 0. Safety checks (M4) ---
+        # --- 0. Safety checks ---
         # Resolve the effective json_mode for this call so the safety
-        # surfaces observe per-call overrides.  Per contract §3.2 a
-        # caller may override ``config.json_mode`` on a per-run basis,
-        # which means a config-level ``"strict"`` agent can still
-        # legitimately receive ``run(..., json_mode="tool")`` and must
-        # be checked.  The full ``effective_schema`` / ``effective_mode``
+        # surfaces observe per-call overrides.  A caller may override
+        # ``config.json_mode`` on a per-run basis, which means a
+        # config-level ``"strict"`` agent can still legitimately
+        # receive ``run(..., json_mode="tool")`` and must be checked.
+        # The full ``effective_schema`` / ``effective_mode``
         # resolution lives below in step 4; this is the early-bind for
         # the safety pass only.  Operators see the clearest possible
         # error: the Anthropic warning is informational (no abort);
@@ -902,8 +901,8 @@ class Agent:
 
         # --- 1. Load memory (mirrors chat run()) ---
         # ``memory_strategy="messages"`` would require turning prior-episode
-        # records into ``prior_messages`` for the helper, which the M3
-        # surface deliberately does not do — ``prior_messages`` is reserved
+        # records into ``prior_messages`` for the helper, which the JSON
+        # path deliberately does not do — ``prior_messages`` is reserved
         # for the retry loop below.  Reject the strategy here at the
         # strategy level (rather than after a load round-trip that might
         # silently see an empty history) so the misconfiguration is caught

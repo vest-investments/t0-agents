@@ -27,7 +27,7 @@ from t0_agents.testing import MockGateway
 
 class TestRunStructuredInference:
     async def test_returns_parsed_when_tz_parsed_succeeded(self) -> None:
-        # ``parsed`` key omitted → auto-derived from ``raw`` (M1/M2 pattern).
+        # ``parsed`` key omitted → auto-derived from ``raw``.
         t0 = MockGateway.script_json([{"raw": '{"a": 1}'}])
         result = await run_structured_inference(
             cast(AsyncTensorZeroGateway, t0),
@@ -42,9 +42,10 @@ class TestRunStructuredInference:
         assert result.usage is not None
 
     async def test_returns_none_when_tz_could_not_parse(self) -> None:
-        # M1 trusts TZ's parse only — no permissive recovery yet.
-        # Explicit ``parsed: None`` because ``raw`` ("not json") doesn't
-        # parse anyway, but spelling it out documents the intent.
+        # The helper trusts TZ's parse only; the permissive recovery layer
+        # is layered on top by ``Agent._run_json``.  Explicit ``parsed:
+        # None`` because ``raw`` ("not json") doesn't parse anyway, but
+        # spelling it out documents the intent.
         t0 = MockGateway.script_json(
             [{"raw": "not json", "parsed": None}]
         )

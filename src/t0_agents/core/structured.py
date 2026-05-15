@@ -74,8 +74,9 @@ class StructuredOutput:
     level for ergonomic access.
 
     ``parsed`` is typed as ``Any | None`` rather than the SDK's stricter
-    ``Mapping[str, Any] | None`` so that M3's permissive layer can surface
-    top-level arrays or other shapes without widening a published type.
+    ``Mapping[str, Any] | None`` so that the permissive parsing layer can
+    surface top-level arrays or other shapes without widening a published
+    type.
     """
 
     raw: str
@@ -303,7 +304,7 @@ async def run_structured_inference(
             previous (invalid) assistant turn and the corrective hint
             back into the conversation.  ``None`` (the default) sends a
             single-turn ``[{"role": "user", "content": user_message}]``
-            payload — byte-identical to the M2 shape.
+            payload — byte-identical to TensorZero-pure behaviour.
         episode_id: Continues an existing TensorZero episode when set;
             ``None`` lets the gateway mint a fresh one.
         tags: Free-form tags forwarded for observability.
@@ -319,8 +320,9 @@ async def run_structured_inference(
     Returns:
         :class:`StructuredOutput` whose ``parse_strategy`` is
         ``"strict"`` when the gateway returned a non-null ``parsed``
-        and ``"none"`` otherwise.  M3 will extend this with
-        ``"permissive"`` and ``"retry"`` strategies.
+        and ``"none"`` otherwise.  The ``"permissive"`` and ``"retry"``
+        strategies are surfaced by :meth:`Agent._run_json`, which wraps
+        this helper with the in-Python recovery ladder.
 
     Raises:
         RuntimeError: If the gateway returned a ``ChatInferenceResponse``

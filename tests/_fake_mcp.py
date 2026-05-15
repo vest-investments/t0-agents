@@ -36,7 +36,7 @@ class FakeMCPClient:
     ) -> None:
         # ``tools is None`` falls back to a default one-tool list for
         # tests that don't care about advertisement; an explicit
-        # ``tools=[]`` must be honoured so safety checks (e.g. the M4
+        # ``tools=[]`` must be honoured so safety checks (e.g. the
         # ``json_mode='tool'`` conflict guard) can verify the
         # empty-provider path.
         self._tools = (

@@ -1,10 +1,11 @@
-"""Unit tests for the M1 structured-output fields on :class:`AgentConfig`.
+"""Unit tests for :class:`AgentConfig`'s structured-output fields.
 
-Covers the three new fields (``function_kind``, ``output_schema``,
-``json_mode``) and the four ``__post_init__`` branches that protect them
-from incoherent combinations.  Uses :class:`AgentConfig` directly — no
-gateway, no MCP client, no fakes — because every assertion here is a
-config-shape contract, not a runtime behaviour.
+Covers the three configuration fields (``function_kind``,
+``output_schema``, ``json_mode``) and the ``__post_init__`` branches
+that protect them from incoherent combinations.  Uses
+:class:`AgentConfig` directly — no gateway, no MCP client, no fakes —
+because every assertion here is a config-shape contract, not a runtime
+behaviour.
 """
 
 from __future__ import annotations

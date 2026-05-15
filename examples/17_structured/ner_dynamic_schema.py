@@ -1,4 +1,4 @@
-"""Dynamic schema override + per-call ``json_mode`` swap (M5).
+"""Dynamic schema override + per-call ``json_mode`` swap.
 
 Runs four scenarios against the ``extract_entities`` JSON function:
 
@@ -13,13 +13,12 @@ Runs four scenarios against the ``extract_entities`` JSON function:
    per-call schema, not the variant-level one.
 3. **Per-call ``json_mode = "tool"`` swap** — the function is
    configured with ``json_mode = "strict"`` and has no MCP tools
-   attached, so swapping to ``"tool"`` mode at call time succeeds (M4
-   safety guard's positive path).
+   attached, so swapping to ``"tool"`` mode at call time succeeds
+   (the safety guard's positive path).
 4. **Recovery demo** — sets ``json_mode = "off"`` per call so the
-   provider is free to wrap the JSON in prose; the M3 permissive
-   parsing layer absorbs the result and ``result.parse_strategy``
-   reports ``"permissive"`` (or ``"retry"`` if a hint round was
-   needed).
+   provider is free to wrap the JSON in prose; the permissive parsing
+   layer absorbs the result and ``result.parse_strategy`` reports
+   ``"permissive"`` (or ``"retry"`` if a hint round was needed).
 
 Prerequisites:
     1. ``GROQ_API_KEY`` in ``.env`` at the project root.

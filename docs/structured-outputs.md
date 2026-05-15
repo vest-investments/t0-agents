@@ -1,8 +1,8 @@
 # Structured Outputs
 
-TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour and what each upcoming milestone adds to the surface.
+TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour: the single-shot `run_structured_inference()` helper, the declarative `Agent` dispatch when `function_kind="json"`, the three-layer recovery ladder that absorbs imperfect model output, the safety surface that catches incompatible configurations, the opt-in `require_parsed()` guardrail, the testing primitives, and the `json_mode` provider matrix.
 
-> **Milestones 1–5 (M1, M2, M3, M4, M5):** M1 shipped the single-shot `run_structured_inference()` helper, the new `AgentConfig` fields (`function_kind`, `output_schema`, `json_mode`), and the new `AgentResult` fields (`function_kind`, `parsed`).  M2 wires `Agent.run(...)` to dispatch JSON functions through the helper transparently and surfaces per-call `output_schema` / `json_mode` kwargs.  M3 adds the in-Python permissive parsing layer, the bounded retry loop with a schema-aware corrective hint, and the `AgentResult.parse_strategy` / `AgentResult.json_parse_attempts` observability fields.  M4 adds the configuration-error surface for incompatible combinations (`json_mode = "tool"` + tools, `Agent.stream` + JSON), a once-per-instance Anthropic extended-thinking compatibility warning, and the opt-in `require_parsed()` guardrail for callers who want a hard abort when every parse layer fails.  M5 extends `MockGateway` with `script_json` / `canned_json` and ships five JSON-aware assertion helpers (`assert_parsed_equals`, `assert_parsed_matches_schema`, `assert_invalid_json`, `assert_parse_strategy`, `assert_retry_attempts`), the NER `examples/17_structured/ner_dynamic_schema.py` example, and the documentation cross-link pass.
+The chat-path surface is byte-identical to v0.9.0; everything below is additive for callers who opt into `function_kind="json"`.
 
 ## What are JSON functions?
 
@@ -97,7 +97,7 @@ Pass `output_schema={...}` as an inline mapping to override the function's stati
 
 ### Path-based schema
 
-`AgentConfig.output_schema` (used in M2 once `Agent.run` dispatch lands) also accepts a `pathlib.Path`. The file is read as JSON at construction time:
+`AgentConfig.output_schema` also accepts a `pathlib.Path`. The file is read as JSON at construction time:
 
 - Absolute paths are loaded verbatim.
 - Relative paths are resolved against the current working directory.
@@ -221,7 +221,7 @@ The `memory_strategy="messages"` mode is **not yet supported** for JSON function
 
 ## Robust JSON parsing
 
-Real models sometimes ignore the JSON-mode contract: a Groq model wraps its reply in prose, a fenced ` ```json ` block, or an apology before the JSON.  TensorZero's strict parser returns `parsed == None` in those cases, even though the JSON is right there in `output.raw`.  M3 adds two in-Python layers that recover the JSON without losing the byte-for-byte TensorZero-pure path.
+Real models sometimes ignore the JSON-mode contract: a Groq model wraps its reply in prose, a fenced ` ```json ` block, or an apology before the JSON.  TensorZero's strict parser returns `parsed == None` in those cases, even though the JSON is right there in `output.raw`.  t0-agents adds two in-Python layers that recover the JSON without losing the byte-for-byte TensorZero-pure path.
 
 ```
         TensorZero strict parse        ← layer 1: parse_strategy="strict"
@@ -307,7 +307,7 @@ config = AgentConfig(
 )
 ```
 
-In that mode an invalid TZ response surfaces as `result.parsed is None` and `result.parse_strategy == "none"` on the first attempt, exactly like v0.10.0-M2.
+In that mode an invalid TZ response surfaces as `result.parsed is None` and `result.parse_strategy == "none"` on the first attempt — no in-Python fallback, no retry.
 
 ### The corrective hint
 
@@ -316,7 +316,7 @@ Every retry sends a corrective `user` message after the failed assistant turn.  
 - The schema's top-level `title` when present (`"The schema is named 'Customer'."`).
 - The top-level `required` field names when present (`"Required top-level fields: 'name', 'email'."`).
 
-The hint is hard-coded English in this milestone; if you need a different wording, the cleanest path today is to disable retries (`max_json_retries=0`) and build the loop in your application code.  An i18n / per-agent override hook is a candidate for a future milestone.
+The hint is hard-coded English today; if you need a different wording, the cleanest path is to disable retries (`max_json_retries=0`) and build the loop in your application code.  An i18n / per-agent override hook is on the deferred-work list.
 
 ### Calling `permissive_parse` directly
 
@@ -334,7 +334,7 @@ The function never raises — every JSON decode error along the recovery ladder 
 
 ## Testing your JSON agent
 
-`t0_agents.testing.MockGateway` learned about the JSON path in M5 — the same gateway primitive that scripts chat responses (`script` / `canned`) now also scripts JSON responses (`script_json` / `canned_json`).  No docker, no provider keys, no flaky LLM behaviour; unit tests for JSON agents run in milliseconds.
+`t0_agents.testing.MockGateway` covers the JSON path — the same gateway primitive that scripts chat responses (`script` / `canned`) also scripts JSON responses (`script_json` / `canned_json`).  No docker, no provider keys, no flaky LLM behaviour; unit tests for JSON agents run in milliseconds.
 
 ### Scripting a JSON response
 
@@ -434,7 +434,7 @@ These combinations raise `ConfigurationError`.  Most are caught at `AgentConfig`
 
 TensorZero's streaming response for a JSON function only carries `raw` deltas — there is no `parsed` field per chunk and the gateway does not emit one on the terminal chunk either (TZ guide §7.1: *"The TensorZero Gateway does **not** provide a `parsed` field for streaming JSON inferences."*).  Surfacing this through `Agent.stream(...)` would yield a stream of `AgentEvent`s whose `parsed` is permanently `None`, which is a strictly worse contract than refusing.
 
-If you have a workload that genuinely needs incremental JSON, the recommended pattern is to call `Agent.run(...)` and present the JSON object on the consumer side once it lands.  Reusing the M3 [`permissive_parse`](#calling-permissive_parse-directly) layer over reassembled `raw` deltas is a future-milestone candidate; the current refusal is by design.
+If you have a workload that genuinely needs incremental JSON, the recommended pattern is to call `Agent.run(...)` and present the JSON object on the consumer side once it lands.  Reusing the [`permissive_parse`](#calling-permissive_parse-directly) layer over reassembled `raw` deltas is on the deferred-work list; the current refusal is by design.
 
 ### Anthropic extended-thinking warning
 
@@ -499,11 +499,9 @@ Forbidden combinations:
 
 See [the gateway guide §8](https://www.tensorzero.com/docs/gateway/generate-structured-outputs#handle-model-provider-limitations) for the authoritative provider matrix.
 
-## Roadmap status
+## Deferred work
 
-The structured-outputs roadmap ships in five milestones, all closed.  M1 landed the single-shot helper; M2 wired the `Agent.run` dispatch; M3 added the permissive parser and retry loop; M4 added the safety surface and `require_parsed`; M5 added the testing primitives, the NER example, and this cross-link pass.
-
-Follow-up candidates kept open as deferred work:
+Open follow-up candidates:
 
 - Streaming JSON with the permissive layer buffering reassembled `raw` deltas (today: `Agent.stream(...)` raises on JSON agents).
 - A `require_schema(model_or_schema)` built-in guardrail that runs Pydantic / jsonschema validation in the `after_run` hook.
@@ -511,11 +509,11 @@ Follow-up candidates kept open as deferred work:
 
 ## See also
 
-- [Agent](agent.md) — declarative front door; gains `function_kind == "json"` dispatch (since v0.10.0-M2) and the JSON-aware `AgentResult` fields (`function_kind`, `parsed`, `parse_strategy`, `json_parse_attempts`).
+- [Agent](agent.md) — declarative front door; carries `function_kind == "json"` dispatch and the JSON-aware `AgentResult` fields (`function_kind`, `parsed`, `parse_strategy`, `json_parse_attempts`).
 - [Concepts](concepts.md) — overview of TensorZero's chat-vs-json distinction.
 - [Guardrails](guardrails.md#require_parsed) — `require_parsed()` built-in for callers that want a hard abort on `parsed is None`.
 - [Memory](memory.md) — `MemoryRecord.agent_response` carries the raw JSON string for JSON runs; the inference id list captures every retry attempt.
 - [Streaming](streaming.md) — chat-only.  `Agent.stream(...)` on a JSON agent raises `ConfigurationError`; see [Why you cannot stream JSON functions](#why-you-cannot-stream-json-functions) above.
 - [Testing](testing.md#testing-json-agents) — `MockGateway.script_json` / `canned_json` and the five JSON-aware assert helpers.
-- [`examples/17_structured/`](../examples/17_structured/) — five runnable demos: M1 single-shot helper, M2 Agent dispatch, M3 recovery ladder (local + real provider), M5 dynamic-schema NER.
+- [`examples/17_structured/`](../examples/17_structured/) — five runnable demos: single-shot helper, `Agent` dispatch, local and real-provider recovery ladder, dynamic-schema NER.
 - [TensorZero structured-outputs guide](https://www.tensorzero.com/docs/gateway/generate-structured-outputs) — authoritative source for `output_schema`, `json_mode`, `response_format`, and provider quirks.

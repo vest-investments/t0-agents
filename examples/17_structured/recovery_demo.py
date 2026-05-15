@@ -1,4 +1,4 @@
-"""Local-only demo of the M3 permissive parsing + retry layers.
+"""Local-only demo of the permissive parsing + retry recovery ladder.
 
 Runs four scripted scenarios against an in-process fake of
 :class:`AsyncTensorZeroGateway`, exercising each ``parse_strategy``
