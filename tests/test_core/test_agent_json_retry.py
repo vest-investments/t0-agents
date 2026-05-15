@@ -1,94 +1,32 @@
 """Unit tests for the M3 retry orchestration inside ``Agent._run_json``.
 
-Scripts a multi-response ``FakeJsonT0`` to cover every transition in the
-three-layer ladder (strict → permissive → retry → none) plus the
+Scripts a multi-response :class:`MockGateway` to cover every transition
+in the three-layer ladder (strict → permissive → retry → none) plus the
 per-call override and the ``ConfigurationError`` on a negative retry
-budget.  The local fakes duplicate the M1/M2 pattern; M5 will fold them
-into the consolidated ``MockGateway``.
+budget.  The M5 milestone consolidated the per-test ``FakeJsonT0`` /
+``_fake_json_response`` helpers into ``MockGateway.script_json``; see
+``tests/test_testing/test_json_helpers.py`` for the JSON dict semantic.
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from tensorzero import (
-    AsyncTensorZeroGateway,
-    JsonInferenceResponse,
-    Usage,
-)
-from tensorzero.types import JsonInferenceOutput
+from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import _RETRY_HINT_BASE, Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
+from t0_agents.testing import MockGateway
 from tests._fake_mcp import FakeMCPClient
-
-# ---------------------------------------------------------------------------
-# JSON fakes — local until M5 generalises MockGateway.
-# ---------------------------------------------------------------------------
-
-
-def _fake_json_response(
-    *,
-    raw: str | None,
-    parsed: dict[str, Any] | None,
-    inference_id: UUID | None = None,
-    episode_id: UUID | None = None,
-) -> JsonInferenceResponse:
-    """Build a ``JsonInferenceResponse`` with explicit ``raw`` and ``parsed``.
-
-    Unlike M1/M2's helper, this fake never auto-parses ``raw``: callers
-    pass the exact ``(raw, parsed)`` pair they want TZ to have returned,
-    which is essential for retry scripts that need invalid-then-valid
-    transitions.
-    """
-    return JsonInferenceResponse(
-        inference_id=inference_id or uuid4(),
-        episode_id=episode_id or uuid4(),
-        variant_name="test-variant",
-        output=JsonInferenceOutput(raw=raw, parsed=parsed),
-        usage=Usage(input_tokens=10, output_tokens=20),
-    )
-
-
-class FakeJsonT0:
-    """Scriptable async gateway — pops one response per ``inference()`` call.
-
-    ``calls`` records every captured ``inference()`` kwargs dict so a
-    test can assert on (e.g.) ``input.messages`` to verify retry hints
-    appear and ``episode_id`` is preserved across attempts.
-    """
-
-    def __init__(
-        self, responses: list[JsonInferenceResponse | Exception]
-    ) -> None:
-        self._queue: list[JsonInferenceResponse | Exception] = list(responses)
-        self.calls: list[dict[str, Any]] = []
-
-    async def inference(self, **kwargs: Any) -> JsonInferenceResponse:
-        captured: dict[str, Any] = dict(kwargs)
-        if isinstance(captured.get("input"), dict):
-            captured["input"] = dict(captured["input"])
-            if isinstance(captured["input"].get("messages"), list):
-                captured["input"]["messages"] = [
-                    dict(m) if isinstance(m, dict) else m
-                    for m in captured["input"]["messages"]
-                ]
-        self.calls.append(captured)
-        if not self._queue:
-            raise AssertionError("FakeJsonT0 ran out of canned responses")
-        item = self._queue.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
 
 
 def _json_agent(
     *,
-    t0: FakeJsonT0,
+    t0: MockGateway,
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
@@ -115,8 +53,8 @@ class TestRetryOrchestration:
     async def test_no_retry_when_first_attempt_strict(self) -> None:
         # TZ parsed valid JSON on the first try — no retry, no permissive
         # extraction, single inference id, parse_strategy == "strict".
-        t0 = FakeJsonT0(
-            [_fake_json_response(raw='{"a": 1}', parsed={"a": 1})]
+        t0 = MockGateway.script_json(
+            [{"raw": '{"a": 1}', "parsed": {"a": 1}}]
         )
         agent = _json_agent(t0=t0)
         result = await agent.run("hello")
@@ -130,12 +68,12 @@ class TestRetryOrchestration:
     async def test_permissive_recovers_without_retry(self) -> None:
         # TZ returned parsed=None but the raw text wraps JSON in prose.
         # Permissive layer succeeds on attempt 0 — no retry needed.
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(
-                    raw='Sure! Here it is: {"a": 1} — done.',
-                    parsed=None,
-                )
+                {
+                    "raw": 'Sure! Here it is: {"a": 1} — done.',
+                    "parsed": None,
+                }
             ]
         )
         agent = _json_agent(t0=t0)
@@ -150,10 +88,10 @@ class TestRetryOrchestration:
     async def test_retry_once_succeeds(self) -> None:
         # Attempt 0: invalid (no recoverable JSON in raw).
         # Attempt 1: TZ parses valid JSON.
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw="totally not json", parsed=None),
-                _fake_json_response(raw='{"a": 2}', parsed={"a": 2}),
+                {"raw": "totally not json", "parsed": None},
+                {"raw": '{"a": 2}', "parsed": {"a": 2}},
             ]
         )
         agent = _json_agent(t0=t0)
@@ -168,11 +106,11 @@ class TestRetryOrchestration:
     async def test_retry_budget_exhausted(self) -> None:
         # Three consecutive failures with max_json_retries=2 → all three
         # attempts run, parse_strategy == "none", parsed is None.
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw="fail one", parsed=None),
-                _fake_json_response(raw="fail two", parsed=None),
-                _fake_json_response(raw="fail three", parsed=None),
+                {"raw": "fail one", "parsed": None},
+                {"raw": "fail two", "parsed": None},
+                {"raw": "fail three", "parsed": None},
             ]
         )
         agent = _json_agent(t0=t0, max_json_retries=2)
@@ -189,10 +127,10 @@ class TestRetryOrchestration:
         # Config grants 5 retries; the per-call kwarg overrides to 0.
         # Only one inference is made; permissive layer still tried but
         # has no JSON to extract, so parse_strategy == "none".
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw="fail one", parsed=None),
-                _fake_json_response(raw='{"a": 1}', parsed={"a": 1}),
+                {"raw": "fail one", "parsed": None},
+                {"raw": '{"a": 1}', "parsed": {"a": 1}},
             ]
         )
         agent = _json_agent(t0=t0, max_json_retries=5)
@@ -201,21 +139,22 @@ class TestRetryOrchestration:
         assert result.parse_strategy == "none"
         assert result.json_parse_attempts == 0
         assert len(result.inference_ids) == 1
-        # Second response is left unconsumed — proves retry was skipped.
-        assert len(t0._queue) == 1
+        # Only the first scripted response was consumed — proves retry
+        # was skipped (the second entry is still in the script queue).
+        assert len(t0.calls) == 1
 
     async def test_retry_preserves_episode_id(self) -> None:
         # First response carries episode_id=E1; second call must observe
         # episode_id=E1 in its inference kwargs, *not* the caller's None.
         first_ep = uuid4()
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(
-                    raw="bad", parsed=None, episode_id=first_ep
-                ),
-                _fake_json_response(
-                    raw='{"a": 1}', parsed={"a": 1}, episode_id=first_ep
-                ),
+                {"raw": "bad", "parsed": None, "episode_id": first_ep},
+                {
+                    "raw": '{"a": 1}',
+                    "parsed": {"a": 1},
+                    "episode_id": first_ep,
+                },
             ]
         )
         agent = _json_agent(t0=t0)
@@ -233,12 +172,8 @@ class TestRetryOrchestration:
         # permissive_json_parsing=False + max_json_retries=0 = TZ-pure mode.
         # Even though raw contains recoverable JSON, the permissive
         # layer is bypassed and parse_strategy stays "none".
-        t0 = FakeJsonT0(
-            [
-                _fake_json_response(
-                    raw='Here is: {"a": 1}', parsed=None
-                ),
-            ]
+        t0 = MockGateway.script_json(
+            [{"raw": 'Here is: {"a": 1}', "parsed": None}]
         )
         agent = _json_agent(
             t0=t0, permissive_json_parsing=False, max_json_retries=0
@@ -266,10 +201,10 @@ class TestRetryOrchestration:
         # The second call must carry the RETRY_HINT_BASE substring as a
         # user-turn message.  Exact match would lock the schema-aware
         # additions, so we only assert the base sentence is present.
-        t0 = FakeJsonT0(
+        t0 = MockGateway.script_json(
             [
-                _fake_json_response(raw="fail", parsed=None),
-                _fake_json_response(raw='{"a": 1}', parsed={"a": 1}),
+                {"raw": "fail", "parsed": None},
+                {"raw": '{"a": 1}', "parsed": {"a": 1}},
             ]
         )
         agent = _json_agent(t0=t0)

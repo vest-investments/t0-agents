@@ -5,7 +5,11 @@ Two complementary tools for writing agent tests:
 * :class:`MockGateway` + :class:`MockToolProvider` — deterministic, no
   infrastructure, ideal for unit tests pinning down *exactly* what the
   agent did.  Pair with :mod:`t0_agents.testing.scenarios` for canned
-  loop shapes.
+  loop shapes.  Chat and JSON paths share the same gateway:
+  :meth:`MockGateway.script` / :meth:`MockGateway.canned` script chat
+  responses; :meth:`MockGateway.script_json` /
+  :meth:`MockGateway.canned_json` script JSON responses for agents whose
+  ``function_kind == "json"``.
 * :class:`EmbeddedGatewayHelper` — real TensorZero inference against any
   provider whose API key is in the environment, no Docker / ClickHouse /
   Postgres required.  Ideal for integration tests that need realistic
@@ -14,11 +18,14 @@ Two complementary tools for writing agent tests:
 Public surface::
 
     from t0_agents.testing import (
-        MockGateway, MockChatResponse, MockToolProvider, RecordingGateway,
+        MockGateway, MockChatResponse, MockJsonResponse,
+        MockToolProvider, RecordingGateway,
         MockStreamingGateway, fake_event_stream,
         EmbeddedGatewayHelper,
         assert_tool_called, assert_tool_not_called, assert_tool_args_equal,
         assert_max_turns, assert_response_contains,
+        assert_parsed_equals, assert_parsed_matches_schema,
+        assert_invalid_json, assert_parse_strategy, assert_retry_attempts,
         scenarios, streaming_mocks,
         mock_t0, mock_tool_provider, embedded_t0, agent_test_factory,
     )
@@ -32,8 +39,13 @@ See :doc:`/testing` in the public docs for a full walkthrough.
 
 from t0_agents.testing import scenarios, streaming_mocks
 from t0_agents.testing.assertions import (
+    assert_invalid_json,
     assert_max_turns,
+    assert_parse_strategy,
+    assert_parsed_equals,
+    assert_parsed_matches_schema,
     assert_response_contains,
+    assert_retry_attempts,
     assert_tool_args_equal,
     assert_tool_called,
     assert_tool_not_called,
@@ -49,6 +61,7 @@ from t0_agents.testing.fixtures import (
 from t0_agents.testing.mocks import (
     MockChatResponse,
     MockGateway,
+    MockJsonResponse,
     MockToolProvider,
     RecordingGateway,
     ToolHandler,
@@ -63,13 +76,19 @@ __all__ = [
     "EmbeddedGatewayHelper",
     "MockChatResponse",
     "MockGateway",
+    "MockJsonResponse",
     "MockStreamingGateway",
     "MockToolProvider",
     "RecordingGateway",
     "ToolHandler",
     "agent_test_factory",
+    "assert_invalid_json",
     "assert_max_turns",
+    "assert_parse_strategy",
+    "assert_parsed_equals",
+    "assert_parsed_matches_schema",
     "assert_response_contains",
+    "assert_retry_attempts",
     "assert_tool_args_equal",
     "assert_tool_called",
     "assert_tool_not_called",

@@ -14,18 +14,29 @@ executed after guardrails + the loop got a say.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from tensorzero import ToolCall
+from tensorzero import ChatInferenceResponse, ToolCall
 
+from t0_agents.core.structured import ParseStrategy
 from t0_agents.core.types import AgentResult
 from t0_agents.testing.mocks import MockGateway, MockToolProvider
 
 
 def _collect_gateway_tool_calls(gateway: MockGateway) -> list[ToolCall]:
-    """Return every :class:`ToolCall` the gateway emitted across all turns."""
+    """Return every :class:`ToolCall` the gateway emitted across all turns.
+
+    JSON-flavoured responses on the gateway are skipped — by contract
+    JSON functions never emit tool calls (`Agent._run_json` short-circuits
+    the tool loop entirely).  Filtering with ``isinstance`` keeps the
+    assertion helpers usable when a test mixes chat and JSON responses
+    on the same mock.
+    """
     calls: list[ToolCall] = []
     for response in gateway.responses:
+        if not isinstance(response, ChatInferenceResponse):
+            continue
         calls.extend(b for b in response.content if isinstance(b, ToolCall))
     return calls
 
@@ -141,9 +152,120 @@ def assert_response_contains(result: AgentResult, text: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# JSON-flavoured assertions
+# ---------------------------------------------------------------------------
+
+
+def assert_parsed_equals(result: AgentResult, expected: Any) -> None:
+    """Assert that ``result.parsed`` equals *expected*.
+
+    Use this in place of ``assert result.parsed == ...`` when you want a
+    failure message that includes ``parse_strategy`` (so you can tell at
+    a glance whether the discrepancy is a wrong shape or a parse miss).
+    """
+    assert result.parsed == expected, (
+        f"Expected result.parsed to equal {expected!r}; "
+        f"got: {result.parsed!r} "
+        f"(parse_strategy={result.parse_strategy!r})"
+    )
+
+
+def assert_parsed_matches_schema(
+    result: AgentResult, schema: Mapping[str, Any]
+) -> None:
+    """Validate ``result.parsed`` against a JSON Schema.
+
+    The schema is checked with the ``jsonschema`` package, which is **not**
+    a hard dependency of ``t0-agents`` — install it explicitly with
+    ``pip install jsonschema`` if you want this helper.  When ``jsonschema``
+    is missing the helper raises :class:`ImportError` with an install
+    hint; when ``result.parsed`` is ``None`` it raises
+    :class:`AssertionError`; when validation fails it re-raises the
+    schema error as an :class:`AssertionError`.
+
+    The TensorZero gateway may already validate ``output.parsed`` against
+    the function's static schema, but per-call ``output_schema`` overrides
+    and the M3 permissive layer mean ``result.parsed`` can sometimes
+    surface a structure that wouldn't pass the original schema — that's
+    exactly the case this helper catches.
+    """
+    try:
+        import jsonschema as _jsonschema  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise ImportError(
+            "assert_parsed_matches_schema requires the jsonschema package "
+            "(not a hard dependency of t0-agents). "
+            "Install with `pip install jsonschema`."
+        ) from exc
+
+    assert result.parsed is not None, (
+        f"Expected result.parsed to match the schema, "
+        f"but parsed is None (parse_strategy={result.parse_strategy!r})"
+    )
+    try:
+        _jsonschema.validate(instance=result.parsed, schema=dict(schema))
+    except _jsonschema.ValidationError as exc:
+        path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
+        raise AssertionError(
+            f"result.parsed failed schema validation at {path}: "
+            f"{exc.message} (parsed={result.parsed!r})"
+        ) from exc
+
+
+def assert_invalid_json(result: AgentResult) -> None:
+    """Assert that the JSON run could not produce a parseable result.
+
+    Pins both ``result.parsed is None`` and
+    ``result.parse_strategy == "none"`` — the M3 terminal state where
+    every layer (strict TZ parse, permissive recovery, retries) failed.
+    """
+    assert result.parsed is None, (
+        f"Expected result.parsed to be None (invalid JSON path); "
+        f"got: {result.parsed!r} "
+        f"(parse_strategy={result.parse_strategy!r})"
+    )
+    assert result.parse_strategy == "none", (
+        f"Expected parse_strategy='none' (every recovery layer exhausted); "
+        f"got: {result.parse_strategy!r}"
+    )
+
+
+def assert_parse_strategy(
+    result: AgentResult, strategy: ParseStrategy
+) -> None:
+    """Assert that ``result.parse_strategy`` equals *strategy*.
+
+    *strategy* is one of ``"strict"``, ``"permissive"``, ``"retry"``,
+    ``"none"`` — see :class:`AgentResult` for semantics.
+    """
+    assert result.parse_strategy == strategy, (
+        f"Expected parse_strategy={strategy!r}; "
+        f"got: {result.parse_strategy!r}"
+    )
+
+
+def assert_retry_attempts(result: AgentResult, expected: int) -> None:
+    """Assert that ``result.json_parse_attempts`` equals *expected*.
+
+    The count is the number of **extra** inferences after the first, so
+    ``0`` means "first attempt succeeded" (via TZ or the permissive
+    layer), ``1`` means "one retry was needed", etc.
+    """
+    assert result.json_parse_attempts == expected, (
+        f"Expected json_parse_attempts={expected}; "
+        f"got: {result.json_parse_attempts}"
+    )
+
+
 __all__ = [
+    "assert_invalid_json",
     "assert_max_turns",
+    "assert_parse_strategy",
+    "assert_parsed_equals",
+    "assert_parsed_matches_schema",
     "assert_response_contains",
+    "assert_retry_attempts",
     "assert_tool_args_equal",
     "assert_tool_called",
     "assert_tool_not_called",

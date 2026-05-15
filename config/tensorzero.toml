@@ -42,6 +42,20 @@ model = "gpt_oss_20"
 templates.system.path = "functions/extract_customer_info/system_template.minijinja"
 json_mode = "strict"
 
+# Structured-outputs roadmap (M5): NER function used by the
+# ``examples/17_structured/ner_dynamic_schema.py`` demo to exercise
+# per-call ``output_schema`` overrides and a per-call ``json_mode``
+# swap (TZ guide §4).
+[functions.extract_entities]
+type = "json"
+output_schema = "functions/extract_entities/output_schema.json"
+
+[functions.extract_entities.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/extract_entities/system_template.minijinja"
+json_mode = "strict"
+
 # Metrics for feedback
 [metrics.task_success]
 type = "boolean"
