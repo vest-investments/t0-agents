@@ -1,4 +1,4 @@
-"""Unit tests for the M4 safety surfaces on ``Agent``.
+"""Unit tests for the JSON safety surfaces on ``Agent``.
 
 Covers four concerns:
 
@@ -330,7 +330,7 @@ class TestAnthropicWarning:
 
 
 # ---------------------------------------------------------------------------
-# after_run fatal-error propagation (pre-existing bug fix shipped with M4)
+# after_run fatal-error propagation
 # ---------------------------------------------------------------------------
 
 

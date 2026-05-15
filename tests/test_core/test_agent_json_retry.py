@@ -1,11 +1,10 @@
-"""Unit tests for the M3 retry orchestration inside ``Agent._run_json``.
+"""Unit tests for the JSON retry orchestration inside ``Agent._run_json``.
 
 Scripts a multi-response :class:`MockGateway` to cover every transition
 in the three-layer ladder (strict → permissive → retry → none) plus the
 per-call override and the ``ConfigurationError`` on a negative retry
-budget.  The M5 milestone consolidated the per-test ``FakeJsonT0`` /
-``_fake_json_response`` helpers into ``MockGateway.script_json``; see
-``tests/test_testing/test_json_helpers.py`` for the JSON dict semantic.
+budget.  Uses ``MockGateway.script_json`` for canned JSON responses; see
+``tests/test_testing/test_json_helpers.py`` for the dict-shape semantic.
 """
 
 from __future__ import annotations

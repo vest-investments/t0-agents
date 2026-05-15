@@ -2,21 +2,21 @@
 
 Five complementary entry points covering the structured-outputs surface:
 
-- **`main.py`** (M1) — single-shot extraction with
+- **`main.py`** — single-shot extraction with
   `run_structured_inference()`, the low-level sibling of `run_agent`
   for TensorZero functions whose `type = "json"`.
-- **`structured_agent.py`** (M2) — the declarative `Agent` wrapper
+- **`structured_agent.py`** — the declarative `Agent` wrapper
   dispatching to the same helper transparently when
   `AgentConfig.function_kind == "json"`.
-- **`recovery_demo.py`** (M3, no docker) — local in-process fake
+- **`recovery_demo.py`** *(no docker)* — local in-process fake
   gateway that scripts all four `parse_strategy` outcomes (`strict`,
   `permissive`, `retry`, `none`) so you can see the recovery ladder
   end-to-end in under a second.
-- **`recovery_real_provider.py`** (M3, docker) — same wiring as
+- **`recovery_real_provider.py`** *(docker)* — same wiring as
   `structured_agent.py` but with `json_mode="off"` per call so the
   real model is free to emit prose-wrapped JSON; the in-Python
   permissive layer and the retry loop absorb the result.
-- **`ner_dynamic_schema.py`** (M5, docker) — NER agent exercising
+- **`ner_dynamic_schema.py`** *(docker)* — NER agent exercising
   per-call `output_schema` overrides and per-call `json_mode` swaps
   against the `extract_entities` function (people, locations,
   organizations, topics — five categories with the per-call override).
@@ -28,7 +28,7 @@ the fifth) with a static `output_schema` and `json_mode = "strict"`
 at the variant level.  No MCP tools are called — JSON functions are
 single-shot by contract.
 
-## Robust JSON recovery (M3)
+## Robust JSON recovery
 
 When TensorZero's strict parser returns `parsed == None`, the agent
 walks a three-layer recovery ladder before declaring the run a failure:
@@ -106,16 +106,16 @@ for byte-perfect TensorZero-pure behaviour.
    instead of the variant-level one (TZ guide §4).
 3. **Per-call `json_mode="tool"` swap** (scenario 3) — flips the
    gateway-side strict mode to tool-call mode at call time.  Legal
-   because the agent's MCP tool provider is empty (M4 safety guard's
+   because the agent's MCP tool provider is empty (the safety guard's
    positive path).
 4. **Recovery demo** (scenario 4) — `json_mode="off"` per call so the
-   provider can emit prose-wrapped JSON; the M3 permissive parsing
-   layer recovers the result.
+   provider can emit prose-wrapped JSON; the permissive parsing layer
+   recovers the result.
 
 See [`docs/structured-outputs.md`](../../docs/structured-outputs.md)
 for the full provider matrix, per-call override semantics, the
-testing helpers (M5 `MockGateway.script_json` and the
-`assert_parsed_*` family), and the Pydantic recipe.
+testing helpers (`MockGateway.script_json` and the `assert_parsed_*`
+family), and the Pydantic recipe.
 
 ## Prerequisites
 
@@ -133,19 +133,19 @@ docker compose -f examples/17_structured/docker-compose.yml \
 ## Run
 
 ```bash
-# M1 — low-level helper (needs docker)
+# Low-level helper (needs docker)
 uv run python examples/17_structured/main.py
 
-# M2 — Agent wrapper (needs docker)
+# Agent wrapper (needs docker)
 uv run python examples/17_structured/structured_agent.py
 
-# M3 — local recovery ladder demo (no docker, < 1s)
+# Local recovery ladder demo (no docker, < 1s)
 uv run python examples/17_structured/recovery_demo.py
 
-# M3 — recovery against a real provider (needs docker)
+# Recovery against a real provider (needs docker)
 uv run python examples/17_structured/recovery_real_provider.py
 
-# M5 — dynamic schema override + json_mode swap (needs docker)
+# Dynamic schema override + json_mode swap (needs docker)
 uv run python examples/17_structured/ner_dynamic_schema.py
 ```
 
@@ -164,8 +164,9 @@ For `main.py`:
   "email": "sarah.j@example.com"}`.
 - `Raw:` is the JSON string the model produced.
 - `Parse strategy: strict` — TensorZero parsed the model output
-  directly.  M3 will add `permissive` (in-Python recovery) and
-  `retry` (re-emit with a corrective hint).
+  directly.  See `recovery_demo.py` for the `permissive` (in-Python
+  recovery), `retry` (re-emit with a corrective hint), and `none`
+  outcomes.
 - `Episode ID` / `Inference ID` are the IDs ClickHouse recorded; you
   can query them from the dashboard or via `tensorzero` tooling.
 
@@ -214,7 +215,7 @@ For `ner_dynamic_schema.py`:
 - Scenario 3 prints the same shape as scenario 1; the value of
   `parse_strategy` should be `"strict"`.  If you adapt the example to
   attach a non-empty tool provider, the per-call `json_mode="tool"`
-  swap raises `ConfigurationError` per the M4 safety guard.
+  swap raises `ConfigurationError` per the safety guard.
 - Scenario 4 typically reports `parse_strategy="permissive"` because
   Groq's model wraps the JSON in prose under `json_mode="off"`.  Re-
   run a few times — the value is non-deterministic.

@@ -25,11 +25,12 @@ model = "gpt_oss_20"
 templates.system.path = "functions/extract_customer_info/system_template.minijinja"
 json_mode = "strict"
 
-# Structured-outputs roadmap (M5): NER function used by
-# ``ner_dynamic_schema.py`` to exercise dynamic schema overrides and a
-# per-call ``json_mode`` swap.  The four-category schema is replaced
-# at call time with a five-category one in scenario 2, demonstrating
-# the TZ ``output_schema`` per-inference field (TZ guide §4).
+# Structured-outputs surface — dynamic-schema example: NER function
+# used by ``ner_dynamic_schema.py`` to exercise dynamic schema
+# overrides and a per-call ``json_mode`` swap.  The four-category
+# schema is replaced at call time with a five-category one in scenario
+# 2, demonstrating the TZ ``output_schema`` per-inference field (TZ
+# guide §4).
 [functions.extract_entities]
 type = "json"
 output_schema = "functions/extract_entities/output_schema.json"

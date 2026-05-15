@@ -29,7 +29,7 @@ type = "chat_completion"
 model = "gpt_oss_20"
 templates.system.path = "functions/agent_with_schema/system.minijinja"
 
-# Structured-outputs roadmap (M1): JSON function used by the
+# Structured-outputs surface: JSON function used by the
 # structured-outputs example (examples/17_structured/) and the
 # tests/test_core/test_structured_integration.py integration tests.
 [functions.extract_customer_info]
@@ -42,8 +42,8 @@ model = "gpt_oss_20"
 templates.system.path = "functions/extract_customer_info/system_template.minijinja"
 json_mode = "strict"
 
-# Structured-outputs roadmap (M5): NER function used by the
-# ``examples/17_structured/ner_dynamic_schema.py`` demo to exercise
+# Structured-outputs surface — dynamic-schema example: NER function
+# used by ``examples/17_structured/ner_dynamic_schema.py`` to exercise
 # per-call ``output_schema`` overrides and a per-call ``json_mode``
 # swap (TZ guide §4).
 [functions.extract_entities]

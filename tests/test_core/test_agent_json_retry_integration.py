@@ -1,10 +1,11 @@
-"""Integration test for the M3 retry orchestration against a real provider.
+"""Integration test for the JSON retry orchestration against a real provider.
 
 Reuses the ``extract_customer_info`` JSON function configured in
 ``config/tensorzero.toml``, but overrides ``json_mode="off"`` per call so
 the TensorZero gateway does *not* enforce schema-compliant output.  That
 lets the underlying model occasionally emit prose-wrapped or
-fenced-block JSON, which is exactly the recovery surface M3 targets.
+fenced-block JSON, which is exactly the recovery surface the
+orchestration targets.
 
 This test is informative rather than strict: the model's behaviour is
 non-deterministic, so the assertions only require that the agent

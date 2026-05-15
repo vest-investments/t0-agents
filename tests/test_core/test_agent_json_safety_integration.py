@@ -1,4 +1,4 @@
-"""Integration test for the M4 streaming guard.
+"""Integration test for the JSON streaming guard.
 
 Requires ``docker compose up -d`` from the repo root with
 ``GROQ_API_KEY`` populated in ``.env``.  Confirms that

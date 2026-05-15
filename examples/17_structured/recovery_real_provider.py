@@ -1,4 +1,4 @@
-"""Real-provider demo of the M3 permissive parsing + retry layers.
+"""Real-provider demo of the permissive parsing + retry recovery ladder.
 
 Companion to ``recovery_demo.py`` — same ``Agent.run`` invocation, but
 driven against a live TensorZero gateway and the real model behind it.
@@ -70,7 +70,7 @@ async def main() -> None:
             tool_provider=cast(ToolProvider, mcp_client),
         )
         # ``json_mode="off"`` lets the model decide on output formatting,
-        # which is exactly what M3's recovery layers are built to absorb.
+        # which is exactly what the recovery layers are built to absorb.
         result = await agent.run(prompt, json_mode="off")
 
     print(f"parse_strategy:      {result.parse_strategy}")

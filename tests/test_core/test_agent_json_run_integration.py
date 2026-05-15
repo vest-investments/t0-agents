@@ -3,8 +3,8 @@
 Requires ``docker compose up -d`` from the repo root with
 ``GROQ_API_KEY`` populated in ``.env``.  The gateway config at
 ``config/tensorzero.toml`` declares the ``extract_customer_info`` JSON
-function used here — the same function the M1 helper integration test
-exercises.
+function used here — the same function the structured-inference helper
+integration test exercises.
 
 The model output is not asserted exactly (Groq's gpt-oss-20b may produce
 slight variations).  Assertions cover the dispatch contract: the agent

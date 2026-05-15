@@ -1,11 +1,10 @@
 """Unit tests for the :func:`require_parsed` built-in guardrail.
 
-``require_parsed`` is the opt-in counterpart to the M3 permissive
-parsing layer: when a JSON run completes with ``parsed is None``
-despite every recovery attempt, the guardrail raises
-:class:`GuardrailBlockedError` so the run aborts with a clear policy
-violation instead of returning an :class:`AgentResult` whose
-``parsed`` field is silently unusable.
+``require_parsed`` is the opt-in counterpart to the permissive-parsing
+layer: when a JSON run completes with ``parsed is None`` despite every
+recovery attempt, the guardrail raises :class:`GuardrailBlockedError`
+so the run aborts with a clear policy violation instead of returning
+an :class:`AgentResult` whose ``parsed`` field is silently unusable.
 
 Coverage:
 

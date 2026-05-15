@@ -1,10 +1,10 @@
 """Unit tests for ``MockGateway.script_json`` / ``canned_json`` and the
-JSON-flavoured assertion helpers shipped in M5.
+JSON-flavoured assertion helpers.
 
 The chat-flavoured surface stays covered by ``test_mock_gateway.py`` and
-``test_assertions.py``; this module pins the JSON branch the M5 milestone
-added so downstream consumers can write JSON tests without rolling their
-own ``FakeJsonT0`` fakes.
+``test_assertions.py``; this module pins the JSON branch so downstream
+consumers can write JSON tests without rolling their own ``FakeJsonT0``
+fakes.
 """
 
 from __future__ import annotations
@@ -111,9 +111,9 @@ class TestScriptedJsonGateway:
     async def test_script_json_auto_derives_parsed(self) -> None:
         """When the ``parsed`` key is absent, ``raw`` is best-effort parsed.
 
-        Mirrors M1/M2's local fakes: a happy-path test scripts a
-        single ``{"raw": ...}`` and expects ``parsed`` to come out as
-        the JSON object.
+        Happy-path: scripting a single ``{"raw": ...}`` yields a
+        ``JsonInferenceResponse`` whose ``parsed`` is the JSON object
+        decoded from ``raw``.
         """
         gateway = MockGateway.script_json(
             [
@@ -134,10 +134,11 @@ class TestScriptedJsonGateway:
     async def test_script_json_explicit_parsed_none_wins(self) -> None:
         """Explicit ``parsed: None`` is respected even when ``raw`` parses.
 
-        This is the retry-script semantic from M3: a script entry whose
-        raw is structurally valid JSON but whose ``parsed`` is ``None``
-        because TZ returned ``parsed = null`` (the M3 permissive layer
-        then kicks in upstream).  Auto-derive would mask the case.
+        This is the retry-script semantic the orchestrator relies on: a
+        script entry whose raw is structurally valid JSON but whose
+        ``parsed`` is ``None`` because TZ returned ``parsed = null``
+        (the permissive layer then kicks in upstream).  Auto-derive
+        would mask the case.
         """
         gateway = MockGateway.script_json(
             [
@@ -280,7 +281,8 @@ class TestJsonAssertHelpers:
             assert_invalid_json(failing_with_parsed)
 
         # Fail: parsed is None but strategy is not "none" (impossible in
-        # real M3 code, but the helper should still pin the contract).
+        # real orchestrator code, but the helper should still pin the
+        # contract).
         failing_strategy = _json_result(parsed=None, parse_strategy="strict")
         with pytest.raises(AssertionError, match="parse_strategy='none'"):
             assert_invalid_json(failing_strategy)

@@ -9,7 +9,8 @@ entry type :class:`GuardrailLogEntry`, and the built-in factories:
 - :func:`max_tool_calls` — tool-call cap per run.
 - :func:`block_tools` — hard-deny specific tool names.
 - :func:`require_parsed` — abort JSON runs that finish with
-  ``parsed is None`` (opt-in counterpart to the M3 permissive layer).
+  ``parsed is None`` (opt-in counterpart to the permissive-parsing
+  layer).
 
 Write-your-own: any object that structurally satisfies the
 ``Guardrail`` Protocol plugs in via ``AgentConfig(guardrails=[...])``.

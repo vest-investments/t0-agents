@@ -8,7 +8,7 @@ The documentation is written as a progressive tour: start with [Getting Started]
 
 | Module | Status | Description |
 |--------|--------|-------------|
-| `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, and the JSON-function dispatch (`function_kind="json"`, `output_schema`, `json_mode`, the M3 permissive parser, the retry orchestration) covered in [Structured outputs](structured-outputs.md) |
+| `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, and the JSON-function dispatch (`function_kind="json"`, `output_schema`, `json_mode`, the permissive parser, the retry orchestration) covered in [Structured outputs](structured-outputs.md) |
 | `t0_agents.mcp` | Stable | MCP adapter (`convert_tools`, `serialize_tool_result`, `build_tool_result`), agent loop (`run_agent`, `execute_tool_calls`, `execute_tool_calls_parallel`, `has_tool_calls`), and reference elicitation handlers (`auto_approve_handler`, `auto_decline_handler`) |
 | `t0_agents.memory` | Stable | Cross-run persistence keyed by TensorZero's episode id: the `MemoryProvider` Protocol, `MemoryRecord` dataclass, `render_memory_summary` renderer, the ephemeral `InMemoryMemory`, the SQLite-backed `SqliteMemory`, and `TensorZeroMemory` for episode-scoped reads from TZ's observability log (with the `memory_strategy="messages"` native-history path that threads conversation history through `input.messages` without stringification) |
 | `t0_agents.guardrails` | Stable | Declarative policy layer: `require_approval`, `max_cost`, `max_tool_calls`, `block_tools`, plus the `Guardrail` Protocol for custom policies and the `GuardedToolProvider` wrapper installed by `Agent` when guardrails are configured |
@@ -42,7 +42,7 @@ Cross-cutting references that span every chapter above. Reach for them when you 
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.
 - **[Multi-Server Composition](multi-server.md)** — mounting multiple FastMCP servers behind one agent with namespace prefixes, plus the TensorZero configuration to match.
 - **[Concurrency](concurrency.md)** — the three places parallelism lives in the stack (intra-turn `parallel_tools`, batch tools, multi-agent dispatch), with the decision table and the patterns the library deliberately does not provide.
-- **[Structured outputs](structured-outputs.md)** — TensorZero `json` functions, dynamic `output_schema` overrides, per-call `json_mode` swaps, the three-layer recovery ladder (strict → permissive → retry), the `require_parsed()` guardrail, and the M5 testing helpers (`MockGateway.script_json`, `assert_parsed_*`).
+- **[Structured outputs](structured-outputs.md)** — TensorZero `json` functions, dynamic `output_schema` overrides, per-call `json_mode` swaps, the three-layer recovery ladder (strict → permissive → retry), the `require_parsed()` guardrail, and the JSON testing helpers (`MockGateway.script_json`, `assert_parsed_*`).
 
 ## Public API
 

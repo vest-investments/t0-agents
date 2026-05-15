@@ -186,7 +186,7 @@ def assert_parsed_matches_schema(
 
     The TensorZero gateway may already validate ``output.parsed`` against
     the function's static schema, but per-call ``output_schema`` overrides
-    and the M3 permissive layer mean ``result.parsed`` can sometimes
+    and the permissive-parsing layer mean ``result.parsed`` can sometimes
     surface a structure that wouldn't pass the original schema — that's
     exactly the case this helper catches.
     """
@@ -217,8 +217,8 @@ def assert_invalid_json(result: AgentResult) -> None:
     """Assert that the JSON run could not produce a parseable result.
 
     Pins both ``result.parsed is None`` and
-    ``result.parse_strategy == "none"`` — the M3 terminal state where
-    every layer (strict TZ parse, permissive recovery, retries) failed.
+    ``result.parse_strategy == "none"`` — the terminal state where every
+    layer (strict TZ parse, permissive recovery, retries) failed.
     """
     assert result.parsed is None, (
         f"Expected result.parsed to be None (invalid JSON path); "

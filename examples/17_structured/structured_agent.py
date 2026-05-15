@@ -1,4 +1,4 @@
-"""JSON-function dispatch through the declarative ``Agent`` (M2).
+"""JSON-function dispatch through the declarative ``Agent``.
 
 Companion to ``main.py`` — same TensorZero function
 (``extract_customer_info``) and same gateway config, but driven through

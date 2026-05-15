@@ -74,8 +74,8 @@ class AgentConfig:
         function_kind: Declares the TensorZero function type for
             dispatch.  ``"chat"`` (the default) preserves v0.9.0
             behaviour byte-identically.  ``"json"`` marks the function
-            as a single-shot JSON function — wiring lands in M2; M1
-            only validates the configuration shape.
+            as a single-shot JSON function and routes ``Agent.run``
+            through :func:`run_structured_inference`.
         output_schema: Optional dynamic schema for JSON functions.
             Accepts either an inline ``Mapping[str, Any]`` (sent
             verbatim) or a :class:`~pathlib.Path` (read as JSON at
@@ -117,8 +117,7 @@ class AgentConfig:
     # Multi-agent composition
     sub_agents: list[Agent] = field(default_factory=list)
 
-    # Structured outputs (M1 foundations · M2 Agent.run dispatch · M3
-    # permissive parsing + retry)
+    # Structured outputs
     function_kind: Literal["chat", "json"] = "chat"
     output_schema: Mapping[str, Any] | Path | None = None
     json_mode: Literal["off", "on", "strict", "tool"] | None = None

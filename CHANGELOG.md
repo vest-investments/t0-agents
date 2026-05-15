@@ -4,25 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.10.0] — Unreleased
+## [0.11.0] — 2026-05-14
 
-The structured-outputs roadmap.  Adds first-class support for TensorZero
-**JSON functions** to t0-agents while preserving every v0.9.0 invariant
-for chat callers: `function_kind`, `output_schema`, `json_mode`,
-`permissive_json_parsing`, `max_json_retries` on `AgentConfig`;
-`parsed`, `parse_strategy`, `json_parse_attempts`, `function_kind` on
-`AgentResult`; per-call kwargs on `Agent.run`; the opt-in
+First-class support for TensorZero **JSON functions** in t0-agents,
+while preserving every v0.9.0 invariant for chat callers.  Adds
+`function_kind`, `output_schema`, `json_mode`,
+`permissive_json_parsing`, and `max_json_retries` on `AgentConfig`;
+`parsed`, `parse_strategy`, `json_parse_attempts`, and `function_kind`
+on `AgentResult`; per-call kwargs on `Agent.run`; the opt-in
 `require_parsed()` guardrail; the `MockGateway.script_json` /
 `canned_json` testing primitives and five JSON-aware assertion helpers.
-Released in five internal milestones (M1 foundations, M2 `Agent.run`
-dispatch, M3 permissive parsing + retry, M4 safety + quirks, M5 testing
-helpers + polish); the consolidated bullets below preserve every
-concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
-`src/t0_agents/mcp/` is bit-for-bit untouched (contract §2.1).
+Chat-path behaviour is byte-identical to v0.9.0; `src/t0_agents/mcp/`
+is bit-for-bit untouched.
 
 ### Added
 
-#### Core (foundations and dispatch)
+#### Core (configuration and dispatch)
 
 - **`run_structured_inference()` and `StructuredOutput` dataclass**
   (`from t0_agents.core.structured import run_structured_inference,
@@ -126,7 +123,7 @@ concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
   incompatibility; the SDK does not expose provider routing, so the
   warning is generic.
 
-#### Testing helpers (M5)
+#### Testing helpers
 
 - **`MockGateway.script_json(turns)` and `MockGateway.canned_json(fn)`**
   — JSON-flavoured siblings of the existing `script` / `canned`
@@ -148,14 +145,14 @@ concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
 #### Examples and docs
 
 - **`examples/17_structured/`** — five runnable demos:
-  - `main.py` (M1) — `run_structured_inference()` against the
+  - `main.py` — `run_structured_inference()` against the
     `extract_customer_info` function.
-  - `structured_agent.py` (M2) — same function through `Agent.run`.
-  - `recovery_demo.py` (M3, no docker) — local fake gateway scripting
+  - `structured_agent.py` — same function through `Agent.run`.
+  - `recovery_demo.py` *(no docker)* — local fake gateway scripting
     all four `parse_strategy` outcomes in under a second.
-  - `recovery_real_provider.py` (M3, docker) — real provider exercise
+  - `recovery_real_provider.py` *(docker)* — real-provider exercise
     of the recovery ladder with `json_mode="off"`.
-  - `ner_dynamic_schema.py` (M5, docker) — NER agent against the new
+  - `ner_dynamic_schema.py` *(docker)* — NER agent against the new
     `extract_entities` function showing per-call `output_schema`
     overrides and a per-call `json_mode = "tool"` swap.
 - **`config/functions/extract_entities/`** and the mirrored
@@ -170,7 +167,7 @@ concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
   Anthropic warning, undetectable provider quirks, `require_parsed`),
   the testing primitives, the Pydantic recipe, the `json_mode` provider
   matrix, and the See-also footer linking to every adjacent doc.
-- **Cross-doc links**: `docs/concepts.md` (M1 chat-vs-json primer),
+- **Cross-doc links**: `docs/concepts.md` (chat-vs-json primer),
   `docs/agent.md` (rows for every new `AgentConfig` and `AgentResult`
   field, plus the per-call kwargs on `Agent.run`), `docs/guardrails.md`
   (`require_parsed` reference), `docs/testing.md` (Testing JSON agents
@@ -221,12 +218,11 @@ concrete change.  Chat-path behaviour is byte-identical to v0.9.0;
   and `tests/test_testing/` stay green unchanged.
 - **TensorZero-pure mode.**
   `AgentConfig(..., permissive_json_parsing=False, max_json_retries=0)`
-  reproduces the byte-for-byte behaviour the M2 dispatch produced before
-  the value-add layers landed: an invalid TZ response surfaces as
+  reproduces the byte-for-byte behaviour of the raw JSON dispatch
+  without the recovery layers: an invalid TZ response surfaces as
   `parsed is None` and `parse_strategy == "none"` on the first attempt
   with no in-Python fallback and no retries.
-- **`mcp/` byte-identical to v0.9.0.**  No source changes; contract
-  §2.1 invariant holds throughout the roadmap.
+- **`mcp/` byte-identical to v0.9.0.**  No source changes.
 - **`after_run` realignment is observationally compatible for every
   existing guardrail.**  None of the built-in guardrails
   (`require_approval`, `max_cost`, `max_tool_calls`, `block_tools`)

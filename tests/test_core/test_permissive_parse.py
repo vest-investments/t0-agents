@@ -3,9 +3,10 @@
 Pure-function tests — no TensorZero, no fakes.  The function never raises:
 every test asserts on the ``(value, strategy)`` return tuple.
 
-The deterministic-sweep test at the bottom replaces the spec's
-hypothesis-based property test (M3 spec §5.2); see the milestone-3
-dev-log §2 for the rationale.
+The deterministic-sweep test at the bottom is the curated alternative to
+a hypothesis-based property test: it iterates a fixed cartesian product
+of wrappers so every failure case is reproducible by its index rather
+than via a shrunk counterexample.
 """
 
 from __future__ import annotations
@@ -140,13 +141,12 @@ class TestNoneLayer:
 
 
 class TestDeterministicSweep:
-    """Replacement for the M3 spec §5.2 hypothesis property test.
+    """Curated alternative to a hypothesis-based property test.
 
-    Iterates a curated cartesian product of ``(prefix, obj, suffix)`` to
-    assert that the balanced-brace layer recovers ``obj`` from any
-    reasonable English wrapper.  Deliberately deterministic: every
-    failure case is reproducible by its index rather than via a shrunk
-    counterexample.
+    Iterates a deterministic cartesian product of ``(prefix, obj, suffix)``
+    to assert that the balanced-brace layer recovers ``obj`` from any
+    reasonable English wrapper.  Every failure case is reproducible by
+    its index rather than via a shrunk counterexample.
     """
 
     PREFIXES: ClassVar[list[str]] = [
