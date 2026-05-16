@@ -1,14 +1,16 @@
 # Agent
 
-The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.run(message)` / `.stream(message)` surface that drives the full tool-calling loop. Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
+The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.invoke(message)` surface that returns a `Run[T]` handle (awaitable for the final `AgentResult`, iterable for live `AgentEvent`s). Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
 
-> **v1.0 preview:** the canonical entry point is now `agent.invoke(...)`, which returns a `Run[T]` you can await for the final `AgentResult` *or* iterate for live `AgentEvent`s. `agent.run()` and `agent.stream()` continue to work as deprecated shims (one-time `DeprecationWarning` per call site) and are removed in v1.1.  The new surface and the migration cookbook are documented in `docs/run.md` (full doc lands in M5).
->
-> **v1.0 (M2) middleware preview:** the cross-cutting concerns once hand-coded in `core/agent.py` (memory hydration, guardrails, cost tracking, sub-agent orchestration, JSON retry) are now composable middlewares.  `AgentConfig(memory=, guardrails=, sub_agents=)` materialises the v0.12-equivalent default chain automatically — every existing caller keeps working byte-identical.  Power users compose custom chains via `AgentConfig(middleware=[...])`; the `AgentConfig.default_middleware_for(...)` static helper builds the same shape the auto-materialiser does.  See `docs/middleware.md` for the full guide (lands in M5).  The current 6 built-ins are: `MemoryMiddleware`, `GuardrailsMiddleware`, `CostTrackingMiddleware`, `SubAgentMiddleware`, `JsonRetryMiddleware` (M3 activates this), and `ObservabilityMiddleware` (opt-in, accepts any tracer).
->
-> **v1.0 (M3) OutputMode:** the chat/JSON dichotomy collapses into a single polymorphic surface.  `AgentConfig(output=ChatOutput())` is the new canonical kwarg (default `ChatOutput()`); use `output=JsonOutput(json_mode="strict")` for single-shot JSON, `output=StructuredOutput(MyPydanticModel)` for Pydantic-validated extraction, or `output=ToolCallOutput()` for the router pattern.  The five v0.12 JSON-only kwargs (`function_kind`, `json_mode`, `output_schema`, `permissive_json_parsing`, `max_json_retries`) are **removed** in v1.0 (Tier 2 — `pip install 't0-agents[pydantic]'` for `StructuredOutput`).  The `Agent.run` shim still accepts per-call `output_schema=`/`json_mode=`/`max_json_retries=` for Tier 1 byte-identity and translates them into a synthesised per-call `JsonOutput`.  Read-side `AgentResult.{response, parsed, parse_strategy, json_parse_attempts, function_kind}` properties remain available (Tier 0).  See `docs/output-modes.md` for the full guide (lands in M5).
->
-> **v1.0 (M4) Composers:** the fourth abstraction lands.  Nine topology builders — `sequential`, `parallel`, `race`, `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`, `circuit_breaker` — orchestrate Agents (and other Composers) into industrial pipelines: pipeline / fan-out / first-completed / ensemble / scatter-gather / triage routing / sequential-with-compensation / provider escalation / state-machine breaker.  Every Composer satisfies the `Composable[Input, T]` protocol so they nest uniformly (`sequential(race(a, b), conditional(routes={...}))` type-checks at every layer).  `composer.invoke(input)` returns the same `Run[T]` handle as `agent.invoke(user_message)`, with cancellation cascading to every sub-Run under a 30s default timeout (`cancel_timeout=` per topology).  `parent_episode_id` audit threads through to ClickHouse automatically.  Full guide ships as `docs/composition.md` in M5; the legacy declarative `AgentConfig.sub_agents=[...]` path is unchanged.
+> **v1.0 surface — read these four pages first:**
+> [Run](run.md) (the invocation handle), [Middleware](middleware.md)
+> (composable cross-cutting concerns), [Output modes](output-modes.md)
+> (polymorphic output shape), [Composition](composition.md) (nine
+> topology builders for multi-agent orchestration).  The legacy
+> `agent.run()` / `agent.stream()` shims keep working (one
+> `DeprecationWarning` per source line); they're removed in v1.1.  The
+> v0.12 → v1.0 migration playbook lives in
+> [migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ```
                         ┌──────────────────────────┐

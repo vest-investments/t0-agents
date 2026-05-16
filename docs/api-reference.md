@@ -502,6 +502,11 @@ print(result.response_source)  # "text"
 
 ## `Run` *(v1.0)*
 
+> See [docs/run.md](run.md) for the canonical narrative — lifecycle,
+> two-channel consumption, replay/fork semantics, error model,
+> `Run(agent=None)` mode for third-party Composer authors.  This
+> section is the API-reference summary.
+
 First-class invocation handle returned by `Agent.invoke(...)`.  A `Run`
 represents one live or completed agent invocation.  It supports two
 consumption channels — `await run.result()` for the final
