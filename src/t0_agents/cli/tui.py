@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import AsyncIterator
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
@@ -121,7 +122,7 @@ class TUIRenderer:
     console: Console
     verbose: bool
     last_episode_id: str | None
-    last_result: AgentResult | None
+    last_result: AgentResult[Any] | None
 
     def __init__(
         self,
@@ -163,7 +164,7 @@ class TUIRenderer:
     async def consume(
         self,
         events: AsyncIterator[AgentEvent],
-    ) -> AgentResult | None:
+    ) -> AgentResult[Any] | None:
         """Drive the panel from an ``AgentEvent`` iterator.
 
         Returns the :class:`AgentResult` carried by the final

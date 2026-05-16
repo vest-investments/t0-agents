@@ -39,14 +39,14 @@ from tensorzero import (
 )
 
 ParseStrategy = Literal["strict", "permissive", "retry", "none"]
-"""How :class:`StructuredOutput.parsed` came to be populated.
+"""How :class:`StructuredInferenceResult.parsed` came to be populated.
 
 - ``"strict"`` — TensorZero's own parse populated ``output.parsed``.
 - ``"permissive"`` — the in-Python recovery layer extracted JSON from
   ``output.raw`` after TZ returned ``parsed == None``.
-- ``"retry"`` — the retry orchestration in :meth:`Agent._run_json`
-  re-ran the inference (with a corrective user-turn hint) and one of
-  the subsequent attempts produced parseable output.
+- ``"retry"`` — the retry orchestration re-ran the inference (with a
+  corrective user-turn hint) and one of the subsequent attempts
+  produced parseable output.
 - ``"none"`` — every layer failed; ``parsed`` is ``None``.
 """
 
@@ -55,15 +55,15 @@ PermissiveStrategy = Literal["strict", "permissive", "none"]
 
 A narrower alias of :data:`ParseStrategy` — :func:`permissive_parse` is a
 pure-string utility and never observes the orchestrator-level ``"retry"``
-outcome.  :class:`AgentResult` and :class:`StructuredOutput` carry the
-wider :data:`ParseStrategy` alias because the orchestrator may upgrade a
-``"strict"`` or ``"permissive"`` outcome to ``"retry"`` when it took
-more than one attempt to get there.
+outcome.  :class:`AgentResult` and :class:`StructuredInferenceResult`
+carry the wider :data:`ParseStrategy` alias because the orchestrator may
+upgrade a ``"strict"`` or ``"permissive"`` outcome to ``"retry"`` when
+it took more than one attempt to get there.
 """
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredOutput:
+class StructuredInferenceResult:
     """Result of a single TensorZero JSON-function inference.
 
     Carries every field the caller is likely to need for both happy-path
@@ -77,6 +77,12 @@ class StructuredOutput:
     ``Mapping[str, Any] | None`` so that the permissive parsing layer can
     surface top-level arrays or other shapes without widening a published
     type.
+
+    Renamed from ``StructuredOutput`` in v1.0 — the new
+    :class:`t0_agents.core.outputs.StructuredOutput` is the canonical
+    Pydantic-driven :class:`OutputMode`.  Direct callers of
+    :func:`run_structured_inference` who relied on the type for
+    ``isinstance`` checks or annotations should switch to this name.
     """
 
     raw: str
@@ -274,7 +280,7 @@ async def run_structured_inference(
     on_inference: (
         Callable[[JsonInferenceResponse], Awaitable[None]] | None
     ) = None,
-) -> StructuredOutput:
+) -> StructuredInferenceResult:
     """Run one TensorZero JSON-function inference.
 
     Args:
@@ -327,7 +333,7 @@ async def run_structured_inference(
             cost-tracking or other per-call observability.
 
     Returns:
-        :class:`StructuredOutput` whose ``parse_strategy`` is
+        :class:`StructuredInferenceResult` whose ``parse_strategy`` is
         ``"strict"`` when the gateway returned a non-null ``parsed``
         and ``"none"`` otherwise.  The ``"permissive"`` and ``"retry"``
         strategies are surfaced by :meth:`Agent._run_json`, which wraps
@@ -388,7 +394,7 @@ async def run_structured_inference(
     raw_value: str = response.output.raw or ""
     strategy: ParseStrategy = "strict" if parsed_value is not None else "none"
 
-    return StructuredOutput(
+    return StructuredInferenceResult(
         raw=raw_value,
         parsed=parsed_value,
         episode_id=str(response.episode_id),

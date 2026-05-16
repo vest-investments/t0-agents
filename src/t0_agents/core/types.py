@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import (
+    Any,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
+from t0_agents.core.output import OutputDiagnostics
 from t0_agents.core.structured import ParseStrategy
 
 
@@ -89,7 +99,9 @@ class Guardrail(Protocol):
         self, ctx: Any, tool_call: Any, result_str: str
     ) -> None: ...
 
-    async def after_run(self, ctx: Any, result: AgentResult | None) -> None: ...
+    async def after_run(
+        self, ctx: Any, result: AgentResult[Any] | None
+    ) -> None: ...
 
 
 @dataclass(slots=True)
@@ -111,30 +123,176 @@ class GuardrailLogEntry:
     detail: str = ""
 
 
-@dataclass
-class AgentResult:
-    """Result of an agent run.
+T = TypeVar("T")
 
-    ``function_kind`` and ``parsed`` carry the structured-outputs
-    payload; ``parse_strategy`` and ``json_parse_attempts`` expose the
-    JSON path's permissive-parsing and bounded-retry observability.  All
-    four fields default to byte-identical chat behaviour: a chat agent's
-    result reads the same as v0.9.0 (``function_kind="chat"``,
-    ``parsed=None``, ``parse_strategy="strict"`` — semantically
-    meaningless for chat but chosen to match the JSON happy-path default
-    — and ``json_parse_attempts=0``).
+# Sentinel — distinguishes "not passed" from "explicitly passed as None".
+# Falls back into runtime branching in :meth:`AgentResult.__init__`; mypy
+# narrows via the overload pair so callers never observe the sentinel.
+_UNSET: Any = object()
+
+
+@dataclass(init=False)
+class AgentResult(Generic[T]):
+    """Typed result of an agent run.
+
+    v1.0 made :class:`AgentResult` generic in ``T`` so single-shot
+    output modes (:class:`~t0_agents.core.outputs.JsonOutput`,
+    :class:`~t0_agents.core.outputs.StructuredOutput`,
+    :class:`~t0_agents.core.outputs.ToolCallOutput`) can express the
+    statically-typed shape of their materialised result.  ``T = str``
+    for chat (the boundary assistant text), ``T = dict[str, Any]`` for
+    JSON, ``T = M`` for ``StructuredOutput[M]`` (Pydantic), and
+    ``T = list[tensorzero.ToolCall]`` for the router pattern.
+
+    The five v0.12 read-side fields (``response``, ``parsed``,
+    ``parse_strategy``, ``json_parse_attempts``, ``function_kind``) are
+    preserved as :func:`property` aliases — Tier 0 byte-identity per
+    integration contract §2.4.  Write-side, ``value`` is canonical;
+    ``response=`` remains accepted as a constructor alias because
+    :mod:`mcp.loop` (invariant §2.1) constructs the chat result with
+    ``AgentResult(response=text, ...)``.
+
+    Diagnostics (``diagnostics: OutputDiagnostics | None``) carries the
+    parse strategy, retry attempts, and raw text that the JSON path
+    needed in v0.12.  Chat results leave ``diagnostics=None`` and the
+    properties fall back to the v0.12 defaults.
     """
 
-    response: str
-    episode_id: str | None = None
-    inference_ids: list[str] = field(default_factory=list)
-    turns: int = 0
-    response_source: Literal["text", "thought"] = "text"
-    guardrail_log: list[GuardrailLogEntry] = field(default_factory=list)
-    function_kind: Literal["chat", "json"] = "chat"
-    parsed: Any | None = None
-    parse_strategy: ParseStrategy = "strict"
-    json_parse_attempts: int = 0
+    value: T
+    episode_id: str | None
+    inference_ids: list[str]
+    turns: int
+    response_source: Literal["text", "thought"]
+    guardrail_log: list[GuardrailLogEntry]
+    diagnostics: OutputDiagnostics | None
+
+    @overload
+    def __init__(
+        self,
+        value: T,
+        *,
+        episode_id: str | None = ...,
+        inference_ids: list[str] | None = ...,
+        turns: int = ...,
+        response_source: Literal["text", "thought"] = ...,
+        guardrail_log: list[GuardrailLogEntry] | None = ...,
+        diagnostics: OutputDiagnostics | None = ...,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        response: str,
+        episode_id: str | None = ...,
+        inference_ids: list[str] | None = ...,
+        turns: int = ...,
+        response_source: Literal["text", "thought"] = ...,
+        guardrail_log: list[GuardrailLogEntry] | None = ...,
+        diagnostics: OutputDiagnostics | None = ...,
+    ) -> None: ...
+
+    def __init__(
+        self,
+        value: Any = _UNSET,
+        *,
+        response: Any = _UNSET,
+        episode_id: str | None = None,
+        inference_ids: list[str] | None = None,
+        turns: int = 0,
+        response_source: Literal["text", "thought"] = "text",
+        guardrail_log: list[GuardrailLogEntry] | None = None,
+        diagnostics: OutputDiagnostics | None = None,
+    ) -> None:
+        if value is _UNSET and response is _UNSET:
+            raise TypeError(
+                "AgentResult requires `value=` (or v0.12-compat `response=`)"
+            )
+        if value is not _UNSET and response is not _UNSET:
+            raise TypeError(
+                "AgentResult: pass either `value=` or v0.12-compat `response=`, "
+                "not both"
+            )
+        self.value = cast(T, value if value is not _UNSET else response)
+        self.episode_id = episode_id
+        self.inference_ids = (
+            list(inference_ids) if inference_ids is not None else []
+        )
+        self.turns = turns
+        self.response_source = response_source
+        self.guardrail_log = (
+            list(guardrail_log) if guardrail_log is not None else []
+        )
+        self.diagnostics = diagnostics
+
+    # ------------------------------------------------------------------
+    # v0.12 read-side compat properties (contract §2.4 Tier 0)
+    # ------------------------------------------------------------------
+
+    @property
+    def response(self) -> str:
+        """The model's textual response (chat path) or raw JSON (JSON path).
+
+        Chat mode: ``self.value`` is the boundary assistant text.
+        JSON / structured / tool-call mode: ``self.diagnostics.raw_text``
+        carries the model's raw output; falls back to empty string when
+        ``diagnostics`` is missing.
+        """
+        if isinstance(self.value, str):
+            return self.value
+        if self.diagnostics is not None and self.diagnostics.raw_text is not None:
+            return self.diagnostics.raw_text
+        return ""
+
+    @property
+    def parsed(self) -> Any | None:
+        """The parsed JSON payload (JSON / structured / tool-call mode).
+
+        Chat mode: ``None`` — there is no parsed payload, only text.
+        Other modes: returns ``self.value`` (the dict / Pydantic
+        instance / tool-call list).
+        """
+        if isinstance(self.value, str):
+            return None
+        return self.value
+
+    @property
+    def parse_strategy(self) -> ParseStrategy:
+        """Which recovery layer produced :attr:`parsed`.
+
+        Defaults to ``"strict"`` for results whose ``diagnostics`` is
+        ``None`` (chat path or no-diagnostics single-shot path) so v0.12
+        consumers that read this field on chat results see the v0.12
+        default.
+        """
+        if self.diagnostics is None:
+            return "strict"
+        return self.diagnostics.parse_strategy
+
+    @property
+    def json_parse_attempts(self) -> int:
+        """Number of corrective retry attempts during the JSON path.
+
+        ``0`` when no retry was needed or for chat results.
+        """
+        if self.diagnostics is None:
+            return 0
+        return self.diagnostics.attempts
+
+    @property
+    def function_kind(self) -> Literal["chat", "json"]:
+        """Whether this result came from a chat-style or single-shot run.
+
+        Heuristic for v0.12 compat: chat results carry ``value: str``;
+        every other shape (dict, Pydantic instance, ``list[ToolCall]``)
+        reports ``"json"``.  Custom :class:`OutputMode` implementations
+        that materialise to ``str`` should set
+        ``diagnostics.parse_strategy`` appropriately if they want to be
+        observable via the JSON-path properties.
+        """
+        if isinstance(self.value, str):
+            return "chat"
+        return "json"
 
 
 @dataclass(frozen=True, slots=True)

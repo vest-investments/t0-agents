@@ -104,7 +104,7 @@ class TurnEndEvent:
 class DoneEvent:
     """Final event: carries the full :class:`AgentResult`."""
 
-    result: AgentResult
+    result: AgentResult[Any]
     type: Literal["done"] = "done"
 
 
