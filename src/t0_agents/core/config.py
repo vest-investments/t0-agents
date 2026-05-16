@@ -15,6 +15,7 @@ from t0_agents.core.types import Guardrail, MemoryProvider
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
+    from t0_agents.core.middleware.base import Middleware
 
 _VALID_MEMORY_STRATEGIES = frozenset(
     {"auto", "system_template", "prepended_message", "messages"}
@@ -26,7 +27,8 @@ class AgentConfig:
     """Declarative configuration for an Agent.
 
     Captures every parameter that ``run_agent`` accepts so that callers
-    configure once and invoke ``Agent.run(message)`` with no boilerplate.
+    configure once and call ``Agent.invoke(message)`` with no
+    boilerplate.
 
     Attributes:
         name: Human-readable agent name; used for logging and tags.
@@ -123,6 +125,13 @@ class AgentConfig:
     json_mode: Literal["off", "on", "strict", "tool"] | None = None
     permissive_json_parsing: bool = True
     max_json_retries: int = 2
+
+    # Middleware chain (v1.0).  ``None`` (default) materialises the
+    # backwards-compatible chain in ``__post_init__`` from
+    # ``memory=``/``guardrails=``/``sub_agents=``.  ``[]`` (empty list)
+    # is the explicit "no middleware" override — power-user opt-in,
+    # semantically distinct from ``None``.
+    middleware: list[Middleware] | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -235,3 +244,98 @@ class AgentConfig:
                     f"{type(schema_data).__name__}."
                 )
             self.output_schema = schema_data
+
+        # Materialise the default middleware chain when the caller did
+        # not provide one.  ``middleware=[]`` (explicit "no middleware")
+        # is preserved verbatim — power-user opt-in.  The lazy import
+        # inside ``_build_default_chain`` dodges the
+        # ``core.middleware`` ↔ ``core.config`` ↔ ``core.types`` cycle.
+        if self.middleware is None:
+            self.middleware = self._build_default_chain()
+
+    def _build_default_chain(self) -> list[Middleware]:
+        """Build the v0.12-equivalent middleware chain from existing kwargs.
+
+        Order: ``Memory → SubAgents → Guardrails → CostTracking → JsonRetry``.
+
+        ``Memory`` is included only when ``self.memory`` is set;
+        ``Guardrails`` only when ``self.guardrails`` is non-empty;
+        ``SubAgents`` only when ``self.sub_agents`` is non-empty.
+        ``CostTracking`` and ``JsonRetry`` are always present —
+        cost-tracking wires :meth:`Run.cost` / :meth:`Run.usage`
+        unconditionally, and ``JsonRetry`` is a no-op placeholder in
+        M2 (M3 activates it).
+
+        **Order invariant (contract §3.2).** ``SubAgentMiddleware`` must
+        wrap ``tool_provider`` *inside* ``GuardrailsMiddleware`` so
+        orchestrator-level guardrails observe sub-agent delegations
+        via their ``before_tool``/``after_tool`` hooks.  Because each
+        middleware contributes one ``replace_tool_provider`` call in
+        chain order, the wrap that happens LAST becomes the OUTERMOST.
+        Putting ``SubAgents`` BEFORE ``Guardrails`` in the chain order
+        means SubAgents wraps first (innermost), Guardrails wraps next
+        (outermost) — preserving the v0.12 ``_execute_chat_legacy``
+        wrap order (``GuardedToolProvider(_OrchestrationToolProvider(client))``).
+
+        Returns the same list :meth:`default_middleware_for` would
+        produce for the same field values.
+        """
+        return AgentConfig.default_middleware_for(
+            memory=self.memory,
+            memory_strategy=self.memory_strategy,
+            guardrails=self.guardrails,
+            sub_agents=self.sub_agents,
+        )
+
+    @staticmethod
+    def default_middleware_for(
+        *,
+        memory: MemoryProvider | None = None,
+        memory_strategy: Literal[
+            "auto", "system_template", "prepended_message", "messages"
+        ] = "auto",
+        guardrails: list[Guardrail] | None = None,
+        sub_agents: list[Agent] | None = None,
+    ) -> list[Middleware]:
+        """Build the default middleware chain for the given inputs.
+
+        Mirrors :meth:`_build_default_chain` but takes explicit
+        parameters so power users can compose custom chains that
+        sandwich the default::
+
+            AgentConfig(
+                ...,
+                middleware=[
+                    MyOutermost(),
+                    *AgentConfig.default_middleware_for(memory=m, guardrails=g),
+                    MyInnermost(),
+                ],
+            )
+
+        The static method is the single source of truth for the default
+        chain shape so the helper and the auto-materialisation cannot
+        drift apart.
+        """
+        # Lazy import to dodge ``core.middleware`` ↔ ``core.config``
+        # ↔ ``core.types`` cycle.
+        from t0_agents.core.middleware.builtins import (
+            CostTrackingMiddleware,
+            GuardrailsMiddleware,
+            JsonRetryMiddleware,
+            MemoryMiddleware,
+            SubAgentMiddleware,
+        )
+
+        chain: list[Middleware] = []
+        if memory is not None:
+            chain.append(MemoryMiddleware(memory, memory_strategy))
+        # SubAgent MUST appear before Guardrails so the GuardedToolProvider
+        # wraps the _OrchestrationToolProvider — see ``_build_default_chain``
+        # docstring for the wrap-order rationale.
+        if sub_agents:
+            chain.append(SubAgentMiddleware(list(sub_agents)))
+        if guardrails:
+            chain.append(GuardrailsMiddleware(list(guardrails)))
+        chain.append(CostTrackingMiddleware())
+        chain.append(JsonRetryMiddleware())
+        return chain

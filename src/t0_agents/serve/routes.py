@@ -59,7 +59,12 @@ def build_router(
     async def chat(req: ChatRequest) -> ChatResponse:
         try:
             async with session_factory.session(extra_tags=req.tags) as agent:
-                result = await agent.run(req.message, episode_id=req.episode_id)
+                # v1.0: invoke().result() avoids the DeprecationWarning
+                # ``agent.run(...)`` emits and gives this call-site
+                # access to the Run handle for future feedback/replay.
+                result = await agent.invoke(
+                    req.message, episode_id=req.episode_id,
+                ).result()
         except MaxTurnsExceededError as e:
             raise HTTPException(status_code=408, detail=str(e)) from e
         except GuardrailBlockedError as e:

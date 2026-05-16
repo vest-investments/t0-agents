@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0-M2] — Unreleased
+
+Second milestone of the v1.0 four-abstraction refactor.  Replaces the
+hand-coded cross-cutting concerns in `core/agent.py` (memory hydration,
+guardrails, cost tracking, sub-agent orchestration, JSON retry) with a
+composable Starlette-style middleware chain.  Power users gain a
+first-class extension surface for rate-limiters, PII redactors,
+observability hooks, and custom recovery policies — impossible in
+v0.12 without forking `core/agent.py`.
+
+Default chain materialised by `AgentConfig.__post_init__` is
+`Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal`
+(`Memory` / `SubAgents` / `Guardrails` only included when their
+corresponding kwarg is set; `CostTracking` and `JsonRetry` always
+present).  Existing `AgentConfig(memory=, guardrails=, sub_agents=)`
+callers keep working byte-identical — the chain is just a different
+implementation of the same behaviour.
+
+### Added
+
+- **`Middleware` Protocol** — `name: str` + `async __call__(ctx, next_) -> AgentResult`.
+- **`RunContext`** — mutable per-Run state threaded through the chain.
+  Methods: `chain_on_inference(cb)` (compose multiple inference
+  observers), `replace_tool_provider(tp)` (records prior providers on
+  `ctx.extras["_tool_provider_stack"]` for audit).
+- **`build_pipeline(middleware, terminal) -> Next`** — right-fold
+  composition with `_NextGuard` double-call detection.
+- **Six built-in middlewares:** `MemoryMiddleware`,
+  `GuardrailsMiddleware`, `CostTrackingMiddleware`,
+  `SubAgentMiddleware`, `JsonRetryMiddleware` (M2 no-op placeholder;
+  M3 activates), `ObservabilityMiddleware` (opt-in; accepts any tracer
+  exposing `start_as_current_span`).
+- **`AgentConfig.middleware: list[Middleware] | None`** field — power
+  users can override the default chain entirely.  `None` (default)
+  auto-materialises the v0.12-compat chain; `[]` is the explicit
+  "no middleware" override; an explicit list replaces the default.
+- **`AgentConfig.default_middleware_for(...)`** static method — single
+  source of truth for the default chain shape, usable in
+  power-user-composed chains that sandwich the default.
+- **`RunUsage`** — frozen dataclass with `input_tokens`,
+  `output_tokens`, `cost` aggregates.  Returned by `Run.usage()`.
+
+### Changed
+
+- **`Run.cost()` / `Run.usage()`** populated by
+  `CostTrackingMiddleware` on every inference.  v0.12 only tracked
+  cost when guardrails were configured (the closure on
+  `GuardrailContext`); v1.0 makes it always-on — a strict superset.
+- **`core/agent.py`** shrinks from ~1670 LoC to ~900 LoC.  Most of the
+  reduction comes from deleting `_execute_chat_legacy`,
+  `_execute_chat_streaming_legacy`, and `_execute_json_legacy`
+  (≈1100 LoC inline orchestration).  The JSON retry loop remains
+  inline in `_json_terminal` (~85 LoC) — M3 moves it into
+  `JsonRetryMiddleware` and shrinks the file further.
+- **Internal call-sites** (`compose/delegation.py:69`,
+  `compose/orchestrator.py:294`, `serve/routes.py:62`,
+  `serve/streaming_routes.py` SSE + WS handlers) migrate from
+  `agent.run(...)` / `agent.stream(...)` shims to
+  `agent.invoke(...).result()` / `agent.invoke(...).events()`.  No
+  observable behavioural change; eliminates ~4 internal
+  `DeprecationWarning` emissions per process.
+
+### Validated
+
+- 749 non-integration tests pass (+52 over the M1 baseline of 697).
+- mypy strict pass on 60 source files.
+- ruff clean on every M2-touched file.
+- `git diff src/t0_agents/mcp/` empty — invariant §2.1 holds.
+- All Tier 1 deprecation shims (`agent.run`, `agent.stream`) keep
+  working byte-identical with the existing v0.12 test suite.
+
+### Open questions resolved
+
+- **Q13** (placement of `JsonRetryMiddleware` in default chain) —
+  resolved as **innermost** (right before terminal).  Memory and
+  guardrails see only the final successful inference; audit of
+  retries surfaces via TensorZero tags and the M3
+  `result.diagnostics.attempts` field.
+
 ## [1.0.0-M1] — Unreleased
 
 First milestone of the v1.0 four-abstraction refactor (Run · Middleware

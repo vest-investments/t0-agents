@@ -291,7 +291,11 @@ class _OrchestrationToolProvider:
         parent_episode_id = get_parent_episode_id() or "unknown"
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
         try:
-            result = await sub_agent.run(message, tags=delegation_tags)
+            # v1.0: dispatch via Agent.invoke().result() so the
+            # sub-agent runs its own middleware chain; ``.result()`` is
+            # equivalent to v0.12 ``sub_agent.run(...)`` without the
+            # DeprecationWarning from this internal call-site.
+            result = await sub_agent.invoke(message, tags=delegation_tags).result()
         except T0AgentsFatalError:
             # Hybrid-fatal: T0AgentsFatalError subclasses (e.g.
             # GuardrailBlockedError raised by the sub-agent's own stack)

@@ -177,9 +177,11 @@ async def _sse_event_stream(
         return
     try:
         async with session_factory.session() as agent:
-            async for event in agent.stream(
+            # v1.0: invoke().events() bypasses the agent.stream
+            # DeprecationWarning from this internal call-site.
+            async for event in agent.invoke(
                 message, episode_id=episode_id, tags=parsed_tags,
-            ):
+            ).events():
                 yield _to_sse_frame(event)
     except MaxTurnsExceededError as exc:
         yield _to_sse_frame(
@@ -287,11 +289,13 @@ async def _drive_stream(
 ) -> None:
     """Stream events for one ``user_message`` frame back to the WS client."""
     try:
-        async for event in agent.stream(
+        # v1.0: invoke().events() — no DeprecationWarning from this
+        # internal call-site.
+        async for event in agent.invoke(
             frame.message,
             episode_id=frame.episode_id,
             tags=frame.tags,
-        ):
+        ).events():
             await ws.send_json(_event_to_json(event))
     except asyncio.CancelledError:
         raise

@@ -135,3 +135,27 @@ class AgentResult:
     parsed: Any | None = None
     parse_strategy: ParseStrategy = "strict"
     json_parse_attempts: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RunUsage:
+    """Cumulative usage totals across every inference in a :class:`Run`.
+
+    Populated by :class:`~t0_agents.core.middleware.CostTrackingMiddleware`
+    once per inference and read by :meth:`Run.usage`.  Aggregates the
+    fields tensorzero exposes on every inference response so callers
+    can budget, attribute cost, or surface usage to observability
+    pipelines without manually walking ``run.transcript()`` or scanning
+    ``GuardrailContext``.
+
+    Fields:
+        input_tokens: Sum of ``response.usage.input_tokens`` over every
+            inference (chat turns + JSON retries).
+        output_tokens: Sum of ``response.usage.output_tokens``.
+        cost: Sum of ``response.usage.cost`` (treats ``None`` as ``0.0``
+            — local providers may omit pricing).
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0

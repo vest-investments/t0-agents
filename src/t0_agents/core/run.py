@@ -35,7 +35,8 @@ from t0_agents.core.exceptions import (
     RunCancelledError,
     RunFailedError,
 )
-from t0_agents.core.types import AgentResult
+from t0_agents.core.middleware.base import RunContext
+from t0_agents.core.types import AgentResult, RunUsage
 from t0_agents.stream.events import AgentEvent, DoneEvent, TextDeltaEvent
 
 if TYPE_CHECKING:
@@ -123,6 +124,11 @@ class Run(Generic[T]):
         self._episode_id: str | None = input_.episode_id
         self._inference_ids: tuple[str, ...] = ()
         self._final_response: str = ""
+        # Cost / usage totals — written by
+        # ``CostTrackingMiddleware`` via ``_set_cost`` / ``_set_usage``
+        # (M2 wiring of M1 D-5 placeholders).
+        self._cost: float = 0.0
+        self._usage: RunUsage | None = None
         if eager:
             self._start()
 
@@ -172,7 +178,18 @@ class Run(Generic[T]):
         self._task = asyncio.create_task(self._drive())
 
     async def _drive(self) -> None:
-        """The asyncio task body.  Dispatches on function_kind + first-consumer."""
+        """The asyncio task body.  Dispatches on function_kind + first-consumer.
+
+        v1.0: builds a :class:`RunContext` from the frozen
+        :class:`RunInput` snapshot and dispatches to
+        :meth:`Agent._drive` which wraps the configured middleware
+        chain around the appropriate terminal.  For streaming chat the
+        terminal pushes events to ``self._buffer`` mid-iteration; this
+        method pushes the synthetic terminal :class:`DoneEvent` AFTER
+        the chain unwinds so outer middlewares (e.g.
+        :class:`GuardrailsMiddleware`) have a chance to mutate
+        ``result.guardrail_log`` first.
+        """
         try:
             agent = self._agent_ref()
             if agent is None:
@@ -184,15 +201,11 @@ class Run(Generic[T]):
             if self._input.function_kind == "json":
                 # JSON: only result() is valid (events() raises eagerly).
                 # No need to wait on _mode_chosen.
-                result = await agent._execute_json_legacy(
-                    user_message=self._input.user_message,
-                    episode_id=self._input.episode_id,
-                    tags=self._dict_or_none(self._input.tags),
-                    system_arguments=self._dict_or_none(self._input.system_arguments),
-                    system=self._input.system,
-                    output_schema=self._input.output_schema,
-                    json_mode=self._input.json_mode,
-                    max_json_retries=self._input.max_json_retries,
+                ctx = self._build_run_context(agent, is_streaming=False)
+                result = await agent._drive(
+                    ctx,
+                    is_streaming=False,
+                    middleware=self._middleware,
                 )
                 self._capture_result(result)
                 await self._buffer.put(DoneEvent(result=result))
@@ -201,42 +214,19 @@ class Run(Generic[T]):
 
             # Chat: wait for first consumer to choose drive mode.
             await self._mode_chosen.wait()
-            prior_msgs = (
-                list(self._input.prior_messages)
-                if self._input.prior_messages
-                else None
+            is_streaming = self._mode == "events"
+            ctx = self._build_run_context(agent, is_streaming=is_streaming)
+            result = await agent._drive(
+                ctx,
+                is_streaming=is_streaming,
+                middleware=self._middleware,
             )
-            if self._mode == "events":
-                final: AgentResult | None = None
-                async for ev in agent._execute_chat_streaming_legacy(
-                    user_message=self._input.user_message,
-                    episode_id=self._input.episode_id,
-                    tags=self._dict_or_none(self._input.tags),
-                    system_arguments=self._dict_or_none(self._input.system_arguments),
-                    system=self._input.system,
-                    prior_messages=prior_msgs,
-                ):
-                    if isinstance(ev, DoneEvent):
-                        final = ev.result
-                    await self._buffer.put(ev)
-                if final is None:
-                    raise RuntimeError(
-                        "Streaming drive completed without a DoneEvent — "
-                        "this indicates a bug in the streaming runner."
-                    )
-                self._capture_result(final)
-            else:
-                # mode == "result": non-streaming chat path.
-                result = await agent._execute_chat_legacy(
-                    user_message=self._input.user_message,
-                    episode_id=self._input.episode_id,
-                    tags=self._dict_or_none(self._input.tags),
-                    system_arguments=self._dict_or_none(self._input.system_arguments),
-                    system=self._input.system,
-                    prior_messages=prior_msgs,
-                )
-                self._capture_result(result)
-                await self._buffer.put(DoneEvent(result=result))
+            self._capture_result(result)
+            # Streaming mode: the terminal pushed every event except the
+            # DoneEvent.  Non-streaming: no events were pushed.  Either
+            # way, surface the terminal DoneEvent now with the final,
+            # outer-middleware-mutated result.
+            await self._buffer.put(DoneEvent(result=result))
             self._state = "succeeded"
         except asyncio.CancelledError:
             self._state = "cancelled"
@@ -250,6 +240,42 @@ class Run(Generic[T]):
                 await self._buffer.close()
             except Exception:
                 logger.debug("EventBuffer.close raised; suppressed", exc_info=True)
+
+    def _build_run_context(
+        self,
+        agent: Agent,
+        *,
+        is_streaming: bool,
+    ) -> RunContext:
+        """Snapshot the :class:`RunInput` into a mutable :class:`RunContext`.
+
+        Called at the dispatch boundary.  Per-call kwargs land on the
+        ``RunContext`` fields; the immutable original is always reachable
+        via ``ctx.run.input.<field>``.  Memory middleware may modify
+        ``ctx.user_message`` / ``ctx.system_arguments`` /
+        ``ctx.prior_messages`` before the terminal runs.
+
+        ``is_streaming`` is accepted for forward-compat: future
+        middleware may want to know the drive mode at chain build time.
+        """
+        del is_streaming  # not used today; future middleware may key on it.
+        return RunContext(
+            config=agent.config,
+            user_message=self._input.user_message,
+            episode_id=self._input.episode_id,
+            tags=self._dict_or_none(self._input.tags),
+            system=self._input.system,
+            system_arguments=self._dict_or_none(self._input.system_arguments),
+            output=self._output,
+            t0=agent._t0,
+            tool_provider=agent._tool_provider,
+            prior_messages=(
+                list(self._input.prior_messages)
+                if self._input.prior_messages
+                else None
+            ),
+            run=self,
+        )
 
     def _capture_result(self, result: AgentResult) -> None:
         """Record the final AgentResult on the Run's read-side properties."""
@@ -590,23 +616,35 @@ class Run(Generic[T]):
         ]
 
     def cost(self) -> float:
-        """Aggregate cost (USD) of every inference in this Run.
+        """Aggregate cost (USD) across every inference in this Run.
 
-        M1 placeholder: returns ``0.0`` until the M2 cost-tracking
-        middleware lands.  Callers that need per-run cost today read
-        :attr:`AgentResult.guardrail_log` from the corresponding
-        guardrail context.
+        Populated by
+        :class:`~t0_agents.core.middleware.CostTrackingMiddleware`
+        on each inference and snapshotted onto the Run after the
+        middleware chain unwinds.  ``0.0`` until the Run produces an
+        inference (and forever when running against a provider that
+        omits pricing — local models, for instance).
         """
-        return 0.0
+        return self._cost
 
-    def usage(self) -> Any:
+    def usage(self) -> RunUsage | None:
         """Aggregate token usage across every inference in this Run.
 
-        M1 placeholder: returns ``None``.  M2's cost-tracking
-        middleware exposes a structured :class:`tensorzero.Usage`-like
-        aggregate via the same accessor.
+        Populated by
+        :class:`~t0_agents.core.middleware.CostTrackingMiddleware` and
+        returned as a frozen :class:`RunUsage` aggregate.  ``None``
+        until the Run produces an inference (or when the middleware
+        was excluded via ``middleware=[]``).
         """
-        return None
+        return self._usage
+
+    def _set_cost(self, cost: float) -> None:
+        """Private setter used by :class:`CostTrackingMiddleware`."""
+        self._cost = cost
+
+    def _set_usage(self, usage: RunUsage) -> None:
+        """Private setter used by :class:`CostTrackingMiddleware`."""
+        self._usage = usage
 
 
 def build_run_input(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp.tools import Tool
@@ -43,6 +43,26 @@ def _stub_result(text: str = "ok") -> AgentResult:
     )
 
 
+def _mock_invoke_returning(result: AgentResult) -> MagicMock:
+    """Build a sync mock for ``Agent.invoke`` that returns a Run-shaped mock.
+
+    The delegation handler calls ``sub_agent.invoke(message, tags=...).result()``.
+    The mock returned here exposes that exact shape: a sync callable
+    whose return value has an awaitable ``.result()`` resolving to the
+    supplied :class:`AgentResult`.
+    """
+    mock_run = MagicMock()
+    mock_run.result = AsyncMock(return_value=result)
+    return MagicMock(return_value=mock_run)
+
+
+def _mock_invoke_raising(exc: BaseException) -> MagicMock:
+    """Build an invoke mock whose Run.result() raises ``exc``."""
+    mock_run = MagicMock()
+    mock_run.result = AsyncMock(side_effect=exc)
+    return MagicMock(return_value=mock_run)
+
+
 class TestAgentAsTool:
     def test_returns_tool_with_default_name(self) -> None:
         sub = _build_sub_agent("researcher")
@@ -72,9 +92,11 @@ class TestAgentAsTool:
         self,
     ) -> None:
         sub = _build_sub_agent()
-        # Replace .run so we don't exercise the real loop — we're asserting
-        # the handler contract, not the sub-agent's semantics.
-        sub.run = AsyncMock(return_value=_stub_result("hello"))  # type: ignore[method-assign]
+        # Replace .invoke so we don't exercise the real loop — we're
+        # asserting the handler contract, not the sub-agent's semantics.
+        # v1.0: delegation dispatches via Agent.invoke().result();
+        # the mock exposes that shape.
+        sub.invoke = _mock_invoke_returning(_stub_result("hello"))  # type: ignore[method-assign]
 
         tool = agent_as_tool(sub)
         handler = tool.fn  # type: ignore[attr-defined]
@@ -83,16 +105,16 @@ class TestAgentAsTool:
             out = await handler(message="hi")
 
         assert out == "hello"
-        sub.run.assert_awaited_once()
-        call_kwargs = sub.run.await_args.kwargs
-        assert call_kwargs["tags"] == {PARENT_EPISODE_ID_TAG: "ep-parent"}
-        assert sub.run.await_args.args == ("hi",)
+        sub.invoke.assert_called_once()
+        call_args = sub.invoke.call_args
+        assert call_args.kwargs["tags"] == {PARENT_EPISODE_ID_TAG: "ep-parent"}
+        assert call_args.args == ("hi",)
 
     async def test_handler_falls_back_to_unknown_when_no_parent_bound(
         self,
     ) -> None:
         sub = _build_sub_agent()
-        sub.run = AsyncMock(return_value=_stub_result())  # type: ignore[method-assign]
+        sub.invoke = _mock_invoke_returning(_stub_result())  # type: ignore[method-assign]
 
         tool = agent_as_tool(sub)
         handler = tool.fn  # type: ignore[attr-defined]
@@ -100,12 +122,12 @@ class TestAgentAsTool:
         out = await handler(message="hi")
 
         assert out == "ok"
-        call_kwargs = sub.run.await_args.kwargs
+        call_kwargs = sub.invoke.call_args.kwargs
         assert call_kwargs["tags"] == {PARENT_EPISODE_ID_TAG: "unknown"}
 
     async def test_handler_wraps_non_fatal_exception(self) -> None:
         sub = _build_sub_agent("researcher")
-        sub.run = AsyncMock(side_effect=ValueError("boom"))  # type: ignore[method-assign]
+        sub.invoke = _mock_invoke_raising(ValueError("boom"))  # type: ignore[method-assign]
 
         tool = agent_as_tool(sub)
         handler = tool.fn  # type: ignore[attr-defined]
@@ -122,8 +144,8 @@ class TestAgentAsTool:
 
     async def test_handler_reraises_fatal_unchanged(self) -> None:
         sub = _build_sub_agent("researcher")
-        sub.run = AsyncMock(  # type: ignore[method-assign]
-            side_effect=GuardrailBlockedError("hard stop"),
+        sub.invoke = _mock_invoke_raising(  # type: ignore[method-assign]
+            GuardrailBlockedError("hard stop"),
         )
 
         tool = agent_as_tool(sub)

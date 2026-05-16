@@ -194,7 +194,7 @@
 
 ## Q13 — `JsonRetryMiddleware` placement in default chain
 
-**Status:** open.
+**Status:** resolved (M2, 2026-05-16).
 
 **Context.** When `OutputMode.recover()` returns `Recovery.retry(hint)`, the retry middleware re-emits inference.  Where does it live in the chain?
 
@@ -202,9 +202,9 @@
 - Innermost (right before terminal) → memory/guardrails see only the final successful inference.  Cleanest.
 - Outermost → memory/guardrails see every retry.  Better audit, more noise.
 
-**Recommendation.** Innermost.  Audit of retries goes via TZ tags (`retry_attempt=N`) and `result.diagnostics.attempts`.
+**Resolution.** **Innermost.**  The default chain materialised by `AgentConfig.__post_init__` places `JsonRetryMiddleware` as the last entry (right before the terminal).  In M2 it is a no-op pass-through; M3 activates it by routing through `OutputMode.recover()`.  Audit of retries flows through TensorZero tags (`retry_attempt=N`) and the M3 `result.diagnostics.attempts` field, not through the outer middleware layers.
 
-**Resolution target:** M3 dev-log §3.
+Recorded in `logs/milestone-2-dev-log.md` §3 (M2 closes 2026-05-16).
 
 ---
 

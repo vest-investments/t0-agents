@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -314,17 +314,31 @@ class TestParentEpisodeIdRefresh:
         assert observed == [str(self._EPISODE)]
         assert result.episode_id == str(self._EPISODE)
 
-    async def test_run_does_not_install_wrapper_when_episode_id_provided(
+    async def test_run_does_not_refresh_parent_episode_when_episode_id_provided(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # An explicit episode_id means the initial bind already holds
-        # the right value; the refresh wrapper must NOT be installed
-        # so callers who never configured guardrails / on_inference
-        # keep the byte-identical on_inference=None call path.
-        captured: list[Any] = []
+        # the right value; the SubAgentMiddleware refresh wrapper must
+        # not call ``update_parent_episode_id``.
+        #
+        # v0.12 asserted ``on_inference is None`` because nothing else
+        # wired a callback when guardrails were absent.  v1.0
+        # always-on ``CostTrackingMiddleware`` populates on_inference
+        # regardless, so the v1.0 invariant is now behavioural:
+        # invoking the callback must not mutate the parent_episode_id
+        # ContextVar.
+        observed: list[str | None] = []
 
         async def fake_run_agent(*args: Any, **kwargs: Any) -> AgentResult:
-            captured.append(kwargs.get("on_inference"))
+            on_inf = kwargs.get("on_inference")
+            if on_inf is not None:
+                await on_inf(
+                    FakeChatResponse(
+                        content=[],
+                        episode_id=TestParentEpisodeIdRefresh._EPISODE,
+                    ),
+                )
+            observed.append(get_parent_episode_id())
             return AgentResult(
                 response="done",
                 episode_id="ep-explicit",
@@ -337,7 +351,10 @@ class TestParentEpisodeIdRefresh:
         orch = self._orchestrator_with_sub_agent()
         await orch.run("delegate", episode_id="ep-explicit")
 
-        assert captured == [None]
+        # The refresh wrapper was not installed, so the ContextVar
+        # remained at the initial bind ("ep-explicit") even after the
+        # cost-tracker observed the first inference.
+        assert observed == ["ep-explicit"]
 
     async def test_stream_refreshes_context_var_on_first_inference(
         self, monkeypatch: pytest.MonkeyPatch,
@@ -383,17 +400,31 @@ class TestParentEpisodeIdRefresh:
         assert observed == [str(self._EPISODE)]
         assert any(isinstance(e, DoneEvent) for e in events)
 
-    async def test_stream_does_not_install_wrapper_when_episode_id_provided(
+    async def test_stream_does_not_refresh_parent_episode_when_episode_id_provided(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        captured: list[Any] = []
+        # Same v1.0 invariant as the non-streaming variant: the refresh
+        # wrapper is not installed when episode_id is explicit, so the
+        # ContextVar remains at the initial bind even after on_inference
+        # observes the first response.  v1.0 ``CostTrackingMiddleware``
+        # always wires on_inference, so the v0.12 ``captured == [None]``
+        # invariant is replaced by the behavioural check below.
+        observed: list[str | None] = []
 
         async def fake_stream(
             _self: Any,
             *args: Any,
             **kwargs: Any,
         ) -> AsyncIterator[AgentEvent]:
-            captured.append(kwargs.get("on_inference"))
+            on_inf = kwargs.get("on_inference")
+            if on_inf is not None:
+                await on_inf(
+                    FakeChatResponse(
+                        content=[],
+                        episode_id=TestParentEpisodeIdRefresh._EPISODE,
+                    ),
+                )
+            observed.append(get_parent_episode_id())
             yield DoneEvent(
                 result=AgentResult(
                     response="done",
@@ -412,7 +443,7 @@ class TestParentEpisodeIdRefresh:
         async for _ in orch.stream("delegate", episode_id="ep-explicit"):
             pass
 
-        assert captured == [None]
+        assert observed == ["ep-explicit"]
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +498,13 @@ class TestOrchestrationToolProvider:
 
     @staticmethod
     def _spy_sub_agent(name: str = "researcher") -> Agent:
+        # v1.0: _OrchestrationToolProvider.call_tool dispatches via
+        # ``sub_agent.invoke(msg, tags=...).result()``.  Spy the invoke
+        # callable (sync) returning a Run-shaped MagicMock with an
+        # async ``.result()``.
         sub = _build_agent(name)
-        sub.run = AsyncMock(  # type: ignore[method-assign]
+        mock_run = MagicMock()
+        mock_run.result = AsyncMock(
             return_value=AgentResult(
                 response="sub-answer",
                 episode_id="ep-sub",
@@ -476,6 +512,7 @@ class TestOrchestrationToolProvider:
                 turns=1,
             ),
         )
+        sub.invoke = MagicMock(return_value=mock_run)  # type: ignore[method-assign]
         return sub
 
     async def test_forwards_non_subagent_calls_to_inner(self) -> None:
@@ -493,7 +530,7 @@ class TestOrchestrationToolProvider:
 
         assert result is inner_result
         assert inner.tool_calls == [("add", {"a": 1, "b": 2})]
-        sub.run.assert_not_awaited()
+        sub.invoke.assert_not_called()
 
     async def test_intercepts_subagent_calls_with_live_parent_id(
         self,
@@ -513,7 +550,7 @@ class TestOrchestrationToolProvider:
         # Inner was NOT touched — dispatch bypassed FastMCP.
         assert inner.tool_calls == []
         # Sub-agent saw the bound parent id, not 'unknown'.
-        sub.run.assert_awaited_once_with(
+        sub.invoke.assert_called_once_with(
             "hi", tags={PARENT_EPISODE_ID_TAG: "ep-orch-123"},
         )
         assert result.is_error is False
@@ -529,7 +566,7 @@ class TestOrchestrationToolProvider:
 
         await provider.call_tool("researcher_ask", {"message": "hi"})
 
-        sub.run.assert_awaited_once_with(
+        sub.invoke.assert_called_once_with(
             "hi", tags={PARENT_EPISODE_ID_TAG: "unknown"},
         )
 
@@ -544,11 +581,11 @@ class TestOrchestrationToolProvider:
 
         assert result.is_error is True
         assert "message" in result.content[0].text  # type: ignore[union-attr]
-        sub.run.assert_not_awaited()
+        sub.invoke.assert_not_called()
 
     async def test_wraps_non_fatal_exception_in_sub_agent_error(self) -> None:
         sub = self._spy_sub_agent("researcher")
-        sub.run.side_effect = ValueError("boom")
+        sub.invoke.return_value.result.side_effect = ValueError("boom")
 
         provider = _OrchestrationToolProvider(
             cast(ToolProvider, _StubInnerProvider(_ok_call_result())),
@@ -563,7 +600,9 @@ class TestOrchestrationToolProvider:
 
     async def test_reraises_fatal_error_unchanged(self) -> None:
         sub = self._spy_sub_agent("researcher")
-        sub.run.side_effect = GuardrailBlockedError("hard stop")
+        sub.invoke.return_value.result.side_effect = GuardrailBlockedError(
+            "hard stop",
+        )
 
         provider = _OrchestrationToolProvider(
             cast(ToolProvider, _StubInnerProvider(_ok_call_result())),
@@ -596,21 +635,30 @@ class TestParentEpisodeIdEndToEnd:
 
         sub = _build_agent("researcher")
 
-        async def spy_run(
+        def spy_invoke(
             message: str,
             *,
             episode_id: str | None = None,
             tags: dict[str, str] | None = None,
-        ) -> AgentResult:
+            **_extra: Any,
+        ) -> Any:
+            # v1.0: _OrchestrationToolProvider dispatches via
+            # ``sub.invoke(msg, tags=...).result()``.  The spy records
+            # the kwargs at invoke time and returns a Run-shaped mock
+            # whose ``.result()`` resolves to the stub AgentResult.
             recorded_tags.append(tags)
-            return AgentResult(
-                response="research-done",
-                episode_id="ep-sub",
-                inference_ids=["i-sub-1"],
-                turns=1,
+            mock_run = MagicMock()
+            mock_run.result = AsyncMock(
+                return_value=AgentResult(
+                    response="research-done",
+                    episode_id="ep-sub",
+                    inference_ids=["i-sub-1"],
+                    turns=1,
+                ),
             )
+            return mock_run
 
-        sub.run = spy_run  # type: ignore[method-assign]
+        sub.invoke = spy_invoke  # type: ignore[method-assign]
 
         tool_call = ToolCall(
             id="tc-1",
