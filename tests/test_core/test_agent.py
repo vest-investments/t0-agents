@@ -11,7 +11,6 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from fastmcp import Client
 from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 
@@ -140,6 +139,38 @@ class TestAgent:
                 t0=cast(AsyncTensorZeroGateway, FakeT0([])),
                 tool_provider=cast(ToolProvider, "not a provider"),
             )
+
+    def test_chat_agent_without_tool_provider_raises(self) -> None:
+        """Chat-mode (the default ``function_kind``) requires a provider.
+
+        The constructor must reject the omission eagerly with a message
+        that names ``function_kind`` and points at the JSON-mode escape
+        hatch — otherwise the failure surfaces deep inside ``run_agent``
+        on the first ``Agent.run`` call.
+        """
+        config = AgentConfig(name="a", function_name="f")
+        with pytest.raises(ConfigurationError, match="function_kind='chat'"):
+            Agent(
+                config,
+                t0=cast(AsyncTensorZeroGateway, FakeT0([])),
+            )
+
+    def test_json_agent_without_tool_provider_constructs(self) -> None:
+        """JSON-mode agents may omit the provider entirely (v0.12.0)."""
+        config = AgentConfig(
+            name="extractor",
+            function_name="extract",
+            function_kind="json",
+            json_mode="strict",
+        )
+        agent = Agent(
+            config,
+            t0=cast(AsyncTensorZeroGateway, FakeT0([])),
+        )
+        assert agent.config.function_kind == "json"
+        # Internal attribute is exposed for the serve/share_client check;
+        # documenting the contract here keeps that coupling deliberate.
+        assert agent._tool_provider is None
 
     async def test_defaults_forwarded(self) -> None:
         """Minimal config → run_agent called with expected default kwargs."""

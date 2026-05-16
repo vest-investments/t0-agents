@@ -145,7 +145,6 @@ This pattern keeps the contract local to your application: t0-agents guarantees 
 The high-level `Agent` wrapper recognises `function_kind="json"` and dispatches to `run_structured_inference()` automatically — no manual branching required. Build the same `AgentConfig` you would for a chat agent, set the two new fields, and call `agent.run(...)` exactly as before.
 
 ```python
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 from t0_agents import Agent, AgentConfig
 
@@ -158,8 +157,8 @@ config = AgentConfig(
 
 async with await AsyncTensorZeroGateway.build_http(
     gateway_url="http://localhost:3000",
-) as t0, Client(FastMCP("noop")) as mcp_client:
-    agent = Agent(config, t0=t0, tool_provider=mcp_client)
+) as t0:
+    agent = Agent(config, t0=t0)
     result = await agent.run("Hi, I'm Sarah at sarah@example.com")
 
 # result.function_kind  — "json"
@@ -169,7 +168,7 @@ async with await AsyncTensorZeroGateway.build_http(
 # result.inference_ids  — [<one uuid>]
 ```
 
-JSON functions never call MCP tools, but `Agent` still requires a `tool_provider` for its constructor — pass any `ToolProvider` (e.g. an empty in-process FastMCP `Client`, as in the snippet above). For a runnable copy see `examples/17_structured/structured_agent.py`.
+JSON-mode agents are single-shot and never dispatch MCP tools, so the `Agent` constructor accepts no `tool_provider` here — pass just the configuration and the TensorZero gateway. (Chat-mode agents still require a `tool_provider`; see [`docs/agent.md`](agent.md).) Passing an explicit `tool_provider` to a JSON agent is still accepted — useful if you mix function kinds across a single fleet — but it is no longer required. For a runnable copy see `examples/17_structured/structured_agent.py`.
 
 ### Per-call overrides
 
@@ -343,8 +342,7 @@ from typing import cast
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
-from t0_agents.core.types import ToolProvider
-from t0_agents.testing import MockGateway, MockToolProvider
+from t0_agents.testing import MockGateway
 
 gateway = MockGateway.script_json([
     {"raw": '{"name": "Ada", "email": "ada@example.com"}'},
@@ -361,7 +359,6 @@ agent = Agent(
         json_mode="strict",
     ),
     t0=cast(AsyncTensorZeroGateway, gateway),
-    tool_provider=cast(ToolProvider, MockToolProvider({})),
 )
 
 result = await agent.run("Hi, I'm Ada at ada@example.com")

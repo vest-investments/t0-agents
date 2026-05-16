@@ -18,7 +18,7 @@ The `Agent` class is the declarative front door of t0-agents. It holds your conf
               ▼                      ▼                      ▼
      ┌────────────────┐    ┌──────────────────┐    ┌────────────────┐
      │  ToolProvider  │    │  MemoryProvider  │    │    Guardrail   │
-     │   (required)   │    │    (optional)    │    │   (optional)   │
+     │  (chat-mode)   │    │    (optional)    │    │   (optional)   │
      └────────────────┘    └──────────────────┘    └────────────────┘
 ```
 
@@ -97,7 +97,7 @@ For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP se
 
 | Collaborator | Lives on | Enabled when | Behaviour when absent |
 |---|---|---|---|
-| `ToolProvider` | `Agent(tool_provider=...)` | always | — (required) |
+| `ToolProvider` | `Agent(tool_provider=...)` | chat-mode agents | required when `function_kind="chat"`; optional (and unused) when `function_kind="json"` |
 | `MemoryProvider` | `AgentConfig.memory` | non-`None` | no load/save, no context injection |
 | `Guardrail` list | `AgentConfig.guardrails` | non-empty | provider passed through unwrapped, no cost tracking |
 | Sub-agents | `AgentConfig.sub_agents` | non-empty | no additional MCP tools registered |
@@ -117,6 +117,14 @@ async with await AsyncTensorZeroGateway.build_http(...) as t0, Client(mcp) as to
 ```
 
 `Agent` does not install signal handlers, configure logging, spawn threads, or touch the filesystem on your behalf.
+
+JSON-mode agents (`function_kind="json"`) never dispatch tools, so the `tool_provider` kwarg is optional — drop it and let the constructor short-circuit the MCP plumbing entirely. See [structured-outputs.md](structured-outputs.md) for the full pattern.
+
+```python
+async with await AsyncTensorZeroGateway.build_http(...) as t0:
+    agent = Agent(json_config, t0=t0)  # no tool_provider needed
+    result = await agent.run("…")
+```
 
 ### Concurrency
 
@@ -189,7 +197,7 @@ class Agent:
         config: AgentConfig,
         *,
         t0: AsyncTensorZeroGateway,
-        tool_provider: ToolProvider,
+        tool_provider: ToolProvider | None = None,
     ) -> None: ...
 
     @property
@@ -221,7 +229,7 @@ class Agent:
 
 | Member | What it does |
 |---|---|
-| `__init__` | Validates `tool_provider` against the `ToolProvider` protocol and (when configured) `config.memory` against `MemoryProvider`. Registers any `config.sub_agents` on an in-process FastMCP server. Never opens connections. |
+| `__init__` | Validates `tool_provider` against the `ToolProvider` protocol when supplied and (when configured) `config.memory` against `MemoryProvider`. Rejects chat-mode agents constructed without a `tool_provider` (JSON-mode agents may omit it — they never dispatch tools). Registers any `config.sub_agents` on an in-process FastMCP server. Never opens connections. |
 | `config` | Read-only property returning the `AgentConfig` passed to the constructor. |
 | `run` | One-shot run. Loads memory, wraps the tool provider with any guardrails, calls `run_agent`, persists memory, fires `after_run` hooks, and returns an `AgentResult`. When `config.function_kind == "json"`, the tool loop is replaced by a bounded JSON inference orchestration (`run_structured_inference` called up to `max_json_retries + 1` times, with the permissive layer and a corrective hint between attempts) — `before_run` / `after_run` guardrails still fire, but `before_tool` / `after_tool` never do. Optional `tags` shallow-merge on top of `config.tags` (per-call values win on key collisions). Optional `system_arguments` is forwarded to TensorZero as `input.system` for the system-template render (the dict matches the function's system schema directly — no `arguments` wrapper); shallow-merged with the memory strategy's contribution, with caller keys winning on collision. Optional `output_schema` / `json_mode` override the config-level values for one call; both are forbidden on chat agents and raise `ConfigurationError` if supplied there. Optional `max_json_retries` overrides `config.max_json_retries` for one call (JSON agents only; harmless on chat agents). |
 | `stream` | Streaming analogue. Yields `AgentEvent`s in real time and ends with a terminal `DoneEvent(result=AgentResult(...))`. Same `tags` / `system_arguments` per-call kwargs as `run`. See [streaming.md](streaming.md). |

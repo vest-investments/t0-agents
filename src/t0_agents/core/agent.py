@@ -129,13 +129,33 @@ class Agent:
     Encapsulates configuration in an :class:`AgentConfig` dataclass and
     exposes a clean ``.run(message)`` method that delegates to the existing
     ``run_agent`` loop.  The caller owns the lifecycle of both the TensorZero
-    gateway and the tool provider (typically a ``fastmcp.Client``).
+    gateway and the tool provider (when one is supplied — typically a
+    ``fastmcp.Client``).
 
-    Example::
+    The ``tool_provider`` kwarg is **required for chat-mode agents**
+    (``function_kind="chat"``) because the tool loop calls
+    ``list_tools()`` / ``call_tool()`` on it every turn.  For JSON-mode
+    agents (``function_kind="json"``) it is **optional**: JSON functions
+    are single-shot and never dispatch MCP tools, so a JSON agent can be
+    constructed with just the gateway.
+
+    Example (chat)::
 
         config = AgentConfig(name="assistant", function_name="agent")
         agent = Agent(config, t0=gateway, tool_provider=mcp_client)
         result = await agent.run("What is 2 + 3?")
+
+    Example (JSON, no tool provider)::
+
+        config = AgentConfig(
+            name="extractor",
+            function_name="extract_customer",
+            function_kind="json",
+            json_mode="strict",
+        )
+        agent = Agent(config, t0=gateway)
+        result = await agent.run("Hi, I'm Sarah Johnson <sarah@example.com>")
+        print(result.parsed)
     """
 
     def __init__(
@@ -143,12 +163,19 @@ class Agent:
         config: AgentConfig,
         *,
         t0: AsyncTensorZeroGateway,
-        tool_provider: ToolProvider,
+        tool_provider: ToolProvider | None = None,
     ) -> None:
-        if not isinstance(tool_provider, ToolProvider):
+        if tool_provider is not None and not isinstance(tool_provider, ToolProvider):
             raise ConfigurationError(
                 f"tool_provider must implement the ToolProvider protocol "
                 f"(list_tools + call_tool), got {type(tool_provider).__name__}"
+            )
+        if config.function_kind == "chat" and tool_provider is None:
+            raise ConfigurationError(
+                "Agent with function_kind='chat' requires a tool_provider. "
+                "Pass a fastmcp.Client wrapping your tool server, or set "
+                "AgentConfig(function_kind='json') for a single-shot JSON "
+                "agent that does not need a tool provider."
             )
         if config.memory is not None and not isinstance(config.memory, MemoryProvider):
             raise ConfigurationError(
@@ -157,7 +184,7 @@ class Agent:
             )
         self._config = config
         self._t0 = t0
-        self._tool_provider = tool_provider
+        self._tool_provider: ToolProvider | None = tool_provider
         logger.debug(
             "Agent %r created: function=%s, max_turns=%d",
             config.name,
@@ -380,6 +407,11 @@ class Agent:
         # on_inference at None so run_agent's code path is unchanged.
         guard_ctx: GuardrailContext | None = None
         guard_log: list[GuardrailLogEntry] = []
+        # ``__init__`` rejects chat agents without a tool_provider; the
+        # JSON branch above bypasses this section entirely.  The assert
+        # both narrows the type for mypy and guards against future
+        # refactors that might unbalance the invariant.
+        assert self._tool_provider is not None
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
@@ -648,6 +680,10 @@ class Agent:
         # --- 3. Set up guardrails ---
         guard_ctx: GuardrailContext | None = None
         guard_log: list[GuardrailLogEntry] = []
+        # ``__init__`` rejects chat agents without a tool_provider, and
+        # ``Agent.stream`` rejects JSON agents earlier in this method —
+        # so reaching this point implies a non-None provider.
+        assert self._tool_provider is not None
         tool_provider: ToolProvider = self._tool_provider
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
 
@@ -887,17 +923,23 @@ class Agent:
             # perform this check itself — it is verified the first time
             # the agent actually needs ``"tool"`` mode, then cached.
             # ``json_mode == "tool"`` against a tool provider that
-            # advertises tools is forbidden by TZ guide §11.1.
-            advertised_tools = await self._tool_provider.list_tools()
-            if advertised_tools:
-                raise ConfigurationError(
-                    "function_kind='json' with json_mode='tool' is "
-                    "incompatible with a tool_provider that advertises "
-                    "tools (TensorZero guide §11.1).  Either change "
-                    "json_mode to 'strict'/'on'/'off' or use an empty "
-                    "tool_provider."
-                )
-            self._tool_provider_verified_empty = True
+            # advertises tools is forbidden by TZ guide §11.1.  When the
+            # agent was constructed without a tool provider, the
+            # invariant holds vacuously: no provider means nothing to
+            # advertise.
+            if self._tool_provider is None:
+                self._tool_provider_verified_empty = True
+            else:
+                advertised_tools = await self._tool_provider.list_tools()
+                if advertised_tools:
+                    raise ConfigurationError(
+                        "function_kind='json' with json_mode='tool' is "
+                        "incompatible with a tool_provider that advertises "
+                        "tools (TensorZero guide §11.1).  Either change "
+                        "json_mode to 'strict'/'on'/'off' or use an empty "
+                        "tool_provider."
+                    )
+                self._tool_provider_verified_empty = True
 
         # --- 1. Load memory (mirrors chat run()) ---
         # ``memory_strategy="messages"`` would require turning prior-episode

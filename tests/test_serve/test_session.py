@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import AgentResult
 from t0_agents.serve import SessionFactory, create_app
-from tests._fake_t0 import FakeChatResponse
+from tests._fake_t0 import FakeChatResponse, FakeT0
 from tests.test_serve.conftest import FakeFastMCPClient
 
 # --- create_app XOR validation -----------------------------------------------
@@ -34,6 +35,30 @@ async def test_create_app_both_flags_raise(base_agent: Agent) -> None:
             share_client=True,
         )
     assert "mutually exclusive" in str(exc.value)
+
+
+async def test_create_app_share_client_rejects_provider_less_agent() -> None:
+    """``share_client=True`` on a JSON-mode agent built without a provider raises.
+
+    Pre-v0.12.0 this combination was impossible (the constructor
+    required a provider).  Now it is possible, and ``create_app`` must
+    catch it eagerly — passing ``shared_tool_provider=None`` into
+    ``SessionFactory`` would otherwise trip its XOR check with a less
+    helpful message.
+    """
+    json_agent = Agent(
+        AgentConfig(
+            name="extractor",
+            function_name="extract",
+            function_kind="json",
+            json_mode="strict",
+        ),
+        t0=cast(AsyncTensorZeroGateway, FakeT0([])),
+    )
+    with pytest.raises(ConfigurationError) as exc:
+        create_app(json_agent, share_client=True)
+    assert "tool_provider" in str(exc.value)
+    assert "function_kind='json'" in str(exc.value)
 
 
 # --- Per-session vs shared ---------------------------------------------------

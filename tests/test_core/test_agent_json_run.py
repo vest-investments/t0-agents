@@ -98,6 +98,34 @@ class TestJsonDispatch:
         # Chat-only field default still preserved.
         assert result.response_source == "text"
 
+    async def test_json_agent_runs_without_tool_provider(self) -> None:
+        """End-to-end: a JSON agent built without a provider can still run.
+
+        Mirrors the canonical ``examples/17_structured/structured_agent.py``
+        post-0.12.0 shape — no ``fastmcp.Client``, no noop server, just
+        ``Agent(config, t0=t0)``.
+        """
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
+        agent = Agent(
+            AgentConfig(
+                name="extractor",
+                function_name="extract_customer_info",
+                function_kind="json",
+                json_mode="strict",
+            ),
+            t0=cast(AsyncTensorZeroGateway, t0),
+        )
+
+        result = await agent.run("Hi, I'm Sarah at sarah@example.com")
+
+        assert result.function_kind == "json"
+        assert result.parsed == {
+            "name": "Sarah",
+            "email": "sarah@example.com",
+        }
+        assert result.response == _OK_RAW
+        assert result.turns == 1
+
     async def test_chat_path_is_byte_identical(self) -> None:
         # Same setup as a minimal chat test: the new fields default and
         # nothing else changes for a chat-flavoured agent.

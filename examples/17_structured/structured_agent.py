@@ -19,23 +19,21 @@ in its :class:`AgentConfig`.  ``Agent.run(...)`` then routes through
 :class:`AgentResult` with ``function_kind == "json"``, ``parsed``
 populated, and ``response`` set to the raw JSON string.
 
-JSON functions do not call MCP tools, so the in-process FastMCP server
-attached to the agent is intentionally empty — present only because
-``Agent`` requires a ``ToolProvider``.
+JSON-mode agents do not dispatch MCP tools, so ``Agent`` accepts no
+``tool_provider`` here — the constructor takes just the configuration
+and the TensorZero gateway.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import cast
 
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.types import ToolProvider
 
 
 def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
@@ -52,22 +50,14 @@ async def main() -> None:
         function_kind="json",
         json_mode="strict",
     )
-    # Empty in-process MCP server — JSON functions don't dispatch tools,
-    # but Agent still requires a ToolProvider at construction time.
-    noop_server: FastMCP[Any] = FastMCP("noop")
-    mcp_client: Client[Any] = Client(noop_server)
 
     messages = [
         "Hi, I'm Sarah Johnson and you can reach me at sarah.j@example.com",
         "This is Diego Pérez (diego@example.com) — please follow up.",
     ]
 
-    async with await _gateway_factory() as t0, mcp_client:
-        agent = Agent(
-            config,
-            t0=t0,
-            tool_provider=cast(ToolProvider, mcp_client),
-        )
+    async with await _gateway_factory() as t0:
+        agent = Agent(config, t0=t0)
         for idx, message in enumerate(messages, start=1):
             result = await agent.run(message)
             print(f"--- run {idx} ---")

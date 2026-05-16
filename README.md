@@ -15,7 +15,7 @@ Build LLM agents that discover and execute tools through [MCP](https://modelcont
 | Capability | What it gives you |
 | --- | --- |
 | **MCP adapter & loop** | Convert FastMCP tool definitions to TensorZero's inference format, orchestrate the turn-based inference-execute loop, serialize tool results back. Low-level `run_agent` function for full control. |
-| **Declarative `Agent`** | One-liner `Agent(config, t0=..., tool_provider=...)` with `AgentConfig` and structurally-typed Protocols for tools, memory, and guardrails. No inheritance required. |
+| **Declarative `Agent`** | One-liner `Agent(config, t0=..., tool_provider=...)` for chat-mode agents — drop the `tool_provider` for JSON-mode single-shot agents. `AgentConfig` plus structurally-typed Protocols for tools, memory, and guardrails. No inheritance required. |
 | **Cross-run memory** | `InMemoryMemory` for ephemeral state, `SqliteMemory` for persistence, or plug in Redis / a vector store by implementing the three-method `MemoryProvider` Protocol. Keyed by TensorZero's `episode_id`. |
 | **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules. Every decision is captured on `AgentResult.guardrail_log` for audit. |
 | **Real-time streaming** | `Agent.stream()` yields a typed `AgentEvent` iterator — text deltas, tool calls, thoughts, elicitation prompts, completion. Consumable directly, over Server-Sent Events, or over WebSocket. |
