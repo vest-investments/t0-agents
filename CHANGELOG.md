@@ -290,10 +290,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   `TenantIsolationMiddleware`, `PiiRedactorMiddleware`,
   `RedisRateLimitMiddleware`, and an `OTelTracerAdapter`.  Dropped
   during M5 close after a scope review (no concrete consumer asks
-  for them today).  See
-  `docs/internal/v1-refactor/logs/milestone-5-dev-log.md` §2; the
-  related open questions Q4/Q5/Q6 are marked
-  `Status: deferred` in `02-open-questions.md`.
+  for them today).
 
 ## [0.13.0] — Unreleased
 

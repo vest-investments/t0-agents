@@ -12,9 +12,7 @@ code.  If you only have time for one section, read
 > Companion reading: [`docs/run.md`](run.md),
 > [`docs/middleware.md`](middleware.md),
 > [`docs/output-modes.md`](output-modes.md),
-> [`docs/composition.md`](composition.md).  The internal architecture
-> story lives in
-> [`docs/internal/v1-refactor/00-integration-contract.md`](internal/v1-refactor/00-integration-contract.md).
+> [`docs/composition.md`](composition.md).
 
 ---
 
