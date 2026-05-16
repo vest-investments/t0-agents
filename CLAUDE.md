@@ -45,6 +45,16 @@ Public API: `from t0_agents import run_agent`
 - Async-first: agent loop and tool execution are async. Tests use `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` decorator needed).
 - `src/` layout with hatchling build backend
 
+## Commit & PR Conventions
+
+This library will be made public, so commit history is part of the deliverable — keep it readable.
+
+- **Never open a PR with a single giant commit.** Whenever the user asks to push changes and open a PR, split the work into multiple commits that tell the story of what was implemented. Each commit should be a logical, self-contained step (e.g. new module → internal call-site migration → test migration → docs → dev-log → CHANGELOG). A milestone PR typically has 5–10 commits, not 1.
+- **One concern per commit.** Mixing a refactor, a new feature, and unrelated test fixes in the same commit is a smell — split them.
+- **Match the existing style.** Conventional-commit prefixes (`feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs(scope): …`, `refactor(scope): …`) as seen in `git log`. Imperative mood, lowercase summary, ≤ 72 char first line, body wrapped at ~72 for the "why".
+- **Group, don't squash mid-stream.** If you've been working in a single session, plan the commit boundaries before staging — don't dump everything into one `git add -A` at the end.
+- Co-authored-by trailers are fine and expected when Claude assisted.
+
 ## Test Infrastructure
 
 - `tests/server.py` — Shared FastMCP test server. Tools: `add(a, b)`, `greet(name)`, `search(params: SearchParams)` (Pydantic-model parameter), `echo_no_docs(value)` (no docstring, anchors the `description=None` case)
