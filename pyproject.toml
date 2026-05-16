@@ -27,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 memory-sqlite = ["aiosqlite>=0.20.0"]
+pydantic = ["pydantic>=2.0"]
 serve = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -76,6 +77,17 @@ select = ["E", "F", "I", "N", "UP", "RUF"]
 python_version = "3.11"
 strict = true
 warn_return_any = true
+
+# ``src/t0_agents/mcp/`` is the standalone submodule (invariant §2.1
+# of the v1.0 integration contract — ``git diff src/t0_agents/mcp/``
+# must show zero changes across milestones).  v1.0 (M3) made
+# :class:`AgentResult` generic in ``T``, but ``mcp/loop.py:run_agent``
+# returns the bare ``AgentResult`` type by design.  Relax
+# ``disallow_any_generics`` for this module only so the strict check
+# does not force a modification.
+[[tool.mypy.overrides]]
+module = "t0_agents.mcp.*"
+disallow_any_generics = false
 
 [dependency-groups]
 dev = [
