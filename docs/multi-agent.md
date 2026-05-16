@@ -11,20 +11,25 @@ sub-agents as ordinary tools; calling one invokes the sub-agent's full
 Ships in the base distribution — no extras, no new dependencies beyond
 the `core` + `mcp` foundation.
 
-> **v1.0 (M4) Composers:** alongside the declarative
-> `AgentConfig.sub_agents=[...]` path documented below, v1.0 ships an
-> orthogonal **topology** surface for code-driven composition.  Nine
-> built-in topologies — `sequential`, `parallel`, `race`,
-> `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`,
-> `circuit_breaker` — orchestrate Agents (and other Composers) into
-> industrial pipelines without going through an LLM-driven delegation
-> step.  Each Composer satisfies the `Composable[Input, T]` protocol
-> so they nest uniformly; ``composer.invoke(input)`` returns the same
-> ``Run[T]`` handle as ``agent.invoke(user_message)``.  Full guide
-> ships as `docs/composition.md` in M5.  The two paths are
-> complementary: use `sub_agents=` when you want the orchestrator's
-> LLM to decide whom to delegate to; use Composers when the topology
-> is fixed in code.
+> **v1.0 Composers — orthogonal path.**  Alongside the declarative
+> `AgentConfig.sub_agents=[...]` path documented on this page, v1.0
+> ships a **topology** surface for code-driven composition.  Nine
+> built-in topologies (`sequential`, `parallel`, `race`, `consensus`,
+> `map_reduce`, `conditional`, `saga`, `retry_chain`,
+> `circuit_breaker`) compose Agents and other Composers into
+> industrial pipelines without an LLM in the routing decision.
+> Every Composer satisfies the `Composable[Input, T]` protocol;
+> `composer.invoke(input)` returns the same `Run[T]` handle as
+> `agent.invoke(user_message)`, with cancellation cascading to every
+> sub-Run and `parent_episode_id` audit threading through to
+> ClickHouse.
+>
+> Read [`docs/composition.md`](composition.md) for the full
+> reference.  Use `sub_agents=` (this page) when you want the
+> orchestrator's LLM to decide whom to delegate to; use Composers
+> when the topology is fixed in code.  The two paths compose — a
+> Composer child can have its own `AgentConfig.sub_agents=` chain,
+> and audit threads through both layers.
 
 ## Requirements
 
