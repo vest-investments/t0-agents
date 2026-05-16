@@ -105,9 +105,23 @@ async def test_two_agent_orchestration_e2e() -> None:
             tool_provider=cast(ToolProvider, orch_client),
         )
 
+        # Prompt deliberately constrains every hop so the LLM cannot
+        # produce a runaway expansion that would make the eventual
+        # ``writer_ask({message: ...})`` tool call exceed Groq's
+        # JSON-argument size budget (we saw a flake where the
+        # researcher generated a multi-thousand-character essay and
+        # the orchestrator forwarded the whole text as the writer
+        # input).  Telling each sub-agent exactly which tool to call
+        # + capping the output at "one sentence" keeps every JSON
+        # tool-call argument bounded.
         result = await orchestrator.run(
-            "Ask the researcher about RLHF, then have the writer bullet "
-            "the fact. Reply with the final bulleted answer.",
+            "Tell the researcher: call your `lookup_fact` tool with "
+            "topic='rlhf' and reply with ONLY that one sentence "
+            "(do not add any explanation).  Then tell the writer to "
+            "wrap that exact sentence in a bullet using its "
+            "`make_bullet` tool and reply with ONLY the bullet.  "
+            "Finally, return that bullet as your answer with no "
+            "extra commentary.",
         )
 
     assert result.response, "orchestrator should produce a final response"
@@ -169,7 +183,10 @@ async def test_subagent_episode_isolation() -> None:
         )
 
         result = await orchestrator.run(
-            "Ask the researcher about RLHF and return the fact verbatim.",
+            "Tell the researcher: call your `lookup_fact` tool with "
+            "topic='rlhf' and reply with ONLY that one sentence.  "
+            "Return whatever the researcher gives you verbatim, with "
+            "no extra commentary.",
         )
 
     # The LLM may or may not call the researcher — if it does, we assert
