@@ -190,6 +190,28 @@ class TestMaterialize:
         result = await out.materialize(response, attempts=[])
         assert isinstance(result.value, Customer)
         assert result.value.name == "Ada"
+        # parse_strategy must reflect that we used the permissive
+        # in-Python recovery path — not "strict", which would imply TZ
+        # delivered a clean parse.
+        assert result.parse_strategy == "permissive"
+
+    async def test_materialize_strategy_after_retry(self) -> None:
+        # When the agent recovers after one or more retries, the
+        # strategy should report "retry" — even if the recovering
+        # attempt itself only succeeded via the permissive layer.
+        out = StructuredOutput(Customer, permissive=True)
+        response = _make_response(
+            raw='{"name": "Ada", "email": "ada@example.com"}',
+            parsed={"name": "Ada", "email": "ada@example.com"},
+        )
+        prior_attempt = Attempt(
+            inference_id="prev",
+            raw_text="bad",
+            parsed=None,
+            usage=None,
+        )
+        result = await out.materialize(response, attempts=[prior_attempt])
+        assert result.parse_strategy == "retry"
 
 
 class TestRecover:

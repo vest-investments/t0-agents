@@ -145,6 +145,7 @@ class StructuredOutput(Generic[M]):
         raw_text: str = response.output.raw or ""
         parsed: Any = response.output.parsed
         attempt_count = len(attempts)
+        used_permissive = False
         accumulated_ids: list[str] = [
             a.inference_id for a in attempts if a.inference_id
         ]
@@ -154,6 +155,7 @@ class StructuredOutput(Generic[M]):
             candidate, _strategy = permissive_parse(raw_text)
             if candidate is not None:
                 parsed = candidate
+                used_permissive = True
 
         if parsed is None:
             return AgentResult(
@@ -184,13 +186,23 @@ class StructuredOutput(Generic[M]):
                 ),
             )
 
+        # Mirror JsonOutput's three-way precedence: a retry beats
+        # permissive (because retry implies prior failures), and
+        # permissive beats strict (because strict means TZ already
+        # delivered a clean parse).
+        if attempt_count > 0:
+            strategy: Literal["strict", "permissive", "retry"] = "retry"
+        elif used_permissive:
+            strategy = "permissive"
+        else:
+            strategy = "strict"
         return AgentResult(
             value=instance,
             episode_id=str(response.episode_id),
             inference_ids=accumulated_ids,
             turns=1 + attempt_count,
             diagnostics=OutputDiagnostics(
-                parse_strategy="retry" if attempt_count > 0 else "strict",
+                parse_strategy=strategy,
                 attempts=attempt_count,
                 raw_text=raw_text,
             ),
