@@ -1,8 +1,26 @@
 # Structured Outputs
 
-TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour: the single-shot `run_structured_inference()` helper, the declarative `Agent` dispatch when `function_kind="json"`, the three-layer recovery ladder that absorbs imperfect model output, the safety surface that catches incompatible configurations, the opt-in `require_parsed()` guardrail, the testing primitives, and the `json_mode` provider matrix.
+TensorZero distinguishes two function types — `chat` and `json`. This page documents how t0-agents supports the `json` flavour: the single-shot `run_structured_inference()` helper, the declarative `Agent` dispatch with single-shot output modes, the three-layer recovery ladder that absorbs imperfect model output, the safety surface that catches incompatible configurations, the opt-in `require_parsed()` guardrail, the testing primitives, and the `json_mode` provider matrix.
 
-The chat-path surface is byte-identical to v0.9.0; everything below is additive for callers who opt into `function_kind="json"`.
+The chat-path surface is byte-identical to v0.9.0; everything below is additive for callers who opt into JSON output.
+
+> **v1.0 (M3) surface.**  v1.0 replaces the v0.12 `AgentConfig(function_kind="json", json_mode="strict", output_schema=S, permissive_json_parsing=True, max_json_retries=2)` cluster with a single canonical field:
+>
+> ```python
+> from t0_agents import AgentConfig, JsonOutput
+> config = AgentConfig(
+>     name="extractor",
+>     function_name="extract_customer_info",
+>     output=JsonOutput(
+>         schema=S,  # or None to use the function's static schema
+>         json_mode="strict",
+>         permissive=True,
+>         max_retries=2,
+>     ),
+> )
+> ```
+>
+> For Pydantic-validated extraction, use `output=StructuredOutput(MyPydanticModel)` (requires `pip install 't0-agents[pydantic]'`).  The 5 legacy v0.12 kwargs raise `TypeError` if passed.  Read-side `AgentResult.{parsed, parse_strategy, json_parse_attempts, function_kind, response}` properties continue to work (Tier 0 — preserved via `@property` aliases over the new `AgentResult[T].value` field).  The `Agent.run` shim still accepts per-call `agent.run(msg, output_schema=..., json_mode=..., max_json_retries=...)` for Tier 1 byte-identity and translates them into a synthesised per-call `JsonOutput`.
 
 ## What are JSON functions?
 

@@ -20,6 +20,33 @@ from t0_agents.mcp import (
 )
 ```
 
+> **v1.0 output modes** (M3) — 11 new public symbols:
+>
+> ```python
+> from t0_agents import (
+>     OutputMode,         # Protocol[T_co]
+>     ChatOutput,         # T=str, default — tool loop
+>     JsonOutput,         # T=dict — single-shot JSON
+>     StructuredOutput,   # T=M (Pydantic BaseModel subclass)
+>     ToolCallOutput,     # T=list[ToolCall] — router pattern
+>     StreamingOutput,    # placeholder; wraps base mode
+>     OutputDiagnostics,  # parse_strategy / attempts / raw_text
+>     Recovery,           # retry / accept / fail outcomes
+>     ParseFailure,       # failure description handed to recover()
+>     Attempt,            # one past inference attempt
+>     InferenceRequest,   # mutable request descriptor
+> )
+> ```
+>
+> See `docs/output-modes.md` for the full guide (lands in M5). The
+> `[pydantic]` extra (`pip install 't0-agents[pydantic]'`) is required
+> for `StructuredOutput`. The 5 v0.12 JSON-only kwargs on
+> `AgentConfig` (`function_kind`, `json_mode`, `output_schema`,
+> `permissive_json_parsing`, `max_json_retries`) were **removed** in
+> v1.0 — passing any raises `TypeError`. The read-side
+> `AgentResult.{response, parsed, parse_strategy, json_parse_attempts,
+> function_kind}` properties remain.
+
 ---
 
 ## `run_agent`
