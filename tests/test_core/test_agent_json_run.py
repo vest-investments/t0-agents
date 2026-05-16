@@ -1,4 +1,4 @@
-"""Unit tests for ``Agent.run`` single-shot dispatch (post-M3).
+"""Unit tests for ``Agent.run`` single-shot dispatch.
 
 Drives ``Agent.run`` (Tier 1 deprecated shim) against
 ``MockGateway.script_json`` for the JSON path and the shared
@@ -105,7 +105,7 @@ class TestJsonDispatch:
         """End-to-end: a JSON agent built without a provider can still run.
 
         Mirrors the canonical ``examples/17_structured/structured_agent.py``
-        post-M3 shape — no ``fastmcp.Client``, no noop server, just
+        v1.0 shape — no ``fastmcp.Client``, no noop server, just
         ``Agent(config, t0=t0)``.
         """
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
@@ -236,7 +236,7 @@ class TestPerCallOverrides:
     async def test_per_call_jsonoutput_overrides_chat_config(self) -> None:
         # v1.0 behaviour: passing a per-call output= overrides the
         # config-level ``ChatOutput`` for the duration of this invocation.
-        # v0.12 raised ConfigurationError here — the M3 surface is
+        # v0.12 raised ConfigurationError here — the v1.0 surface is
         # additive instead (the per-call mode wins).
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _chat_agent(t0=t0)

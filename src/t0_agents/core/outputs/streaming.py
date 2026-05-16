@@ -23,14 +23,14 @@ __all__ = ["StreamingOutput"]
 class StreamingOutput:
     """Streaming-capable :class:`OutputMode` wrapper.
 
-    Wraps a ``base`` mode and forwards every protocol method.  In v1.0
+    Wraps a ``base`` mode and forwards every protocol method.  Today
     only ``base=ChatOutput()`` is supported — TensorZero does not yet
     emit ``output.parsed`` mid-stream, so ``StreamingOutput(base=
     JsonOutput(...))`` would silently degrade to a non-streaming
     pathway.  The constructor refuses bases whose
     :attr:`supports_streaming` is ``False`` with a discoverable
-    :class:`ConfigurationError` (open question Q11 — deferred to a
-    post-v1.0 milestone once TZ ships streaming JSON).
+    :class:`ConfigurationError`; native streaming JSON will arrive in
+    a future version once TensorZero ships it upstream.
 
     ``StreamingOutput(base=ChatOutput())`` is functionally equivalent
     to plain ``ChatOutput()`` — the wrapper is intentional documentation

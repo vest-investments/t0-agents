@@ -2,12 +2,12 @@
 
 Two layers coexist:
 
-- **Declarative sub-agents** (M2): ``AgentConfig.sub_agents=[...]``
+- **Declarative sub-agents** — ``AgentConfig.sub_agents=[...]``
   registers each as an MCP tool via :func:`agent_as_tool` and
   :func:`install_sub_agents`.  The orchestrator's LLM sees them as
-  ``_ask`` tools and delegates by tool call.  Unchanged in M4.
+  ``_ask`` tools and decides when to delegate.
 
-- **Topology composers** (M4): :func:`sequential`, :func:`parallel`,
+- **Topology composers** — :func:`sequential`, :func:`parallel`,
   :func:`race`, :func:`consensus`, :func:`map_reduce`,
   :func:`conditional`, :func:`saga`, :func:`retry_chain`,
   :func:`circuit_breaker`.  Each returns a :class:`Composer` whose

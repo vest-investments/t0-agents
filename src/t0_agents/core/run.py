@@ -1,18 +1,15 @@
 """First-class invocation handle for :meth:`Agent.invoke`.
 
-v1.0's central data structure: :class:`Run` represents one live or
-completed agent invocation.  It is the value returned by
-:meth:`t0_agents.core.agent.Agent.invoke` and the type Middleware
-(M2), OutputMode (M3), and Composer (M4) build on.
+:class:`Run` represents one live or completed agent invocation.  It
+is the value returned by :meth:`t0_agents.core.agent.Agent.invoke`
+and the type Middleware, OutputMode, and Composer build on.
 
-The chat path of :meth:`Agent.run` and :meth:`Agent.stream` is
-preserved byte-identical to v0.12 by routing the shims through Run:
-the first consumer's call (``result()`` vs ``events()``) picks the
-drive mode.  ``result()`` runs the non-streaming chat path (or the
-single-shot path); ``events()`` runs the streaming chat path.  Output
-modes whose :attr:`~OutputMode.supports_streaming` is ``False`` reject
-``events()`` with :class:`~t0_agents.core.exceptions.ConfigurationError`,
-mirroring v0.12's :meth:`Agent.stream` rejection for JSON agents.
+The Run drives in one of two modes: the first consumer's call
+(``result()`` vs ``events()``) picks it.  ``result()`` runs the
+non-streaming chat path (or the single-shot path); ``events()`` runs
+the streaming chat path.  Output modes whose
+:attr:`~OutputMode.supports_streaming` is ``False`` reject ``events()``
+with :class:`~t0_agents.core.exceptions.ConfigurationError`.
 
 The Run holds a :class:`weakref.ref` to its :class:`Agent`, so a
 discarded Run does not extend the gateway's lifetime.  ``replay()``
@@ -606,8 +603,8 @@ class Run(Generic[T]):
         with (so a fork-of-a-fork preserves the full conversation
         chain) followed by the boundary pair — this Run's user turn plus
         the agent's final response.  Intermediate tool turns are not
-        captured at this milestone; future milestones may extend the
-        transcript with the full middleware-level message history.
+        captured today; a future version may extend the transcript with
+        the full middleware-level message history.
         """
         if self._result is None:
             return []

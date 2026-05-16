@@ -242,7 +242,7 @@ means **no middleware** including cost tracking.
 
 ### `JsonRetryMiddleware`
 
-Activated at M3.  No-op pass-through for chat agents (`output.expects_tool_loop is True`).
+No-op pass-through for chat agents (`output.expects_tool_loop is True`).
 For single-shot agents (`JsonOutput`, `StructuredOutput`, `ToolCallOutput`):
 
 1. Initialise `attempts: list[Attempt] = []` on `ctx.extras["_output_attempts"]`.

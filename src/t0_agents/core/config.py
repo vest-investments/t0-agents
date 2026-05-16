@@ -227,9 +227,9 @@ class AgentConfig:
         ``CostTracking`` and ``JsonRetry`` are always present —
         cost-tracking wires :meth:`Run.cost` / :meth:`Run.usage`
         unconditionally, and ``JsonRetry`` activates for any non-chat
-        output mode (M3 wires it through ``ctx.output.recover()``).
+        output mode by consulting ``ctx.output.recover()``.
 
-        **Order invariant (contract §3.2).** ``SubAgentMiddleware`` must
+        **Order invariant.** ``SubAgentMiddleware`` must
         wrap ``tool_provider`` *inside* ``GuardrailsMiddleware`` so
         orchestrator-level guardrails observe sub-agent delegations
         via their ``before_tool``/``after_tool`` hooks.  Because each

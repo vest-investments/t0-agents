@@ -1,6 +1,6 @@
 # Streaming HTTP agent — SSE + WebSocket + elicitation
 
-Live demo of Phase E (Milestone M5 — Live Agent). Shows:
+Live demo of streaming agents over HTTP. Shows:
 
 * **Token-level streaming** — assistant text renders delta-by-delta as the
   LLM produces it.

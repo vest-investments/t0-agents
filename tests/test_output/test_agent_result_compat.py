@@ -3,7 +3,7 @@
 Verifies the Tier 0 byte-identity guarantee: every v0.12 read-side
 property (``response``, ``parsed``, ``parse_strategy``,
 ``json_parse_attempts``, ``function_kind``) remains readable on the
-generic ``AgentResult[T]`` after the M3 refactor.
+generic ``AgentResult[T]`` in v1.0.
 """
 
 from __future__ import annotations

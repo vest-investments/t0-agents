@@ -1,9 +1,9 @@
-"""Smoke tests: M4 does not regress the legacy ``AgentConfig.sub_agents=`` path.
+"""Smoke tests: Composers do not regress the declarative ``sub_agents=`` path.
 
 The full behavioural regression for ``examples/14_multi_agent/`` is
 covered by the existing ``tests/test_compose/test_integration.py``
 (integration-marked).  This file is a lightweight smoke test that
-imports the legacy public API and confirms a config-time check
+imports the declarative public API and confirms a config-time check
 still rejects the documented mis-configuration.
 """
 
@@ -22,20 +22,20 @@ from t0_agents import (
 
 
 def test_legacy_sub_agents_path_still_exists() -> None:
-    """The M2 declarative ``sub_agents=`` path is still importable.
+    """The declarative ``sub_agents=`` path is still importable.
 
-    M4 adds Composers as an additive surface — it does not remove or
-    deprecate the v0.12 ``AgentConfig.sub_agents=`` path nor the M2
-    ``SubAgentMiddleware``.
+    Composers add a code-driven topology surface that is additive —
+    they do not remove or deprecate the declarative
+    ``AgentConfig.sub_agents=`` path nor ``SubAgentMiddleware``.
     """
     assert callable(agent_as_tool)
     assert SubAgentMiddleware is not None
-    # SubAgentMiddleware has the M2 protocol shape.
+    # SubAgentMiddleware follows the Middleware protocol shape.
     assert hasattr(SubAgentMiddleware, "__call__")
 
 
 def test_agent_is_composable() -> None:
-    """An Agent satisfies the M4 Composable protocol structurally."""
+    """An Agent satisfies the Composable protocol structurally."""
     # We don't construct a live Agent here (would need a gateway);
     # just verify the class is structurally a Composable when
     # constructed.

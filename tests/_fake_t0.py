@@ -8,7 +8,7 @@ satisfies the runtime contract without subclassing the real Rust-backed type.
 Extracted from ``tests/test_mcp/test_loop.py`` so that multiple test modules
 can share a single source of truth for the T0 mock contract.
 
-Phase E adds streaming fakes: ``stream=True`` on ``FakeT0.inference``
+Supports streaming fakes: ``stream=True`` on ``FakeT0.inference``
 returns an async iterator over a scripted ``list[ChatChunk]``.  Build
 those scripts with :func:`chat_chunk` / :func:`text_chunk` /
 :func:`tool_call_chunk` / :func:`thought_chunk` / :func:`final_chunk`.
@@ -34,7 +34,7 @@ from tensorzero.types import (
 class FakeUsage:
     """Duck-typed stand-in for ``tensorzero.Usage``.
 
-    Only ``cost`` is read by the Phase C guardrail cost-tracking path.
+    Only ``cost`` is read by the guardrail cost-tracking path.
     ``input_tokens`` / ``output_tokens`` stay here so future tests that
     exercise token-budget guardrails can populate them without touching
     the fake contract again.
@@ -50,7 +50,7 @@ class FakeChatResponse:
     """Duck-typed stand-in for ``tensorzero.types.ChatInferenceResponse``.
 
     Carries ``content``, ``episode_id``, ``inference_id`` (read by
-    ``run_agent``'s main loop) and ``usage`` (read by the Phase C
+    ``run_agent``'s main loop) and ``usage`` (read by the
     ``on_inference`` cost-tracker).  ``usage`` defaults to an empty
     :class:`FakeUsage` so existing tests that never mention cost keep
     working unchanged.
@@ -84,7 +84,7 @@ class FakeListInferencesResponse:
 
 
 # ---------------------------------------------------------------------------
-# Streaming helpers (Phase E)
+# Streaming helpers
 # ---------------------------------------------------------------------------
 
 

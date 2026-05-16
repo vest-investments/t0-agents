@@ -322,8 +322,9 @@ even though each Run only records its boundary.
 Third-party Composer authors who need to build their own topology
 without a single owning Agent can construct a `Run` with `agent=None`
 and a custom drive callable.  `CompositeRun` (the implementation
-behind every M4 topology factory) does exactly this — the parent
-Run has no Agent of its own; the sub-Runs each carry their own.
+behind every topology factory in `compose/`) does exactly this —
+the parent Run has no Agent of its own; the sub-Runs each carry
+their own.
 
 The trade-off is that `feedback()` / `replay()` / `fork()` will raise
 `RuntimeError` because they require an Agent to drive against.
@@ -333,8 +334,7 @@ That's intentional — sub-Run-level methods are reachable through
 anyway.
 
 This is an advanced surface — most users don't need to know it
-exists.  Documented here for completeness so the M4 carry-forward
-note has a stable home.
+exists.  Documented here for completeness.
 
 ---
 

@@ -24,9 +24,10 @@ conditional(routes={...}))`` type-checks at every layer.
 
 The narrow ``Composer.invoke(input, *, eager, context, cancel_timeout)``
 surface is deliberate — composers do not forward Agent-level kwargs to
-their children (per the M2/M3 dev-log carry-forward "composers should
-not inject into sub-runs").  ``parent_episode_id`` correlation is
-threaded automatically by the runtime via the
+their children.  Each child owns its own configuration; a composer
+that injected kwargs into sub-runs would silently override the
+configuration the child was constructed with.  ``parent_episode_id``
+correlation is threaded automatically by the runtime via the
 :func:`~t0_agents.compose.orchestrator.bind_parent_episode_id`
 ContextVar and the TZ-native ``tags={"t0_agents.parent_episode_id":
 ...}`` kwarg on Agent children.
