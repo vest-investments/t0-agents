@@ -345,11 +345,13 @@ every retry attempt all failed. Chat runs are a strict no-op because
 `parsed` is structurally absent on the chat path.
 
 ```python
+from t0_agents import JsonOutput
 from t0_agents.guardrails import require_parsed
 
 AgentConfig(
-    function_kind="json",
-    json_mode="strict",
+    name="extractor",
+    function_name="extract_customer",
+    output=JsonOutput(json_mode="strict"),
     guardrails=[require_parsed()],
 )
 ```
@@ -361,14 +363,14 @@ AgentConfig(
 - The error message carries the run's `parse_strategy` and
   `json_parse_attempts` for debugging the layer that "should have" recovered.
 - For chat runs the hook returns `None` immediately — adding the guardrail
-  to a `function_kind="chat"` config is safe (no false positives).
+  to a `ChatOutput` agent is safe (no false positives).
 
 **When to use it**
 
 - Interactive workflows that must surface a structured object to the user —
   silently returning `parsed=None` is worse than an explicit failure.
 - Batch jobs whose downstream consumer cannot handle a null payload — pair
-  with the `max_json_retries` knob to define exactly how hard the agent
+  with `JsonOutput(max_retries=...)` to define exactly how hard the agent
   tries before giving up.
 - Schema-validation pipelines where "parseable JSON" is a strictly weaker
   guarantee than "schema-conforming JSON" — combine with a Pydantic
