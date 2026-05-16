@@ -574,6 +574,19 @@ value beats the implicit memory injection. Caller `None` (the
 default) is byte-identical to today's behaviour: only the memory
 strategy contributes.
 
+#### Incompatible with raw `system="<str>"`
+
+`memory_strategy="system_template"` writes a dict to `input.system`
+via the configured template, so it cannot be combined with the raw
+`system` string kwarg on `Agent.run` / `Agent.stream` — the two
+shapes are mutually exclusive at the gateway. The `Agent` rejects
+that combination up front with `ValueError`. If you need to pass a
+raw system prompt at runtime (the prompt-as-a-service shape — see
+[`system` vs `system_arguments`](api-reference.md#runtime-system-prompt-system-vs-system_arguments)),
+switch to `memory_strategy="prepended_message"` (the default) or
+`memory_strategy="messages"`. Both leave `input.system` untouched
+and remain compatible with `system="<str>"`.
+
 ---
 
 ## Built-in backends

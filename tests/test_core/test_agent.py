@@ -313,6 +313,43 @@ class TestAgent:
         await agent.run("go", system_arguments={})
         assert "system" not in t0.calls[0]["input"]
 
+    async def test_run_system_string_forwarded(self) -> None:
+        """``system="..."`` reaches t0.inference as a raw string in input.system."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0)
+        await agent.run("go", system="Reply only in haiku.")
+        assert t0.calls[0]["input"]["system"] == "Reply only in haiku."
+
+    async def test_run_system_and_system_arguments_rejected(self) -> None:
+        """Caller passing both kwargs is rejected up front with ``ValueError``."""
+        t0 = FakeT0([])
+        agent = _make_agent(t0=t0)
+        with pytest.raises(ValueError, match="Pass either `system`"):
+            await agent.run(
+                "go", system="raw", system_arguments={"foo": "bar"},
+            )
+        assert t0.calls == []
+
+    async def test_run_system_with_system_template_strategy_rejected(self) -> None:
+        """``system=`` is incompatible with ``memory_strategy='system_template'``."""
+        t0 = FakeT0([])
+        agent = _make_agent(t0=t0, memory_strategy="system_template")
+        with pytest.raises(
+            ValueError, match="memory_strategy='system_template'"
+        ):
+            await agent.run("go", system="raw")
+        assert t0.calls == []
+
+    async def test_run_system_with_prepended_message_strategy_ok(self) -> None:
+        """``memory_strategy='prepended_message'`` leaves ``input.system`` alone,
+        so ``system=`` is allowed."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(
+            t0=t0, memory_strategy="prepended_message",
+        )
+        await agent.run("go", system="raw prompt")
+        assert t0.calls[0]["input"]["system"] == "raw prompt"
+
     async def test_none_timeout_uses_default(self) -> None:
         """tool_timeout=None on config → 30.0 passed to run_agent."""
         from fastmcp.client.client import CallToolResult

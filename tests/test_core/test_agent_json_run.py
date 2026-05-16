@@ -141,6 +141,32 @@ class TestJsonDispatch:
         assert result.response == "hello"
         assert result.response_source == "text"
 
+    async def test_json_run_system_string_forwarded(self) -> None:
+        """``system="..."`` flows through ``_run_json`` to ``input.system``."""
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
+        agent = _json_agent(t0=t0)
+
+        await agent.run("hi", system="Extract structured fields from prose.")
+
+        kwargs = t0.calls[0]
+        assert kwargs["input"]["system"] == (
+            "Extract structured fields from prose."
+        )
+
+    async def test_json_run_system_and_system_arguments_rejected(self) -> None:
+        """Mutex applies to the JSON dispatch path too — checked before the
+        first inference is issued."""
+        t0 = MockGateway.script_json([])
+        agent = _json_agent(t0=t0)
+
+        with pytest.raises(ValueError, match="Pass either `system`"):
+            await agent.run(
+                "hi",
+                system="raw",
+                system_arguments={"who": "world"},
+            )
+        assert t0.calls == []
+
 
 class TestPerCallOverrides:
     async def test_per_call_output_schema_override(self) -> None:

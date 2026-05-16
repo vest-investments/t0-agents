@@ -215,3 +215,47 @@ async def test_streaming_loop_forwards_config_knobs() -> None:
     assert call["dryrun"] is True
     assert call["tags"] == {"scope": "unit-test"}
     assert call["namespace"] == "test-ns"
+
+
+async def test_streaming_loop_system_string_forwarded() -> None:
+    """``system="..."`` reaches the streaming inference call as a raw string."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    async for _ in runner.stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "hi",
+        "agent",
+        system="Reply only in haiku.",
+    ):
+        pass
+
+    assert fake_t0.calls[0]["input"]["system"] == "Reply only in haiku."
+
+
+async def test_streaming_loop_system_and_system_arguments_rejected() -> None:
+    """Passing both kwargs raises ``ValueError`` before any chunk is yielded."""
+    fake_t0 = FakeT0(responses=[])
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    with pytest.raises(ValueError, match="Pass either `system`"):
+        async for _ in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "hi",
+            "agent",
+            system="raw",
+            system_arguments={"foo": "bar"},
+        ):
+            pass
+    assert fake_t0.calls == []

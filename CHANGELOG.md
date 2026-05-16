@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.0] — Unreleased
+
+Expose TensorZero's raw-string `input.system` form on every public
+inference surface as the escape hatch for prompt-as-a-service flows
+where the prompt body itself is runtime data.  The existing
+`system_arguments` (template-variable dict) stays the recommended
+default; the new `system` kwarg is layered alongside it, with up-front
+validation that catches the combinations TensorZero would reject on
+the wire.  Backwards compatible: any caller that does not pass
+`system=` keeps today's behaviour byte-for-byte.
+
+### Added
+
+- **`system: str | None = None`** kwarg on every public inference
+  surface: `run_agent`, `Agent.run`, `Agent.stream`,
+  `run_structured_inference`, and `StreamingAgentLoop.stream`.  When
+  set, the string is forwarded as `input.system` (raw form) to
+  TensorZero on every inference call.  Only valid when the configured
+  function does **not** declare `schemas.system.path`; the gateway
+  returns HTTP 400 otherwise.  Documented as an escape hatch — prefer
+  `system_arguments` (with a configured system template) for
+  production code so ClickHouse captures structured prompt variables
+  for fine-tuning, A/B testing, and observability.
+- **`docs/api-reference.md` § "Runtime system prompt: `system` vs
+  `system_arguments`"** — decision matrix for the two kwargs across
+  schema'd / schema-less functions, plus guidance on when to reach
+  for each.
+- **`examples/18_raw_system_prompt/`** — runnable PaaS-style demo:
+  the same `Agent` is invoked three times with three runtime-supplied
+  personalities (haiku, pirate, lawyer), driving the model purely
+  through `system="..."`.  Companion to `examples/03_system_prompt/`
+  (which demonstrates the templated, recommended pattern via
+  `system_template`).
+
+### Validated
+
+- `system` and `system_arguments` are mutually exclusive on every
+  surface — passing both raises `ValueError` before any inference is
+  issued.  Both kwargs target `input.system`, so the gateway would
+  reject the mixed shape anyway; t0-agents fails fast with a clearer
+  message.
+- `Agent.run` / `Agent.stream` additionally reject `system=<str>` when
+  `memory_strategy="system_template"` is in effect.  That strategy
+  injects `memory_context` into `input.system` via the configured
+  template (dict shape), which is incompatible with a raw string.
+  Callers needing raw `system` alongside memory should switch to
+  `memory_strategy="prepended_message"` (the default) or
+  `memory_strategy="messages"`; both leave `input.system` untouched.
+
 ## [0.12.0] — 2026-05-15
 
 Relax the `Agent` constructor contract so JSON-mode agents
