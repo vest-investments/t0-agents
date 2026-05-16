@@ -23,7 +23,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Dir-name ``14_multi_agent`` starts with a digit, so we cannot import
+# Dir-name ``08_multi_agent`` starts with a digit, so we cannot import
 # siblings as ``from examples.08_multi_agent.agents import ...``.  Add
 # the example directory to ``sys.path`` and import ``agents`` as a
 # top-level module — same trick ``examples/10_cli/agent.py`` uses to
@@ -34,7 +34,7 @@ from agents import orchestrator_factory  # type: ignore[import-not-found]
 
 async def main() -> None:
     async with orchestrator_factory() as orchestrator:
-        result = await orchestrator.run(
+        result = await orchestrator.invoke(
             "Write a short report on RLHF advances in 2025. "
             "Use the researcher to find relevant papers, then use the "
             "writer to format the final deliverable as a markdown report.",

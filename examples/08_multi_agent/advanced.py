@@ -46,7 +46,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
 
-# Dir-name ``14_multi_agent`` starts with a digit, so we cannot import
+# Dir-name ``08_multi_agent`` starts with a digit, so we cannot import
 # siblings via dotted-path imports.  Add the example directory to
 # ``sys.path`` and import the leaf servers as top-level modules — same
 # trick ``main.py`` + ``agents.py`` use.
@@ -77,7 +77,7 @@ async def nested_orchestrator_factory() -> AsyncIterator[Agent]:
                 name="researcher",
                 function_name="research",
                 max_turns=6,
-                tags={"example": "14_multi_agent", "role": "researcher"},
+                tags={"example": "08_multi_agent", "role": "researcher"},
             ),
             t0=t0,
             tool_provider=cast(Any, arxiv_client),
@@ -87,7 +87,7 @@ async def nested_orchestrator_factory() -> AsyncIterator[Agent]:
                 name="writer",
                 function_name="writing",
                 max_turns=6,
-                tags={"example": "14_multi_agent", "role": "writer"},
+                tags={"example": "08_multi_agent", "role": "writer"},
             ),
             t0=t0,
             tool_provider=cast(Any, markdown_client),
@@ -99,7 +99,7 @@ async def nested_orchestrator_factory() -> AsyncIterator[Agent]:
                 function_name="orchestrator",
                 max_turns=10,
                 sub_agents=[researcher, writer],
-                tags={"example": "14_multi_agent", "role": "report_drafter"},
+                tags={"example": "08_multi_agent", "role": "report_drafter"},
             ),
             t0=t0,
             tool_provider=cast(Any, drafter_client),
@@ -114,7 +114,7 @@ async def nested_orchestrator_factory() -> AsyncIterator[Agent]:
                 function_name="orchestrator",
                 max_turns=6,
                 sub_agents=[report_drafter],
-                tags={"example": "14_multi_agent", "role": "project_lead"},
+                tags={"example": "08_multi_agent", "role": "project_lead"},
             ),
             t0=t0,
             tool_provider=cast(Any, lead_client),
@@ -124,7 +124,7 @@ async def nested_orchestrator_factory() -> AsyncIterator[Agent]:
 
 async def main() -> None:
     async with nested_orchestrator_factory() as project_lead:
-        result = await project_lead.run(
+        result = await project_lead.invoke(
             "Produce a one-page markdown report on RLHF advances in 2025. "
             "Delegate the drafting — do not try to write it yourself.",
         )

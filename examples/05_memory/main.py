@@ -3,7 +3,7 @@
 Runs the same ``Agent`` twice on the same ``episode_id`` — first with
 ``InMemoryMemory`` (ephemeral) and then with ``SqliteMemory`` (persistent,
 including a simulated process restart).  Illustrates how the framework
-hydrates and persists state around every ``.run()`` call via the configured
+hydrates and persists state around every ``invoke()`` call via the configured
 ``MemoryProvider``.
 
 Requirements:

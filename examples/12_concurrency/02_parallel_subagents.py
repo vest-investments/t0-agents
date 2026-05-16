@@ -128,7 +128,7 @@ async def _run_once(*, parallel_tools: bool) -> float:
             tool_provider=cast(Any, orchestrator_client),
         )
         start = time.monotonic()
-        result = await orchestrator.run("Produce a short report on CoT.")
+        result = await orchestrator.invoke("Produce a short report on CoT.")
         elapsed = time.monotonic() - start
     print(
         f"  parallel_tools={parallel_tools!s:<5} -> {elapsed:5.2f}s "

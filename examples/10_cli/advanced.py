@@ -151,7 +151,7 @@ async def assistant_with_audit() -> AsyncIterator[Agent]:
                 function_name="agent",
                 max_turns=10,
                 memory=InMemoryMemory(),
-                tags={"example": "13_tui", "variant": "audit"},
+                tags={"example": "10_cli", "variant": "audit"},
             ),
             t0=t0,
             tool_provider=client,

@@ -53,7 +53,7 @@ async def assistant() -> AsyncIterator[Agent]:
                 function_name="agent",
                 max_turns=10,
                 memory=InMemoryMemory(),
-                tags={"example": "13_tui"},
+                tags={"example": "10_cli"},
             ),
             t0=t0,
             tool_provider=client,
