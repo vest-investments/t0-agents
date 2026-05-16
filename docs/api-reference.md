@@ -217,7 +217,7 @@ result = await agent.invoke(
 )
 ```
 
-See [`examples/18_raw_system_prompt/`](../examples/18_raw_system_prompt/)
+See [`examples/02_agent_class/`](../examples/02_agent_class/)
 for the runnable PaaS-style demo.
 
 ---

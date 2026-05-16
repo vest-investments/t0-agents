@@ -64,7 +64,7 @@ The schema file is plain JSON Schema:
 }
 ```
 
-See `examples/17_structured/` for a runnable copy.
+See `examples/03_output_modes/` for a runnable copy.
 
 ## Single-shot JSON inference
 
@@ -188,7 +188,7 @@ async with await AsyncTensorZeroGateway.build_http(
 # result.inference_ids  — [<one uuid>]
 ```
 
-JSON-mode agents are single-shot and never dispatch MCP tools, so the `Agent` constructor accepts no `tool_provider` here — pass just the configuration and the TensorZero gateway. (Chat-mode agents still require a `tool_provider`; see [`docs/agent.md`](agent.md).) Passing an explicit `tool_provider` to a JSON agent is still accepted — useful if you mix function kinds across a single fleet — but it is no longer required. For a runnable copy see `examples/17_structured/structured_agent.py`.
+JSON-mode agents are single-shot and never dispatch MCP tools, so the `Agent` constructor accepts no `tool_provider` here — pass just the configuration and the TensorZero gateway. (Chat-mode agents still require a `tool_provider`; see [`docs/agent.md`](agent.md).) Passing an explicit `tool_provider` to a JSON agent is still accepted — useful if you mix function kinds across a single fleet — but it is no longer required. For a runnable copy see `examples/03_output_modes/structured_agent.py`.
 
 ### Per-call overrides
 
@@ -532,5 +532,5 @@ Open follow-up candidates:
 - [Memory](memory.md) — `MemoryRecord.agent_response` carries the raw JSON string for JSON runs; the inference id list captures every retry attempt.
 - [Streaming](streaming.md) — chat-only.  `Run.events(...)` on a JSON agent raises `ConfigurationError`; see [Why you cannot stream JSON functions](#why-you-cannot-stream-json-functions) above.
 - [Testing](testing.md#testing-json-agents) — `MockGateway.script_json` / `canned_json` and the five JSON-aware assert helpers.
-- [`examples/17_structured/`](../examples/17_structured/) — five runnable demos: single-shot helper, `Agent` dispatch, local and real-provider recovery ladder, dynamic-schema NER.
+- [`examples/03_output_modes/`](../examples/03_output_modes/) — five runnable demos: single-shot helper, `Agent` dispatch, local and real-provider recovery ladder, dynamic-schema NER.
 - [TensorZero structured-outputs guide](https://www.tensorzero.com/docs/gateway/generate-structured-outputs) — authoritative source for `output_schema`, `json_mode`, `response_format`, and provider quirks.

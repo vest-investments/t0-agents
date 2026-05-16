@@ -375,13 +375,13 @@ the client as soon as it arrives.
 
 ### Intermediate — REPL with Rich
 
-[`examples/13_tui/`](../examples/13_tui/) wraps `Run.events()` in a
+[`examples/10_cli/`](../examples/10_cli/) wraps `Run.events()` in a
 `rich.live.Live` display.  `t0_agents.cli.TUIRenderer` folds the event
 iterator into a live panel; `rich_elicitation_handler` provides
 browser-free `Prompt.ask()` modals when a tool calls `ctx.elicit()`.
 
 ```bash
-uv run t0-agents run examples.13_tui.agent:assistant
+uv run t0-agents run examples.10_cli.agent:assistant
 ```
 
 See [`docs/cli.md`](cli.md) for the factory convention and the three
@@ -389,7 +389,7 @@ CLI subcommands (`run`, `serve`, `info`).
 
 ### Advanced — HTTP with SSE, WebSocket, and elicitation
 
-[`examples/12_streaming_http/`](../examples/12_streaming_http/) ships a
+[`examples/07_streaming/`](../examples/07_streaming/) ships a
 full browser demo — a FastAPI app, a vanilla-JS client, a FastMCP
 server with elicitation-gated tools, and `InMemoryMemory` for
 multi-turn conversations.  The recipe below wires the four HTTP
@@ -490,7 +490,7 @@ auto-declines the pending request — no hanging tool.
 #### Browser client recipe
 
 A 180-line vanilla-JS client that covers every event is in
-[`examples/12_streaming_http/static/app.js`](../examples/12_streaming_http/static/app.js).
+[`examples/07_streaming/static/app.js`](../examples/07_streaming/static/app.js).
 The core pattern:
 
 ```js
@@ -667,10 +667,10 @@ Streaming makes a single agent's work visible. When a single agent is not enough
 
 ## See also
 
-- [`examples/12_streaming_http/`](../examples/12_streaming_http/) —
+- [`examples/07_streaming/`](../examples/07_streaming/) —
   runnable browser demo covering every event type and the
   elicitation round-trip.
-- [`examples/13_tui/`](../examples/13_tui/) — streaming REPL with
+- [`examples/10_cli/`](../examples/10_cli/) — streaming REPL with
   Rich and `rich_elicitation_handler`.
 - [`docs/elicitation.md`](elicitation.md) — the HITL contract the WS
   route bridges.

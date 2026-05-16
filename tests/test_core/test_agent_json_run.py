@@ -1,11 +1,11 @@
-"""Unit tests for ``Agent.run`` single-shot dispatch.
+"""Unit tests for ``Agent.invoke`` single-shot dispatch.
 
-Drives ``Agent.run`` (Tier 1 deprecated shim) against
+Drives ``Agent.invoke`` with a ``JsonOutput`` against
 ``MockGateway.script_json`` for the JSON path and the shared
-``tests/_fake_t0`` for the chat-byte-identity assertions.  The shim
-translates per-call legacy JSON kwargs into a per-call
-:class:`JsonOutput` so v0.12 callers keep working byte-identical
-(stderr now carries a ``DeprecationWarning``).
+``tests/_fake_t0`` for the chat-byte-identity assertions.  Covers the
+config-level ``output=JsonOutput(...)`` shape as well as per-call
+overrides via ``Agent.invoke(msg, output=JsonOutput(...))``.
+
 ``MockGateway.script_json`` is the JSON-flavoured sibling of
 ``MockGateway.script`` — see ``tests/test_testing/test_json_helpers.py``
 for the dict-shape semantic (auto-derive ``parsed`` when the key is
@@ -104,7 +104,7 @@ class TestJsonDispatch:
     async def test_json_agent_runs_without_tool_provider(self) -> None:
         """End-to-end: a JSON agent built without a provider can still run.
 
-        Mirrors the canonical ``examples/17_structured/structured_agent.py``
+        Mirrors the canonical ``examples/03_output_modes/structured_agent.py``
         v1.0 shape — no ``fastmcp.Client``, no noop server, just
         ``Agent(config, t0=t0)``.
         """

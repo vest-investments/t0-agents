@@ -258,7 +258,7 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `examples/{02,03,04,05,06,07,18}/docker-compose.yml` pinned the
   non-existent `clickhouse/clickhouse-server:lts`; replaced with
   the canonical `clickhouse:lts`.
-- **`examples/02_basic_agent/README.md` directory drift** — README
+- **`examples/01_first_agent/README.md` directory drift** — README
   still referenced the directory by its old name `01_basic_agent`;
   replaced and stale forward-reference removed.
 - **429 regression test** — `tests/test_mcp/test_harness.py::
@@ -302,10 +302,10 @@ the wire.  Backwards compatible: any caller that does not pass
   `system_arguments`"** — decision matrix for the two kwargs across
   schema'd / schema-less functions, plus guidance on when to reach
   for each.
-- **`examples/18_raw_system_prompt/`** — runnable PaaS-style demo:
+- **`examples/02_agent_class/`** — runnable PaaS-style demo:
   the same `Agent` is invoked three times with three runtime-supplied
   personalities (haiku, pirate, lawyer), driving the model purely
-  through `system="..."`.  Companion to `examples/03_system_prompt/`
+  through `system="..."`.  Companion to `examples/02_agent_class/`
   (which demonstrates the templated, recommended pattern via
   `system_template`).
 
@@ -358,7 +358,7 @@ passing an explicit provider) continues to work byte-identically.
 
 ### Examples and docs
 
-- `examples/17_structured/structured_agent.py`,
+- `examples/03_output_modes/structured_agent.py`,
   `ner_dynamic_schema.py`, `recovery_real_provider.py`, and
   `recovery_demo.py` no longer build a placeholder `FastMCP("noop")`
   server just to satisfy the constructor; they pass only the gateway.
@@ -513,7 +513,7 @@ is bit-for-bit untouched.
 
 #### Examples and docs
 
-- **`examples/17_structured/`** — five runnable demos:
+- **`examples/03_output_modes/`** — five runnable demos:
   - `main.py` — `run_structured_inference()` against the
     `extract_customer_info` function.
   - `structured_agent.py` — same function through `Agent.run`.
@@ -525,7 +525,7 @@ is bit-for-bit untouched.
     `extract_entities` function showing per-call `output_schema`
     overrides and a per-call `json_mode = "tool"` swap.
 - **`config/functions/extract_entities/`** and the mirrored
-  `examples/17_structured/config/functions/extract_entities/` —
+  `examples/03_output_modes/config/functions/extract_entities/` —
   four-category NER schema (people, locations, organizations, topics)
   and system template, declared in both the repo-root and example-folder
   `config/tensorzero.toml` under `[functions.extract_entities]`.
@@ -707,7 +707,7 @@ is bit-for-bit untouched.
   Protocol, and that `MockToolProvider.call_tool` returns a real
   `fastmcp.CallToolResult`.  Fails fast on any future drift between
   mocks and the real surfaces.
-- **Example** [`examples/15_testing/`](examples/15_testing/) — a
+- **Example** [`examples/11_testing/`](examples/11_testing/) — a
   three-tool demo agent (`agent.py`) with both `test_agent_unit.py`
   (runs in < 1 s, no Docker, no API keys) and `test_agent_embedded.py`
   (opt-in via `RUN_EMBEDDED_TESTS=1`), plus a self-contained
@@ -772,12 +772,12 @@ is bit-for-bit untouched.
 - **Public doc** [`docs/multi-agent.md`](docs/multi-agent.md)
   covering the why, the public API, the error model, episode
   propagation, and the in-process / stable-schema caveats.
-- **Example** [`examples/14_multi_agent/`](examples/14_multi_agent/)
+- **Example** [`examples/08_multi_agent/`](examples/08_multi_agent/)
   ships a researcher + writer + orchestrator trio with its own
   `docker-compose.yml`, `config/tensorzero.toml` (three functions:
   `research`, `writing`, `orchestrator`), and both a `main.py`
   entrypoint and an `orchestrator_factory` for
-  `t0-agents run examples.14_multi_agent.agents:orchestrator_factory`.
+  `t0-agents run examples.08_multi_agent.agents:orchestrator_factory`.
 
 ## [0.7.0] — Unreleased
 
@@ -802,7 +802,7 @@ is bit-for-bit untouched.
     so `--streaming` is only useful for tools that never call
     `ctx.elicit` — for full browser elicitation, call `create_app`
     directly with a `client_factory` + `elicitation_client_factory`
-    (see `examples/12_streaming_http/agent_app.py`). `--host`,
+    (see `examples/07_streaming/agent_app.py`). `--host`,
     `--port`, `--deployment` flags.
   - `t0-agents info <module:attr>` — prints a Rich `Table` of the
     loaded `AgentConfig`.
@@ -830,7 +830,7 @@ is bit-for-bit untouched.
   that distinguishes "malformed spec", "missing module", "missing
   attribute", "resolved to a bare Agent instance", and "resolved to a
   non-callable" so the error path is actionable.
-- Example `examples/13_tui/` — runnable demo with a FastMCP server
+- Example `examples/10_cli/` — runnable demo with a FastMCP server
   (`add`, `set_reminder` with `ctx.elicit(response_type=Reminder)`),
   a `@asynccontextmanager` factory, and a README walkthrough of the
   three subcommands.
@@ -893,7 +893,7 @@ is bit-for-bit untouched.
   WSElicitationRequest`) — Pydantic v2 envelopes for every frame in each
   direction.  Documented in `docs/streaming.md`.
 - **`sse-starlette>=2.0`** added to the `[serve]` extra.
-- Example `examples/12_streaming_http/` — runnable demo with a FastMCP
+- Example `examples/07_streaming/` — runnable demo with a FastMCP
   server, `agent_app.py`, browser WS client (`static/index.html` +
   `static/app.js`) covering every `AgentEvent.type` and the elicitation
   round-trip.
@@ -970,7 +970,7 @@ is bit-for-bit untouched.
 - **`Agent.warmup()`** — async readiness hook. Default no-op;
   override in a subclass to front-load readiness probes. Called by
   `serve.build_lifespan` during FastAPI startup.
-- Example `examples/11_http_agent/` — runnable single-agent demo with
+- Example `examples/09_serving/` — runnable single-agent demo with
   `server.py`, `agent_app.py`, `run.sh`, `client.sh`, and a README
   that covers the multi-agent `mount_agent` pattern and the
   `share_client=True` trade-off.
@@ -1026,7 +1026,7 @@ is bit-for-bit untouched.
   by `Agent.run()` to track cumulative cost for `max_cost`.
 - **`AgentResult.guardrail_log`** — new field (default empty list)
   carrying per-hook activations for audit and manual feedback emission.
-- Example `examples/10_guardrails/` demonstrating all four built-ins
+- Example `examples/06_guardrails/` demonstrating all four built-ins
   composed on one agent with a CLI approval handler.
 - Public documentation at `docs/guardrails.md`.
 
@@ -1055,7 +1055,7 @@ is bit-for-bit untouched.
   `"system_template"`).
 - `system_arguments` keyword argument on `run_agent` — forwards template
   arguments to `input.system.arguments` in TensorZero inference calls.
-- Example `examples/09_memory/` demonstrating cross-session memory.
+- Example `examples/05_memory/` demonstrating cross-session memory.
 - Public documentation at `docs/memory.md`.
 
 ## [0.2.0] — Unreleased
@@ -1073,7 +1073,7 @@ is bit-for-bit untouched.
   parameters are invalid (empty name, negative max_turns, etc.).
 - `tags` and `namespace` keyword arguments on `run_agent` — forwarded to every
   `t0.inference()` call for observability and experimentation routing.
-- Example `examples/08_agent_class/` demonstrating `Agent` usage.
+- Example `examples/02_agent_class/` demonstrating `Agent` usage.
 - Public documentation at `docs/agent.md`.
 
 ### Changed

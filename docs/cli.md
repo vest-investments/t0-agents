@@ -62,7 +62,7 @@ quickstart for the CLI (the factory contract requires live resources).
 ## Quickstart
 
 Run the shipped example agent end-to-end. The example lives at
-[`examples/13_tui/`](../examples/13_tui/) and exposes two tools: `add`
+[`examples/10_cli/`](../examples/10_cli/) and exposes two tools: `add`
 (plain) and `set_reminder` (elicitation).
 
 ```bash
@@ -70,7 +70,7 @@ docker compose up -d                   # boots gateway + clickhouse
 export GROQ_API_KEY=gsk_...            # or whichever provider the function uses
 uv sync --extra cli
 
-uv run t0-agents info examples.13_tui.agent:assistant
+uv run t0-agents info examples.10_cli.agent:assistant
 ```
 
 `info` prints a Rich table with every field on the `AgentConfig` the
@@ -93,7 +93,7 @@ AgentConfig · tui-assistant
 Now start the streaming REPL:
 
 ```bash
-uv run t0-agents run examples.13_tui.agent:assistant
+uv run t0-agents run examples.10_cli.agent:assistant
 ```
 
 A cyan Rich panel appears, titled with the agent's name. Type at the
@@ -314,7 +314,7 @@ attribute is not callable.
 Before importing, the loader prepends the current working directory to
 `sys.path` if it isn't already there. Installed console scripts do not
 get `cwd` on `sys.path` the way `python script.py` does, so this lets
-`t0-agents run examples.13_tui.agent:assistant` work from the repo root
+`t0-agents run examples.10_cli.agent:assistant` work from the repo root
 without a `PYTHONPATH=.` prefix.
 
 ### `AgentFactory`
@@ -556,7 +556,7 @@ Use `--streaming` only when the served agent's tools never call
 For full streaming + browser elicitation, drop the CLI and call
 [`create_app`](serving.md) directly with a `client_factory` plus an
 `elicitation_client_factory`. The reference implementation is at
-[`examples/12_streaming_http/agent_app.py`](../examples/12_streaming_http/agent_app.py),
+[`examples/07_streaming/agent_app.py`](../examples/07_streaming/agent_app.py),
 and the protocol reference lives in [Streaming](streaming.md).
 
 ---
@@ -675,9 +675,9 @@ async def my_elicitation_handler(message, response_type, params, context):
 For a fully runnable version that also composes on
 `make_rich_elicitation_handler` (so the stock pause / resume + schema
 dispatch stay in place) and writes an audit trail, see
-[`examples/13_tui/advanced.py`](../examples/13_tui/advanced.py) — it
+[`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) — it
 exposes `assistant_with_audit`, runnable via `t0-agents run
-examples.13_tui.advanced:assistant_with_audit`.
+examples.10_cli.advanced:assistant_with_audit`.
 
 The binding is a process-wide module global guarded by a
 `threading.Lock`. It is NOT a `ContextVar` on purpose: FastMCP's
@@ -777,7 +777,7 @@ recursion. For scalar responses, FastMCP wraps the field in
   prompt dispatch — the wrapper adds behaviour (logging, consent gates,
   side-channel notifications) while the stock handler keeps driving
   the actual prompts. See
-  [`examples/13_tui/advanced.py`](../examples/13_tui/advanced.py) for a
+  [`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) for a
   runnable audit-logging wrapper.
 
 ---
@@ -791,7 +791,7 @@ scriptable and CI-friendly.
 
 | Condition | Message shape |
 | --- | --- |
-| Missing `:` in spec | `"Spec must be of the form 'module:attr', got '<spec>'. Example: 'examples.13_tui.agent:assistant'."` |
+| Missing `:` in spec | `"Spec must be of the form 'module:attr', got '<spec>'. Example: 'examples.10_cli.agent:assistant'."` |
 | Empty module or attr name | `"Spec must have a non-empty module and attribute, got '<spec>'."` |
 | `ModuleNotFoundError` | `"Could not import module '<name>': <exc>. Make sure the module is importable…"` |
 | Generic `ImportError` | `"Failed to import module '<name>': <exc>."` |
@@ -874,11 +874,11 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 - **`t0-agents: command not found`** — the `[cli]` extra isn't
   installed. Run `uv sync --extra cli` or `pip install 't0-agents[cli]'`.
 
-- **`could not import module 'examples.13_tui.agent'`** — the factory's
+- **`could not import module 'examples.10_cli.agent'`** — the factory's
   module isn't on `PYTHONPATH`. The loader auto-prepends the current
   working directory, so running from the repo root usually fixes it.
   For installed packages, make sure the module is importable via
-  `python -c "import examples.13_tui.agent"` first.
+  `python -c "import examples.10_cli.agent"` first.
 
 - **Prompt garbled by the Live panel (custom handler)** — your handler
   isn't pausing the active renderer. Use
@@ -895,7 +895,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 
 - **Browser client needs elicitation** — the CLI's Rich handler only
   works in the same terminal the REPL runs in. For browser-hosted
-  serving, see [`examples/12_streaming_http/`](../examples/12_streaming_http/)
+  serving, see [`examples/07_streaming/`](../examples/07_streaming/)
   for the `SessionProvider`-based WS wiring.
 
 ---
@@ -926,7 +926,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 ## Example
 
 A runnable end-to-end walkthrough lives at
-[`examples/13_tui/`](../examples/13_tui/):
+[`examples/10_cli/`](../examples/10_cli/):
 
 - `server.py` — FastMCP server exposing `add` and `set_reminder`
   (structured-elicitation tool).
@@ -941,8 +941,8 @@ A runnable end-to-end walkthrough lives at
 ```bash
 docker compose up -d
 uv sync --extra cli
-uv run t0-agents run examples.13_tui.agent:assistant
-uv run t0-agents run examples.13_tui.advanced:assistant_with_audit
+uv run t0-agents run examples.10_cli.agent:assistant
+uv run t0-agents run examples.10_cli.advanced:assistant_with_audit
 ```
 
 ---

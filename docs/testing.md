@@ -123,7 +123,7 @@ async def test_agent_uses_search_and_summarises() -> None:
 
 A runnable version of this exact test — with three tools, all five
 assertion helpers, and an error-recovery scenario — lives at
-[`examples/15_testing/test_agent_unit.py`](../examples/15_testing/test_agent_unit.py).
+[`examples/11_testing/test_agent_unit.py`](../examples/11_testing/test_agent_unit.py).
 
 ---
 
@@ -175,7 +175,7 @@ GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest -m embedded
 ```
 
 A runnable version lives at
-[`examples/15_testing/test_agent_embedded.py`](../examples/15_testing/test_agent_embedded.py).
+[`examples/11_testing/test_agent_embedded.py`](../examples/11_testing/test_agent_embedded.py).
 
 ---
 
@@ -495,7 +495,7 @@ new result's `.data` field and the serializer would `json.dumps` the
 dataclass instead of surfacing the error string.  The agent loop
 then sees a `ToolResult(result="ERROR: disk is full")` on the next
 turn, ready for the model to react to.  See
-[`examples/15_testing/test_agent_unit.py::test_agent_surfaces_structured_tool_error`](../examples/15_testing/test_agent_unit.py)
+[`examples/11_testing/test_agent_unit.py::test_agent_surfaces_structured_tool_error`](../examples/11_testing/test_agent_unit.py)
 for a runnable end-to-end test of this pattern.
 
 ---
@@ -974,7 +974,7 @@ This chapter completes the progressive tour. Starting from a single `Agent` prim
 
 For deeper reference material that spans the tour — the full public API, the exception taxonomy, episode-level observability, production deployment trade-offs, multi-server composition — see the **Appendices** on the [index](index.md):
 
-- Runnable example: [`examples/15_testing/`](../examples/15_testing/README.md).
+- Runnable example: [`examples/11_testing/`](../examples/11_testing/README.md).
 - Contributing guide: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Agent reference: [`agent.md`](agent.md).
 - Error handling (what assertion helpers fire alongside): [`error-handling.md`](error-handling.md).

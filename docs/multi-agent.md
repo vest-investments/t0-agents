@@ -83,7 +83,7 @@ the framework registers a `researcher_ask` and a `writer_ask` tool on
 that server; the orchestrator LLM sees them in every inference's
 `additional_tools` list.
 
-See [`examples/14_multi_agent/`](../examples/14_multi_agent/) for a
+See [`examples/08_multi_agent/`](../examples/08_multi_agent/) for a
 runnable demo with an arXiv-flavoured researcher and a markdown
 writer.
 
@@ -342,7 +342,7 @@ The orchestrator sees exactly one tool on its server —
 
 ### Intermediate -- researcher + writer trio
 
-[`examples/14_multi_agent/`](../examples/14_multi_agent/) ships a
+[`examples/08_multi_agent/`](../examples/08_multi_agent/) ships a
 runnable demo with a researcher (arXiv-flavoured MCP server), a
 writer (markdown-formatting MCP server), and a report-generator
 orchestrator. It requires `docker compose up` and a
@@ -382,7 +382,7 @@ delegates, the inner orchestrator in turn sees two tools:
 `researcher_ask` and `writer_ask`. Each level is an independent
 episode, correlated via `parent_episode_id` tags. A runnable
 version of this pattern ships at
-[`examples/14_multi_agent/advanced.py`](../examples/14_multi_agent/advanced.py).
+[`examples/08_multi_agent/advanced.py`](../examples/08_multi_agent/advanced.py).
 
 Override the default `{name}_ask` by using `agent_as_tool` directly
 and skipping the declarative `sub_agents=[…]` path:

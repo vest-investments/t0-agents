@@ -1,6 +1,6 @@
 """Smoke tests: Composers do not regress the declarative ``sub_agents=`` path.
 
-The full behavioural regression for ``examples/14_multi_agent/`` is
+The full behavioural regression for ``examples/08_multi_agent/`` is
 covered by the existing ``tests/test_compose/test_integration.py``
 (integration-marked).  This file is a lightweight smoke test that
 imports the declarative public API and confirms a config-time check

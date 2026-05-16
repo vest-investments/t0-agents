@@ -93,4 +93,4 @@ Both the `AsyncTensorZeroGateway` and `Client` must be entered as async context 
 - [Elicitation](elicitation.md) -- human-in-the-loop approval and structured input, with no changes to `run_agent`.
 - [Error handling](error-handling.md) -- how the loop handles tool errors, hallucinated tool names, timeouts, and `max_turns`.
 - [Observability](observability.md) -- episode IDs, inference IDs, feedback to ClickHouse.
-- Examples: [`01_adapter_basics`](../examples/01_adapter_basics/) (offline), [`02_basic_agent`](../examples/02_basic_agent/) (loop), [`05_error_handling`](../examples/05_error_handling/), [`07_elicitation`](../examples/07_elicitation/).
+- Examples: [`01_adapter_basics`](../examples/15_adapter_low_level/) (offline), [`02_basic_agent`](../examples/01_first_agent/) (loop), [`05_error_handling`](../examples/02_agent_class/), [`07_elicitation`](../examples/04_elicitation/).

@@ -69,7 +69,7 @@ Keep your reasoning brief. If a tool call fails, try a different approach
 or explain what went wrong. Do not retry the same failing call more than twice.
 ```
 
-See `examples/03_system_prompt/` for a complete example with Docker Compose and TensorZero configuration.
+See `examples/02_agent_class/` for a complete example with Docker Compose and TensorZero configuration.
 
 ## Tuning max_turns
 

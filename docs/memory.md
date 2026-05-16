@@ -180,7 +180,7 @@ the same `episode_id` still loads it.
 A complete runnable version, with both `InMemoryMemory` and
 `SqliteMemory` exercised in one script and a simulated process
 restart, lives at
-[`examples/09_memory/`](../examples/09_memory/).
+[`examples/05_memory/`](../examples/05_memory/).
 
 ---
 
@@ -791,7 +791,7 @@ directly against an `asyncio.Lock`-guarded dict. `InMemoryMemory`
 itself is a 40-line reference at
 [`src/t0_agents/memory/in_memory.py`](../src/t0_agents/memory/in_memory.py).
 For a runnable no-Docker walkthrough of the store primitives on their
-own, see [`examples/09_memory/easy.py`](../examples/09_memory/easy.py).
+own, see [`examples/05_memory/easy.py`](../examples/05_memory/easy.py).
 
 ```python
 import asyncio
@@ -941,7 +941,7 @@ embeddings and vector store — while giving the `Agent` a familiar
 For a runnable no-Docker example of a custom `MemoryProvider` written
 from scratch — implementing per-tenant namespacing and per-episode LRU
 eviction in under 70 lines — see
-[`examples/09_memory/advanced.py`](../examples/09_memory/advanced.py).
+[`examples/05_memory/advanced.py`](../examples/05_memory/advanced.py).
 
 ### Advanced — memory as MCP Resources
 
@@ -949,7 +949,7 @@ If the memory you care about is a knowledge base the *LLM* should
 read (not context the framework should inject), expose it as MCP
 Resources or as MCP tools instead of plugging it into
 `MemoryProvider`. The runnable example at
-[`examples/09_memory/server.py`](../examples/09_memory/server.py)
+[`examples/05_memory/server.py`](../examples/05_memory/server.py)
 ships a FastMCP server with `remember(key, value)` / `recall(key)`
 tools the LLM invokes explicitly — a different pattern, useful when
 you want the model in control of what it stores and retrieves.

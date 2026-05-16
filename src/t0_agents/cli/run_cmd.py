@@ -25,7 +25,7 @@ def register(app: typer.Typer) -> None:
         agent_spec: str = typer.Argument(
             ...,
             help="Factory spec in 'module:attr' form, e.g. "
-            "'examples.13_tui.agent:assistant'.",
+            "'examples.10_cli.agent:assistant'.",
         ),
         verbose: bool = typer.Option(
             False,
