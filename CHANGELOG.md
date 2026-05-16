@@ -31,6 +31,12 @@ the wire.  Backwards compatible: any caller that does not pass
   `system_arguments`"** — decision matrix for the two kwargs across
   schema'd / schema-less functions, plus guidance on when to reach
   for each.
+- **`examples/18_raw_system_prompt/`** — runnable PaaS-style demo:
+  the same `Agent` is invoked three times with three runtime-supplied
+  personalities (haiku, pirate, lawyer), driving the model purely
+  through `system="..."`.  Companion to `examples/03_system_prompt/`
+  (which demonstrates the templated, recommended pattern via
+  `system_template`).
 
 ### Validated
 

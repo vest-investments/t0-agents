@@ -174,6 +174,25 @@ requires a dict). Use `memory_strategy="prepended_message"` (the
 default) or `memory_strategy="messages"` if you need raw `system`
 alongside memory.
 
+```python
+# Recommended: prompt structure lives in tensorzero.toml; only the
+# template variables flow at runtime.
+result = await agent.run(
+    "where is the treasure?",
+    system_arguments={"persona": "pirate"},
+)
+
+# Escape hatch: the prompt body itself is request data.  Only valid
+# when the TensorZero function has no system schema declared.
+result = await agent.run(
+    "where is the treasure?",
+    system="You are a pirate. Reply in exaggerated pirate slang.",
+)
+```
+
+See [`examples/18_raw_system_prompt/`](../examples/18_raw_system_prompt/)
+for the runnable PaaS-style demo.
+
 ---
 
 ## `convert_tools`
