@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
-from collections.abc import AsyncIterator, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
@@ -101,7 +101,7 @@ class Run(Generic[T]):
 
     def __init__(
         self,
-        agent: Agent,
+        agent: Agent | None,
         input_: RunInput,
         output: OutputMode[Any],
         *,
@@ -109,7 +109,14 @@ class Run(Generic[T]):
         context: Mapping[str, Any] | None = None,
         middleware: Sequence[Any] | None = None,
     ) -> None:
-        self._agent_ref: weakref.ref[Agent] = weakref.ref(agent)
+        # ``agent=None`` is the composite-mode path used by
+        # :class:`~t0_agents.compose.topology.CompositeRun`, whose
+        # ``_drive()`` does not touch ``self._agent_ref``.  Every
+        # Agent-backed Run continues to use ``weakref.ref(agent)`` so
+        # the gateway lifetime is not extended.
+        self._agent_ref: Callable[[], Agent | None] = (
+            weakref.ref(agent) if agent is not None else (lambda: None)
+        )
         self._input = input_
         self._output: OutputMode[Any] = output
         self._context: dict[str, Any] = dict(context) if context else {}
