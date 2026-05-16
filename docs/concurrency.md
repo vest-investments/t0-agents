@@ -11,7 +11,7 @@ This page maps the three layers, says which knob applies to which, and lists the
 | The LLM emits several tool calls in one assistant turn (e.g. three independent lookups) and you want them to run at the same time | [Intra-turn](#l1-intra-turn-parallel-tool-execution) | `AgentConfig(parallel_tools=True)` |
 | The LLM keeps emitting one tool per turn and you want to compress that into a single round trip | [Inter-turn](#l2-inter-turn-dependencies-and-the-batch-tool-pattern) | A "batch tool" on your MCP server |
 | You have an orchestrator with sub-agents and you want them to work concurrently when the orchestrator delegates to several at once | [Multi-agent](#l3-multi-agent-parallel-composition) | Same `parallel_tools=True` on the orchestrator |
-| You want to drive several agents from your own Python code (no orchestrator LLM) | [Multi-agent](#l3-multi-agent-parallel-composition) | `asyncio.gather(a.run(...), b.run(...))` |
+| You want to drive several agents from your own Python code (no orchestrator LLM) | [Multi-agent](#l3-multi-agent-parallel-composition) | `asyncio.gather(a.invoke(...), b.invoke(...))` |
 
 If your problem does not fit any of the above, t0-agents is the wrong layer for it — see [Anti-patterns](#anti-patterns-that-t0-agents-deliberately-omits).
 
@@ -154,10 +154,10 @@ If you want **deterministic** fan-out — "always run these two sub-agents in pa
 
 ```python
 research, draft = await asyncio.gather(
-    researcher.run("Find arXiv 2401.* RLHF papers"),
-    writer.run("Draft a markdown outline for a 2025 RLHF report"),
+    researcher.invoke("Find arXiv 2401.* RLHF papers"),
+    writer.invoke("Draft a markdown outline for a 2025 RLHF report"),
 )
-final = await editor.run(f"Combine:\n\n{research.response}\n\n{draft.response}")
+final = await editor.invoke(f"Combine:\n\n{research.response}\n\n{draft.response}")
 ```
 
 This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other frameworks. `Agent.invoke` is an `async def` returning `AgentResult`; that is the only contract you need.

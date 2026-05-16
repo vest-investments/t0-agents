@@ -8,7 +8,7 @@ The memory subsystem lets an `Agent` remember earlier turns — both within
 a single process (ephemeral, dict-backed) and across processes
 (persistent, via SQLite or a custom backend). Configuration is a single
 field on `AgentConfig`; the `Agent` handles load + save automatically
-around every `.run()` / `.stream()` call.
+around every `invoke()` call.
 
 ```python
 from t0_agents import Agent, AgentConfig, MemoryProvider
@@ -266,8 +266,8 @@ explicitly.
 
 TensorZero has no explicit "close an episode" API — episodes are
 defined implicitly by inferences that share an `episode_id`. The
-`Agent` therefore writes a record on every `.run()` / `.stream()` call
-that produces a truthy `episode_id`, rather than waiting for an
+`Agent` therefore writes a record on every `invoke()` call that
+produces a truthy `episode_id`, rather than waiting for an
 end-of-session signal that never comes. The side effect: memory is
 always current, and each turn is independently recoverable if the
 process crashes.
