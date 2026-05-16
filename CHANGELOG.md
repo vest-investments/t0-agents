@@ -4,6 +4,120 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0-M4] — Unreleased
+
+Fourth milestone of the v1.0 four-abstraction refactor.  Introduces
+`Composer` as the topology primitive: a uniform way to orchestrate
+`Run`s into industrial / military patterns.  Ships nine built-in
+topologies and the `Composable[Input, T]` protocol so Agents and
+Composers nest at arbitrary depth (`sequential(race(a, b),
+conditional(routes={...}))` type-checks at every layer).
+Cancellation cascades to every sub-Run under a configurable timeout
+(`DEFAULT_CANCEL_TIMEOUT = 30.0`).  The pre-v1.0 declarative path
+(`AgentConfig.sub_agents=[...]` → `SubAgentMiddleware`) is unchanged.
+
+### Added
+
+- **`Composable[Input, T]` Protocol** — `@runtime_checkable`; an object
+  whose `.invoke(input)` returns a `Run[T]`.  Both `Agent` and
+  `Composer` satisfy it.
+- **`Composer` base class** — declarative dataclass-based topologies;
+  each concrete subclass exposes its parameters plus `name: str` and
+  the narrow `invoke(input, *, eager, context, cancel_timeout)`
+  surface (Composer.invoke does NOT accept Agent-level kwargs — sub-Runs
+  use their own `AgentConfig`).
+- **`ComposerError(node, cause)`** — `T0AgentsError` subclass; raised
+  when a sub-Run inside a Composer fails with topology context.
+  `retry_chain` is the documented exception: it re-raises the
+  underlying original exception un-wrapped so upstream
+  `except SpecificError` blocks keep working.
+- **`CompositeRun(Run[Any])`** — the `Run` subclass produced by every
+  Composer.  Public `Run` surface (`.state`, `.episode_id`,
+  `.inference_ids`, `.result()`, `.events()`, `.cancel()`) works
+  uniformly; `.feedback()`, `.replay()`, `.fork()` raise
+  `NotImplementedError` in v1.0 (Agent-runs-only semantics; revisit
+  in a future minor).
+- **`DEFAULT_CANCEL_TIMEOUT = 30.0`** — module-level constant exported
+  from `t0_agents.compose.topology`.  Every topology factory accepts
+  `cancel_timeout=` to override per-instance; per-call override via
+  `composer.invoke(input, cancel_timeout=...)` wins for that Run.
+- **Nine topology builders** (`from t0_agents import ...`):
+  - `sequential(*nodes, chain=None)` — pipeline; each node's result
+    feeds the next via `chain(prev_result, original_input)`.  Default
+    chain JSON-encodes non-string values.
+  - `parallel(*nodes, reducer=None, error_policy="fail_fast")` —
+    fan-out + reducer; `error_policy="continue"` widens the reducer
+    signature to `list[AgentResult[T] | BaseException]`.
+  - `race(*nodes, cancel_others=True)` — first-completed wins; losers
+    receive `.cancel()` under the configured timeout when
+    `cancel_others=True`.
+  - `consensus(*nodes, merge)` — N propose; `merge(list[T])` decides.
+    Any sub-Run failure surfaces as `ComposerError`.
+  - `map_reduce(node, *, reducer, concurrency=None)` — scatter over
+    an iterable input; `concurrency=N` bounds active calls via
+    `asyncio.Semaphore`; reducer aggregates `list[AgentResult]`.
+  - `conditional(*, router, routes, default=None)` — synchronous
+    `router(input) -> key` triages to a sub-Composable.  Unknown key
+    + no default → `ComposerError(ValueError)`.
+  - `saga(*steps)` — sequential pipeline with reverse-order
+    compensation on failure.  Each step is `(action, compensate)`;
+    compensations receive the same input their action received and
+    must be idempotent (user responsibility).
+  - `retry_chain(*nodes, on_error=None)` — try each node in order;
+    `on_error(exc) -> bool` filters whether to fall through.  All-fail
+    re-raises the original last exception un-wrapped.
+  - `circuit_breaker(node, *, threshold=5, reset_timeout=30.0)` —
+    state-machine breaker around a single child.  State is
+    per-Composer-instance.
+- **Cancellation cascade** — `await root_run.cancel()` propagates to
+  every sub-Run via `CompositeRun._sub_runs`.  Cascade is bounded by
+  `cancel_timeout`; overshoot logs a WARN on
+  `t0_agents.compose.topology` and lets remaining children dangle
+  best-effort.  Nested composers cascade naturally.
+- **`parent_episode_id` audit** — every Composer driver threads
+  `parent_episode_id` correlation through to children using the M2
+  `bind_parent_episode_id` ContextVar (for Composer children, which
+  don't accept `tags=`) and the TZ-native ``tags={"t0_agents.parent_
+  episode_id": ...}`` kwarg (for Agent children).
+- **`tests/test_compose/v1/`** — 67 new tests across 12 files covering
+  every topology, three-level nesting, cancellation cascade, and the
+  legacy `AgentConfig.sub_agents=` compatibility smoke.
+
+### Changed
+
+- **`Run.__init__`** widens `agent: Agent` to `agent: Agent | None`
+  (one-line type widening + weakref guard).  Required so
+  `CompositeRun` can satisfy the `Run` nominal type without a
+  synthetic Agent stub or 30 lines of duplicated state init.  Every
+  pre-existing call site passes a non-None Agent; the change is
+  strictly forward-compatible.  Recorded as D-1 in the M4 dev-log.
+
+### Deprecated
+
+- (none)
+
+### Removed
+
+- (none)
+
+### Fixed
+
+- (none)
+
+### Open questions resolved (`02-open-questions.md`)
+
+- **Q3** — cancel timeout: 30s default + per-topology `cancel_timeout=`
+  kwarg + per-call override.
+- **Q8** — `parallel` reducer signature: `list[AgentResult[T]]` for
+  `fail_fast`; widens to `list[AgentResult[T] | BaseException]` for
+  `continue`.
+- **Q9** — `conditional` router signature: sync
+  `Callable[[Input], str]`.
+- **Q10** — saga compensation idempotency: user responsibility,
+  documented in the `saga` docstring and (M5) `docs/composition.md`.
+
+---
+
 ## [1.0.0-M3] — Unreleased
 
 Third milestone of the v1.0 four-abstraction refactor.  Collapses the
