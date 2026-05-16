@@ -151,8 +151,8 @@ class CompositeRun(Run[Any]):
     Subclasses :class:`Run` rather than duck-typing it so the
     ``Composable.invoke -> Run[T]`` Protocol holds nominally
     (``isinstance(composite, Run)``).  The base class is constructed
-    with ``agent=None`` (allowed since the M4 widening of
-    :meth:`Run.__init__`) and the composite-mode ``_drive`` override
+    with ``agent=None`` — :meth:`Run.__init__` widens to allow
+    composite Runs — and the composite-mode ``_drive`` override
     delegates to the topology driver coroutine instead of touching the
     Agent middleware chain.
 
@@ -160,11 +160,11 @@ class CompositeRun(Run[Any]):
     :meth:`cancel` can cascade.  The driver is the only writer; the
     field is otherwise treated as private.
 
-    What is *not* supported in M4: :meth:`Run.feedback`,
+    What is *not* supported on composite Runs today: :meth:`Run.feedback`,
     :meth:`Run.replay`, :meth:`Run.fork`.  These are well-defined on
     Agent-backed Runs and would require either threading an Agent into
-    the CompositeRun or designing per-topology semantics — the spec
-    defers both.  They raise ``NotImplementedError`` with a pointer at
+    the CompositeRun or designing per-topology semantics — both are
+    deferred.  They raise ``NotImplementedError`` with a pointer at
     the underlying sub-Run.
     """
 
@@ -208,10 +208,10 @@ class CompositeRun(Run[Any]):
         """Run the topology driver, capture the composite result.
 
         Mirrors the single-shot branch of :meth:`Run._drive`: no
-        ``_mode_chosen`` wait, no per-sub-Run event aggregation in
-        M4.  Sub-Runs maintain their own buffers; consumers can
-        introspect them via ``composite._sub_runs`` (private — public
-        accessor lands with the composition docs in M5).
+        ``_mode_chosen`` wait, no per-sub-Run event aggregation.
+        Sub-Runs maintain their own buffers; consumers can introspect
+        them via ``composite._sub_runs`` (private — a public accessor
+        will arrive when there is a concrete consumer ask).
         """
         try:
             result = await self._driver(self)
@@ -263,7 +263,7 @@ class CompositeRun(Run[Any]):
             )
 
     # ------------------------------------------------------------------
-    # Unsupported on composite Runs (deferred from M4)
+    # Unsupported on composite Runs (deferred until a concrete consumer)
     # ------------------------------------------------------------------
 
     async def feedback(

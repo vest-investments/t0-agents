@@ -8,7 +8,7 @@ flushes consolidation events (``TextEndEvent``, ``ToolCallEvent``,
 ``ThoughtEvent``) once the input iterator is exhausted — in the order the
 blocks first appeared.
 
-``JsonChunk`` is out of scope (``Agent.stream`` is chat-only) and surfaces as
+``JsonChunk`` is out of scope (``Run.events`` is chat-only) and surfaces as
 an :class:`ErrorEvent`.  ``UnknownChunk`` is tolerated the same way.
 """
 
@@ -85,7 +85,7 @@ class TurnStreamAssembler:
         async for chunk in chunks:
             if isinstance(chunk, JsonChunk):
                 yield ErrorEvent(
-                    message="JsonChunk is not supported by Agent.stream()",
+                    message="JsonChunk is not supported by Run.events()",
                     detail={"variant_name": chunk.variant_name},
                 )
                 continue

@@ -1,12 +1,12 @@
 # Multi-Agent Composition
 
-Until now every chapter has discussed a single `Agent` instance — one LLM, one tool set, one memory, one guardrail chain. The composition layer lets one agent delegate to others: register sub-agents on `AgentConfig.sub_agents` and they appear as `{name}_ask` tools on the orchestrator's FastMCP server, each invoking its own `.run()` loop with its own configuration.
+Until now every chapter has discussed a single `Agent` instance — one LLM, one tool set, one memory, one guardrail chain. The composition layer lets one agent delegate to others: register sub-agents on `AgentConfig.sub_agents` and they appear as `{name}_ask` tools on the orchestrator's FastMCP server, each invoking its own `invoke()` loop with its own configuration.
 
 `t0-agents` supports the classic **agent-as-tool** pattern: one `Agent`
 delegates to other `Agent`s by exposing each one as an MCP tool on the
 orchestrator's FastMCP server. The orchestrator's LLM sees the
 sub-agents as ordinary tools; calling one invokes the sub-agent's full
-`.run()` loop and returns its response text.
+`invoke()` loop and returns its response text.
 
 Ships in the base distribution — no extras, no new dependencies beyond
 the `core` + `mcp` foundation.
@@ -72,7 +72,7 @@ orchestrator = Agent(
     tool_provider=orchestrator_client,
 )
 
-result = await orchestrator.run(
+result = await orchestrator.invoke(
     "Write a report on RLHF advances in 2025",
 )
 ```
@@ -83,7 +83,7 @@ the framework registers a `researcher_ask` and a `writer_ask` tool on
 that server; the orchestrator LLM sees them in every inference's
 `additional_tools` list.
 
-See [`examples/14_multi_agent/`](../examples/14_multi_agent/) for a
+See [`examples/08_multi_agent/`](../examples/08_multi_agent/) for a
 runnable demo with an arXiv-flavoured researcher and a markdown
 writer.
 
@@ -98,7 +98,7 @@ async def researcher_ask(message: str) -> str: ...
 ```
 
 When the orchestrator LLM decides to call the tool, the framework
-runs the sub-agent's full `.run(message)` loop and returns its
+runs the sub-agent's full `invoke(message)` loop and returns its
 response. Sub-agents keep all of their usual collaborators — memory,
 guardrails, their own `tool_provider` — so a delegation is
 indistinguishable from calling the sub-agent directly.
@@ -187,7 +187,7 @@ id.
   binding; returns `None` if called outside a
   `bind_parent_episode_id` block.
 - `update_parent_episode_id(episode_id: str) -> None` — overwrites
-  the binding in place. Used by `Agent.run` / `Agent.stream` to
+  the binding in place. Used by `Agent.invoke` / `Run.events` to
   refresh the id once TensorZero allocates the real episode id on
   the first inference.
 
@@ -259,7 +259,7 @@ Sub-agent handlers follow a **hybrid-fatal** policy:
 - `T0AgentsFatalError` subclasses — including `GuardrailBlockedError`
   raised inside a sub-agent's own guardrail stack — propagate
   unchanged through the orchestrator's tool-call boundary. The
-  orchestrator's `.run()` caller sees the real exception type, just
+  orchestrator's `invoke()` caller sees the real exception type, just
   as they would if the guardrail had been installed on the
   orchestrator directly.
 - Every other exception is wrapped in `t0_agents.SubAgentError`
@@ -270,7 +270,7 @@ Sub-agent handlers follow a **hybrid-fatal** policy:
 
 ```python
 try:
-    result = await orchestrator.run("Do the thing")
+    result = await orchestrator.invoke("Do the thing")
 except GuardrailBlockedError as exc:
     # A sub-agent's guardrail said no.
     ...
@@ -330,7 +330,7 @@ async def main() -> None:
             t0=t0,
             tool_provider=orch_client,
         )
-        result = await orchestrator.run("Find references on RLHF")
+        result = await orchestrator.invoke("Find references on RLHF")
         print(result.response)
 
 
@@ -342,7 +342,7 @@ The orchestrator sees exactly one tool on its server —
 
 ### Intermediate -- researcher + writer trio
 
-[`examples/14_multi_agent/`](../examples/14_multi_agent/) ships a
+[`examples/08_multi_agent/`](../examples/08_multi_agent/) ships a
 runnable demo with a researcher (arXiv-flavoured MCP server), a
 writer (markdown-formatting MCP server), and a report-generator
 orchestrator. It requires `docker compose up` and a
@@ -382,7 +382,7 @@ delegates, the inner orchestrator in turn sees two tools:
 `researcher_ask` and `writer_ask`. Each level is an independent
 episode, correlated via `parent_episode_id` tags. A runnable
 version of this pattern ships at
-[`examples/14_multi_agent/advanced.py`](../examples/14_multi_agent/advanced.py).
+[`examples/08_multi_agent/advanced.py`](../examples/08_multi_agent/advanced.py).
 
 Override the default `{name}_ask` by using `agent_as_tool` directly
 and skipping the declarative `sub_agents=[…]` path:
@@ -463,7 +463,7 @@ available for every sub-agent independently.
 
 See [`docs/observability.md`](observability.md) for the full signal
 catalogue and [`docs/api-reference.md`](api-reference.md) for the
-`AgentResult` shape returned by every `.run()` call.
+`AgentResult` shape returned by every `invoke()` call.
 
 ---
 

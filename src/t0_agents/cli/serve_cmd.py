@@ -45,7 +45,7 @@ def register(app: typer.Typer) -> None:
         server but not for production multi-tenant elicitation — use
         :func:`t0_agents.serve.create_app` directly with a
         ``client_factory`` / ``session_provider`` for that (see
-        ``examples/12_streaming_http/agent_app.py``).
+        ``examples/07_streaming/agent_app.py``).
 
         ``--streaming`` defaults to ``False`` because the WS elicitation
         path is structurally incompatible with shared-Client mode: one

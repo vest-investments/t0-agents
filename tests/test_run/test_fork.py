@@ -1,10 +1,10 @@
 """Tests for :meth:`Run.fork`.
 
 Fork extends the parent Run's transcript with an additional user turn.
-M1's transcript is the boundary pair — the original user message plus
+The transcript is the boundary pair — the original user message plus
 the agent's final response — sufficient to continue the conversation
-in a follow-up Run.  Intermediate tool turns are deferred to M2/M3
-when the middleware-level message history becomes available.
+in a follow-up Run.  Intermediate tool turns are deferred until the
+middleware-level message history becomes available.
 """
 
 from __future__ import annotations

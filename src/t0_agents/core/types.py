@@ -62,7 +62,7 @@ class MemoryProvider(Protocol):
 
 @runtime_checkable
 class Guardrail(Protocol):
-    """Hook surface invoked by ``Agent.run()`` and ``GuardedToolProvider``.
+    """Hook surface invoked by ``Agent.invoke()`` and ``GuardedToolProvider``.
 
     Four lifecycle hooks fire around each run and each tool call.  All
     implementations expose a human-readable ``name`` for logging and for
@@ -106,10 +106,10 @@ class Guardrail(Protocol):
 
 @dataclass(slots=True)
 class GuardrailLogEntry:
-    """One guardrail hook activation recorded during ``Agent.run()``.
+    """One guardrail hook activation recorded during ``Agent.invoke()``.
 
     Populated by ``GuardedToolProvider`` (for ``before_tool`` / ``after_tool``)
-    and by ``Agent.run`` itself (for ``before_run`` / ``after_run``).  Attached
+    and by ``Agent.invoke`` itself (for ``before_run`` / ``after_run``).  Attached
     to :class:`AgentResult.guardrail_log` after every run (including fatal
     aborts) so callers can emit per-outcome ``t0.feedback(...)`` manually —
     TensorZero requires metrics to be pre-declared in ``tensorzero.toml``,

@@ -50,7 +50,7 @@ def _json_result(
     than spinning up a full :class:`~t0_agents.core.agent.Agent` for
     every assertion test.
 
-    Post-M3: ``AgentResult.value`` is the canonical field;
+    In v1.0 ``AgentResult.value`` is the canonical field;
     ``response``/``parsed``/``parse_strategy``/``json_parse_attempts``/
     ``function_kind`` are read-side ``@property`` aliases.  This helper
     builds the value from ``parsed`` (when set) or from ``response``

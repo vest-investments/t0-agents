@@ -1,8 +1,8 @@
 """Lifecycle tests for :class:`t0_agents.core.run.Run`.
 
-Covers the state machine introduced in v1.0 milestone 1: eager vs lazy
-start, the ``pending → running → succeeded/failed/cancelled``
-transitions, ``__await__`` parity with ``result()``, and the new
+Covers the Run state machine: eager vs lazy start, the
+``pending → running → succeeded/failed/cancelled`` transitions,
+``__await__`` parity with ``result()``, and the
 :class:`RunCancelledError` exception.  Failed runs raise the original
 captured exception (see :meth:`Run.result`); :class:`RunFailedError`
 is the defensive fallback for the "failed without captured cause" edge

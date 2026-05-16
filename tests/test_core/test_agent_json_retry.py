@@ -63,7 +63,7 @@ class TestRetryOrchestration:
             [{"raw": '{"a": 1}', "parsed": {"a": 1}}]
         )
         agent = _json_agent(t0=t0)
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.parsed == {"a": 1}
         assert result.parse_strategy == "strict"
@@ -82,7 +82,7 @@ class TestRetryOrchestration:
             ]
         )
         agent = _json_agent(t0=t0)
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.parsed == {"a": 1}
         assert result.parse_strategy == "permissive"
@@ -99,7 +99,7 @@ class TestRetryOrchestration:
             ]
         )
         agent = _json_agent(t0=t0)
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.parsed == {"a": 2}
         assert result.parse_strategy == "retry"
@@ -120,7 +120,7 @@ class TestRetryOrchestration:
             t0=t0,
             output=JsonOutput(json_mode="strict", max_retries=2),
         )
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.parsed is None
         assert result.parse_strategy == "none"
@@ -141,11 +141,11 @@ class TestRetryOrchestration:
         agent = _json_agent(
             t0=t0, output=JsonOutput(json_mode="strict", max_retries=5)
         )
-        # Per-call kwargs are translated by the v0.12 deprecation shim
-        # into a per-call JsonOutput.  ``max_json_retries=0`` zeroes the
-        # retry budget for this invocation only.
-        with pytest.warns(DeprecationWarning):
-            result = await agent.run("hello", max_json_retries=0)
+        # Per-call ``output=JsonOutput(max_retries=0)`` zeroes the retry
+        # budget for this invocation only without touching the config.
+        result = await agent.invoke(
+            "hello", output=JsonOutput(json_mode="strict", max_retries=0)
+        )
 
         assert result.parse_strategy == "none"
         assert result.json_parse_attempts == 0
@@ -169,7 +169,7 @@ class TestRetryOrchestration:
             ]
         )
         agent = _json_agent(t0=t0)
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.episode_id == str(first_ep)
         # First call: caller-supplied episode_id (None) reaches the SDK.
@@ -192,7 +192,7 @@ class TestRetryOrchestration:
                 json_mode="strict", permissive=False, max_retries=0
             ),
         )
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.parsed is None
         assert result.parse_strategy == "none"
@@ -223,7 +223,7 @@ class TestRetryOrchestration:
             ]
         )
         agent = _json_agent(t0=t0)
-        await agent.run("hello")
+        await agent.invoke("hello")
 
         second_call_messages = t0.calls[1]["input"]["messages"]
         # Expected shape after one retry:

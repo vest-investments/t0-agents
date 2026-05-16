@@ -28,7 +28,7 @@ Usage::
             t0=gateway,
             tool_provider=mock_tool_provider,
         )
-        result = await agent.run("hi")
+        result = await agent.invoke("hi")
         assert_tool_called("lookup", tool_provider=mock_tool_provider)
 """
 

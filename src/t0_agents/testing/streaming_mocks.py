@@ -4,12 +4,12 @@ Two tools:
 
 * :func:`fake_event_stream` — wrap a list of :class:`AgentEvent` s into
   an ``AsyncIterator[AgentEvent]``.  Most useful when testing *consumers*
-  of :meth:`Agent.stream` (TUI renderers, SSE routes, WS bridges, etc.)
+  of :meth:`Run.events` (TUI renderers, SSE routes, WS bridges, etc.)
   without spinning up a real gateway.
 * :class:`MockStreamingGateway` — a deliberately simple gateway whose
   ``inference(stream=True)`` yields a single :class:`ChatChunk` per
   scripted turn (no intra-turn delta streaming).  Enough to exercise
-  :meth:`Agent.stream`'s turn-loop and tool-dispatch paths deterministically;
+  the streaming turn-loop and tool-dispatch paths deterministically;
   not a substitute for real delta-level streaming tests.
 
 **Test-only.**  Like the rest of :mod:`t0_agents.testing`, never import

@@ -14,7 +14,7 @@ The runner reuses:
 * ``RECOVERABLE_INFERENCE_PATTERNS`` / ``RECOVERABLE_INFERENCE_STATUS_CODES``
   for parity with :func:`run_agent`'s corrective-retry contract.
 
-Memory / guardrail scaffolding stays in :meth:`Agent.stream` so the runner
+Memory / guardrail scaffolding stays in :meth:`Agent.invoke` so the runner
 itself is agnostic of those subsystems — identical responsibility layering
 to :func:`run_agent`.
 """
@@ -368,7 +368,7 @@ class _SyntheticChatResponse:
     """Duck-typed mirror of ``ChatInferenceResponse`` for the streaming path.
 
     Only carries the fields the ``on_inference`` cost-tracker reads
-    (``usage``, ``usage.cost``).  ``Agent.run`` casts the real SDK return
+    (``usage``, ``usage.cost``).  ``Agent.invoke`` casts the real SDK return
     value to ``ChatInferenceResponse`` and the cost-tracker never isinstance-
     checks, so this duck-type fits the contract and keeps streaming behaviour
     byte-equivalent for guardrails.

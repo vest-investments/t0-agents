@@ -1,0 +1,31 @@
+# TensorZero gateway configuration for the Agent class example.
+# Docs: https://www.tensorzero.com/docs/gateway/configuration
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+[models.groq_model]
+routing = ["groq"]
+
+[models.groq_model.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+[functions.agent]
+type = "chat"
+
+[functions.agent.variants.default]
+type = "chat_completion"
+model = "groq_model"
+
+# Same model + tools as `agent`, but a system template is "baked into"
+# the function configuration.  `intermediate.py` uses this to show that
+# the persona persists across every `agent.invoke(...)` call without the
+# Python caller ever having to thread the prompt through.
+[functions.agent_with_persona]
+type = "chat"
+
+[functions.agent_with_persona.variants.default]
+type = "chat_completion"
+model = "groq_model"
+templates.system.path = "functions/agent_with_persona/system_template.minijinja"

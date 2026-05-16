@@ -1,9 +1,9 @@
-"""Unit tests for :class:`AgentConfig`'s structured-output surface (M3).
+"""Unit tests for :class:`AgentConfig`'s structured-output surface.
 
-M3 removed the v0.12 ``function_kind``/``json_mode``/``output_schema``/
-``permissive_json_parsing``/``max_json_retries`` cluster (Tier 2 —
-contract §2.4) and replaced it with a single ``output: OutputMode``
-field.  These tests cover:
+v1.0 removed the v0.12 ``function_kind``/``json_mode``/``output_schema``/
+``permissive_json_parsing``/``max_json_retries`` cluster (Tier 2) and
+replaced it with a single ``output: OutputMode`` field.  These tests
+cover:
 
 - ``output`` defaults to :class:`ChatOutput`.
 - The 5 legacy kwargs raise ``TypeError`` when passed.

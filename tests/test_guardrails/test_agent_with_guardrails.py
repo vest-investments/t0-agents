@@ -78,7 +78,7 @@ class TestEmptyGuardrailsByteIdentity:
         client = FakeMCPClient()
         agent = _make_agent(t0=t0, client=client, guardrails=[])
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         assert result.response == "hi"
         assert result.guardrail_log == []
         # Verify run_agent got on_inference=None (not in FakeT0's call record
@@ -104,7 +104,7 @@ class TestBlockToolsInAgent:
             guardrails=[block_tools(["danger"])],
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         assert result.response == "done"
         assert client.call_tool_invocations == []  # never ran
         # Rejection logged.
@@ -130,7 +130,7 @@ class TestMaxToolCallsInAgent:
         )
 
         with pytest.raises(GuardrailBlockedError, match="Tool-call cap"):
-            await agent.run("go")
+            await agent.invoke("go")
 
 
 class TestMaxCostInAgent:
@@ -155,7 +155,7 @@ class TestMaxCostInAgent:
         )
 
         with pytest.raises(GuardrailBlockedError, match="Cost limit"):
-            await agent.run("go")
+            await agent.invoke("go")
 
 
 class TestRequireApprovalInAgent:
@@ -180,7 +180,7 @@ class TestRequireApprovalInAgent:
             guardrails=[require_approval(tools=["send_email"], handler=_accept)],
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         assert result.response == "sent"
         assert client.call_tool_invocations == [("send_email", {}, 30.0)]
 
@@ -205,7 +205,7 @@ class TestRequireApprovalInAgent:
             guardrails=[require_approval(tools=["send_email"], handler=_decline)],
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         assert result.response == "noted"
         assert client.call_tool_invocations == []
         rejections = [e for e in result.guardrail_log if e.kind == "rejection"]
@@ -248,7 +248,7 @@ class TestAfterRunWithFatalAbort:
         )
 
         with pytest.raises(GuardrailBlockedError):
-            await agent.run("go")
+            await agent.invoke("go")
         # after_run fires even though run_agent aborted.
         assert seen == [None]
 
@@ -281,7 +281,7 @@ class TestAfterRunWithFatalAbort:
         )
 
         with pytest.raises(GuardrailBlockedError, match="stop at start"):
-            await agent.run("go")
+            await agent.invoke("go")
         assert seen == [None]
 
 
@@ -311,7 +311,7 @@ class TestAfterRunLogging:
             guardrails=[cast(Any, _Noop())],
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         after_run_entries = [e for e in result.guardrail_log if e.hook == "after_run"]
         assert len(after_run_entries) == 1
         assert after_run_entries[0].guardrail_name == "noop"
@@ -338,9 +338,9 @@ class TestContextIsolationAcrossRuns:
             guardrails=[max_tool_calls(per_run=1)],
         )
 
-        r1 = await agent.run("one")
+        r1 = await agent.invoke("one")
         assert r1.response == "first done"
         # Second run starts from a fresh GuardrailContext — would raise
         # if state leaked.
-        r2 = await agent.run("two")
+        r2 = await agent.invoke("two")
         assert r2.response == "second done"

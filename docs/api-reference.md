@@ -20,7 +20,7 @@ from t0_agents.mcp import (
 )
 ```
 
-> **v1.0 output modes** (M3) — 11 new public symbols:
+> **v1.0 output modes** — 11 new public symbols:
 >
 > ```python
 > from t0_agents import (
@@ -38,7 +38,7 @@ from t0_agents.mcp import (
 > )
 > ```
 >
-> See `docs/output-modes.md` for the full guide (lands in M5). The
+> See `docs/output-modes.md` for the full guide. The
 > `[pydantic]` extra (`pip install 't0-agents[pydantic]'`) is required
 > for `StructuredOutput`. The 5 v0.12 JSON-only kwargs on
 > `AgentConfig` (`function_kind`, `json_mode`, `output_schema`,
@@ -90,9 +90,9 @@ async def run_agent(
 | `parallel_tools` | `bool` | `False` | If `True`, dispatches tool calls concurrently via `asyncio.gather`. Otherwise sequential. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
-| `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.run` / `Agent.stream` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
+| `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.invoke` / `Run.events` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
 | `system` | `str \| None` | `None` | Raw system prompt forwarded to TensorZero as `input.system` (string form). Mutually exclusive with `system_arguments`. Only valid when the TensorZero function does **not** declare `schemas.system.path` — the gateway returns HTTP 400 otherwise. Escape hatch for prompt-as-a-service flows where the prompt body itself is runtime data; prefer `system_arguments` (with a configured template) for production code so ClickHouse captures structured prompt variables instead of opaque strings. See [Runtime system prompt: `system` vs `system_arguments`](#runtime-system-prompt-system-vs-system_arguments). |
-| `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.run` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
+| `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.invoke` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
 
 ### Returns
 
@@ -191,10 +191,10 @@ prompt *is* the user input.
 
 The two kwargs are mutually exclusive — passing both raises
 `ValueError`. The check is the same on every public surface
-(`run_agent`, `Agent.run`, `Agent.stream`, `run_structured_inference`,
+(`run_agent`, `Agent.invoke`, `Run.events`, `run_structured_inference`,
 `StreamingAgentLoop.stream`).
 
-When using `Agent.run` / `Agent.stream`, `system` is **also**
+When using `Agent.invoke` / `Run.events`, `system` is **also**
 incompatible with `memory_strategy="system_template"` (the strategy
 injects `memory_context` into `input.system` via the template, which
 requires a dict). Use `memory_strategy="prepended_message"` (the
@@ -204,20 +204,20 @@ alongside memory.
 ```python
 # Recommended: prompt structure lives in tensorzero.toml; only the
 # template variables flow at runtime.
-result = await agent.run(
+result = await agent.invoke(
     "where is the treasure?",
     system_arguments={"persona": "pirate"},
 )
 
 # Escape hatch: the prompt body itself is request data.  Only valid
 # when the TensorZero function has no system schema declared.
-result = await agent.run(
+result = await agent.invoke(
     "where is the treasure?",
     system="You are a pirate. Reply in exaggerated pirate slang.",
 )
 ```
 
-See [`examples/18_raw_system_prompt/`](../examples/18_raw_system_prompt/)
+See [`examples/02_agent_class/`](../examples/02_agent_class/)
 for the runnable PaaS-style demo.
 
 ---
@@ -523,7 +523,7 @@ async for ev in run.events():  # chat-only; raises on JSON agents
     print(ev)
 ```
 
-### Public surface (M1)
+### Public surface
 
 | Member | Purpose |
 |--------|---------|
@@ -534,7 +534,7 @@ async for ev in run.events():  # chat-only; raises on JSON agents
 | `await run.feedback(name, value, *, target="episode"\|"inference", inference_id=None)` | Forward outcome feedback to TensorZero |
 | `await run.replay(*, agent=None, variant=None, tags=None, episode_id=None)` | Re-run with the same input; new episode by default |
 | `await run.fork(extra_message, *, agent=None)` | Continue from this Run's transcript with an extra user turn |
-| `run.transcript()` | TZ-shaped `{role, content}` list (M1: boundary pair) |
+| `run.transcript()` | TZ-shaped `{role, content}` list (the boundary pair) |
 | `run.state` | `"pending" \| "running" \| "succeeded" \| "failed" \| "cancelled"` |
 | `run.input` | Frozen `RunInput` snapshot of the call |
 | `run.episode_id`, `run.inference_ids` | Captured mid-run |
@@ -552,16 +552,16 @@ Immutable snapshot of one `Agent.invoke(...)` call.
 class RunInput:
     user_message: str
     function_name: str
-    function_kind: Literal["chat", "json"]
-    episode_id: str | None
-    tags: Mapping[str, str] | None
-    system: str | None
-    system_arguments: Mapping[str, Any] | None
-    output_schema: Mapping[str, Any] | None        # M1-only; removed in M3
-    json_mode: Literal["off", "on", "strict", "tool"] | None  # M1-only
-    max_json_retries: int | None                   # M1-only
+    episode_id: str | None = None
+    tags: Mapping[str, str] | None = None
+    system: str | None = None
+    system_arguments: Mapping[str, Any] | None = None
     prior_messages: tuple[Mapping[str, Any], ...] = ()
 ```
+
+The :class:`OutputMode` for the invocation is stored separately on
+the `Run` itself rather than on `RunInput`, so each Run knows how
+to materialise its result without re-deriving from config.
 
 ### `RunState`
 
@@ -577,10 +577,12 @@ Raised by `await run.result()` after `await run.cancel()`.
 
 ### `RunFailedError`
 
-Raised by `await run.result()` when the underlying drive failed.  The
-original cause is preserved on `.cause`.  The deprecated `agent.run()`
-shim unwraps this so v0.12 callers continue to see the original
-exception type (e.g. `MaxTurnsExceededError`, `GuardrailBlockedError`).
+Raised by `await run.result()` when the underlying drive failed
+without a captured exception.  The original cause is preserved on
+`.cause`.  In the normal failure path `result()` re-raises the
+original exception (`MaxTurnsExceededError`, `GuardrailBlockedError`,
+…) directly; `RunFailedError` is the defensive fallback for the
+"failed without captured cause" edge case.
 
 ---
 
@@ -594,7 +596,7 @@ the inner inference loop with `async def __call__(ctx, next_) ->
 AgentResult` and is composed by `AgentConfig.__post_init__` into a
 chain that wraps a single terminal callable.
 
-### Public surface (M2)
+### Public surface
 
 | Symbol | Purpose |
 |--------|---------|
@@ -604,7 +606,7 @@ chain that wraps a single terminal callable.
 | `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
 | `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |
 | `SubAgentMiddleware(sub_agents)` | Wraps `tool_provider` with `_OrchestrationToolProvider`; binds `parent_episode_id` ContextVar. |
-| `JsonRetryMiddleware()` | **M2: no-op placeholder.** M3 activates it by consulting `OutputMode.recover()`. |
+| `JsonRetryMiddleware()` | Drives the parse-failure retry loop for single-shot output modes by consulting `OutputMode.recover()`; no-op pass-through for chat agents. |
 | `ObservabilityMiddleware(tracer=None)` | Wraps the run in `tracer.start_as_current_span(f"agent.invoke/{name}")`.  Opt-in. |
 
 ### Default chain
@@ -759,8 +761,8 @@ other Composers) into industrial patterns.  Every Composer satisfies
 the `Composable[Input, T]` protocol so they nest uniformly; each
 `composer.invoke(input)` returns the same `Run[T]` handle as
 `agent.invoke(user_message)`, with cancellation cascading to every
-sub-Run under a 30s default timeout.  Full guide ships as
-`docs/composition.md` in M5.
+sub-Run under a 30s default timeout.  Full guide in
+[`docs/composition.md`](composition.md).
 
 ### Protocol types
 

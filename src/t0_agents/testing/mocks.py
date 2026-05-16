@@ -289,7 +289,7 @@ class MockGateway:
     ) -> None:
         self._source = source
         # MockGateway keeps the same episode id for every turn of a run
-        # so ``Agent.run(episode_id=None)`` sees a stable id across turns,
+        # so ``Agent.invoke(episode_id=None)`` sees a stable id across turns,
         # matching the real gateway's contract (episode_id first allocated
         # on inference #1, reused thereafter).  The same id is reused for
         # JSON retries via the script_json dict's ``episode_id: None``

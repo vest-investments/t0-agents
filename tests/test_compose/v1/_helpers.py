@@ -1,9 +1,9 @@
-"""Shared fakes for M4 Composer / topology tests.
+"""Shared fakes for Composer / topology tests.
 
 Each topology test under ``tests/test_compose/v1/`` consumes mock
 Composables and mock Runs from this module so the tests don't need
 a running TensorZero gateway or FastMCP server.  Built on top of
-:class:`Run`'s ``agent=None`` mode (the M4 widening) — the mock Run
+:class:`Run`'s ``agent=None`` mode for composite runs — the mock Run
 overrides ``_drive`` to return a pre-baked :class:`AgentResult`
 without touching any middleware chain.
 """

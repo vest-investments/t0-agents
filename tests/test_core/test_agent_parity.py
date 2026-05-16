@@ -1,7 +1,7 @@
-"""Parity tests: Agent.run() must produce identical results to run_agent.
+"""Parity tests: Agent.invoke() must produce identical results to run_agent.
 
 Each test here mirrors a corresponding test in ``tests/test_mcp/test_loop.py``
-(class ``TestRunAgent``), but exercises the code path through ``Agent.run()``
+(class ``TestRunAgent``), but exercises the code path through ``Agent.invoke()``
 instead of calling ``run_agent`` directly. If these tests diverge from the
 loop tests, the Agent wrapper is not faithfully delegating.
 """
@@ -105,7 +105,7 @@ class TestAgentParity:
             ),
         ])
         agent = _agent(t0, FakeMCPClient())
-        result = await agent.run("Just say hi.")
+        result = await agent.invoke("Just say hi.")
 
         assert result.response == "hello world"
         assert result.episode_id == str(episode)
@@ -120,7 +120,7 @@ class TestAgentParity:
             ),
         ])
         agent = _agent(t0, FakeMCPClient())
-        result = await agent.run("Q?")
+        result = await agent.invoke("Q?")
 
         assert result.response == "answer"
         assert "reasoning" not in result.response
@@ -140,7 +140,7 @@ class TestAgentParity:
             call_results={"add": _make_result(data=5)},
         )
         agent = _agent(t0, client)
-        result = await agent.run("compute 2+3")
+        result = await agent.invoke("compute 2+3")
 
         assert result.response == "the answer is 5"
         assert result.turns == 2
@@ -165,7 +165,7 @@ class TestAgentParity:
         agent = _agent(t0, client, max_turns=2)
 
         try:
-            await agent.run("loop forever")
+            await agent.invoke("loop forever")
         except MaxTurnsExceededError as e:
             assert e.max_turns == 2
         else:
@@ -195,7 +195,7 @@ class TestAgentParity:
             side_effect=slow_then_fast,
         )
         agent = _agent(t0, client, parallel_tools=True)
-        await agent.run("do both")
+        await agent.invoke("do both")
 
         # Input order preserved in results.
         last = t0.calls[1]["input"]["messages"][-1]
@@ -208,7 +208,7 @@ class TestAgentParity:
         """Mirrors test_dryrun_kwarg_forwards_to_inference."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _agent(t0, FakeMCPClient(), dryrun=True)
-        await agent.run("hello")
+        await agent.invoke("hello")
 
         assert t0.calls[0]["dryrun"] is True
 
@@ -238,7 +238,7 @@ class TestAgentParity:
             ),
         ])
         run_agent_obj = _agent(run_t0, FakeMCPClient())
-        run_result = await run_agent_obj.run("Q?")
+        run_result = await run_agent_obj.invoke("Q?")
 
         stream_t0 = FakeT0(
             responses=[
@@ -254,7 +254,7 @@ class TestAgentParity:
             ]
         )
         stream_agent_obj = _agent(stream_t0, FakeMCPClient())
-        events = [ev async for ev in stream_agent_obj.stream("Q?")]
+        events = [ev async for ev in stream_agent_obj.invoke("Q?").events()]
         done = events[-1]
         assert isinstance(done, DoneEvent)
 

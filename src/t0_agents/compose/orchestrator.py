@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 PARENT_EPISODE_ID_TAG = "t0_agents.parent_episode_id"
 
 # Kept isolated per :class:`contextvars.ContextVar` so concurrent
-# ``Agent.run`` calls on one orchestrator don't cross-contaminate each
+# ``Agent.invoke`` calls on one orchestrator don't cross-contaminate each
 # other's parent-episode bindings.
 _PARENT_EPISODE_ID: ContextVar[str | None] = ContextVar(
     "t0_agents_parent_episode_id",
@@ -77,7 +77,7 @@ def bind_parent_episode_id(episode_id: str | None) -> Iterator[None]:
 
     ``None`` is a valid input — sub-agents will then see
     ``get_parent_episode_id() is None`` and fall back to the
-    ``"unknown"`` correlation tag.  This keeps :meth:`Agent.run` from
+    ``"unknown"`` correlation tag.  This keeps :meth:`Agent.invoke` from
     having to short-circuit the bind when the caller passes no
     ``episode_id`` for a fresh orchestrator run.
     """
@@ -91,8 +91,8 @@ def bind_parent_episode_id(episode_id: str | None) -> Iterator[None]:
 def update_parent_episode_id(episode_id: str) -> None:
     """Overwrite the currently-bound parent-episode id in place.
 
-    :meth:`Agent.run` / :meth:`Agent.stream` enter
-    :func:`bind_parent_episode_id` at run start, but pass ``None`` when
+    :meth:`Agent.invoke` enters
+    :func:`bind_parent_episode_id` at run start, but passes ``None`` when
     the caller did not supply one — TensorZero only allocates the real
     episode id on the first inference response.  Without a refresh,
     every sub-agent invocation during that same orchestrator run would
@@ -214,7 +214,7 @@ class _OrchestrationToolProvider:
     runs the server in an anyio sub-task spawned by ``tg.start_soon``
     at ``async with Client(server):`` entry.  That sub-task snapshots
     the ``contextvars.Context`` at creation time, which happens
-    **before** :meth:`Agent.run` can bind the parent-episode id via
+    **before** :meth:`Agent.invoke` can bind the parent-episode id via
     :func:`bind_parent_episode_id` / update it via the on-inference
     refresh hook.  A :class:`~contextvars.ContextVar`-only handoff
     therefore reads the pre-run default (``None``) inside the
@@ -227,7 +227,7 @@ class _OrchestrationToolProvider:
     This wrapper sits between :func:`~t0_agents.mcp.loop.run_agent`
     and the orchestrator's :class:`fastmcp.Client`.  When the tool
     name matches a registered sub-agent, the call is dispatched
-    inline — same asyncio task as :meth:`Agent.run` — so
+    inline — same asyncio task as :meth:`Agent.invoke` — so
     :func:`get_parent_episode_id` reads the live binding set by the
     ``on_inference`` refresh wrapper.  All other tool calls fall
     through to the inner provider unchanged, preserving the MCP
@@ -291,16 +291,14 @@ class _OrchestrationToolProvider:
         parent_episode_id = get_parent_episode_id() or "unknown"
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
         try:
-            # v1.0: dispatch via Agent.invoke().result() so the
-            # sub-agent runs its own middleware chain; ``.result()`` is
-            # equivalent to v0.12 ``sub_agent.run(...)`` without the
-            # DeprecationWarning from this internal call-site.
+            # Dispatch via Agent.invoke().result() so the sub-agent
+            # runs its own middleware chain.
             result = await sub_agent.invoke(message, tags=delegation_tags).result()
         except T0AgentsFatalError:
             # Hybrid-fatal: T0AgentsFatalError subclasses (e.g.
             # GuardrailBlockedError raised by the sub-agent's own stack)
             # propagate unchanged so hard blocks reach the caller of
-            # Agent.run with their original type.
+            # Agent.invoke with their original type.
             raise
         except Exception as exc:
             raise SubAgentError(

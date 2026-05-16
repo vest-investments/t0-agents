@@ -1,7 +1,7 @@
 # Run — the first-class invocation handle
 
 `Agent.invoke(user_message, ...)` returns a `Run[T]` — the v1.0 handle
-for one invocation of an agent.  Where `agent.run(...)` in v0.12
+for one invocation of an agent.  Where `agent.invoke(...)` in v0.12
 returned the terminal `AgentResult`, `agent.invoke(...)` returns the
 *invocation itself* — an object you can `await`, iterate, cancel,
 replay, fork, attach feedback to, and introspect for cost and usage.
@@ -22,11 +22,11 @@ opt-in for the patterns the simple `await` doesn't cover.
 
 ## Why `Run` exists
 
-v0.12 returned `AgentResult` directly from `agent.run(...)`:
+v0.12 returned `AgentResult` directly from `agent.invoke(...)`:
 
 ```python
 # v0.12
-result = await agent.run("hi")
+result = await agent.invoke("hi")
 print(result.response)
 ```
 
@@ -45,10 +45,10 @@ That shape has three structural limits:
   cancel when the first finishes" needs a uniform handle on each
   agent's invocation — exactly what `Run` provides.
 
-`Run[T]` solves all three, additively.  v0.12's `agent.run(...)` is
-preserved as a deprecated shim that emits `DeprecationWarning` once
-per source line and delegates to `agent.invoke(...).result()` —
-existing code keeps working byte-identical until v1.1.
+`Run[T]` solves all three, additively.  The v0.12 `agent.run(...)`
+and `agent.stream(...)` entry points are removed in v1.0; the one-line
+migration to `agent.invoke(...)` / `agent.invoke(...).events()` is in
+[migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ---
 
@@ -322,8 +322,9 @@ even though each Run only records its boundary.
 Third-party Composer authors who need to build their own topology
 without a single owning Agent can construct a `Run` with `agent=None`
 and a custom drive callable.  `CompositeRun` (the implementation
-behind every M4 topology factory) does exactly this — the parent
-Run has no Agent of its own; the sub-Runs each carry their own.
+behind every topology factory in `compose/`) does exactly this —
+the parent Run has no Agent of its own; the sub-Runs each carry
+their own.
 
 The trade-off is that `feedback()` / `replay()` / `fork()` will raise
 `RuntimeError` because they require an Agent to drive against.
@@ -333,8 +334,7 @@ That's intentional — sub-Run-level methods are reachable through
 anyway.
 
 This is an advanced surface — most users don't need to know it
-exists.  Documented here for completeness so the M4 carry-forward
-note has a stable home.
+exists.  Documented here for completeness.
 
 ---
 

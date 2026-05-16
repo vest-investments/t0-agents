@@ -1,7 +1,7 @@
 """Contract tests: mocks stay compatible with the real surfaces.
 
 These tests are the line of defence against silent drift.  When a
-future phase adds a kwarg to :meth:`AsyncTensorZeroGateway.inference`
+future release adds a kwarg to :meth:`AsyncTensorZeroGateway.inference`
 or :meth:`fastmcp.Client.call_tool`, the mock might keep working for
 old tests while silently ignoring the new kwarg — breaking tests that
 rely on the new behaviour.  The shape tests inspect the real method

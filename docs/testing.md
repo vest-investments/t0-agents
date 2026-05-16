@@ -112,7 +112,7 @@ async def test_agent_uses_search_and_summarises() -> None:
         t0=cast(AsyncTensorZeroGateway, gateway),
         tool_provider=cast(ToolProvider, tools),
     )
-    result = await agent.run("Find notes about groceries")
+    result = await agent.invoke("Find notes about groceries")
 
     assert_tool_called("search_notes", tool_provider=tools)
     assert_tool_args_equal(
@@ -123,7 +123,7 @@ async def test_agent_uses_search_and_summarises() -> None:
 
 A runnable version of this exact test — with three tools, all five
 assertion helpers, and an error-recovery scenario — lives at
-[`examples/15_testing/test_agent_unit.py`](../examples/15_testing/test_agent_unit.py).
+[`examples/11_testing/test_agent_unit.py`](../examples/11_testing/test_agent_unit.py).
 
 ---
 
@@ -164,7 +164,7 @@ async def test_real_prompt_answers_question() -> None:
             t0=t0,
             tool_provider=client,
         )
-        result = await agent.run("What is 2 + 2?")
+        result = await agent.invoke("What is 2 + 2?")
         assert result.response
 ```
 
@@ -175,7 +175,7 @@ GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest -m embedded
 ```
 
 A runnable version lives at
-[`examples/15_testing/test_agent_embedded.py`](../examples/15_testing/test_agent_embedded.py).
+[`examples/11_testing/test_agent_embedded.py`](../examples/11_testing/test_agent_embedded.py).
 
 ---
 
@@ -199,7 +199,7 @@ only when the question is about real-model behaviour.
 ### Lifecycle of a mocked turn
 
 ```
-agent.run(message)
+agent.invoke(message)
    │
    ├─ 1. Infer           MockGateway.inference(**kwargs)
    │                         ├─ deep-copy kwargs  ────►  gateway.calls
@@ -320,7 +320,7 @@ from t0_agents.testing import MockGateway
 async with await AsyncTensorZeroGateway.build_http(...) as real:
     recorder = MockGateway.recording(real)
     agent = Agent(config, t0=recorder, tool_provider=client)
-    await agent.run("…")
+    await agent.invoke("…")
 
 # After the run — build a deterministic MockGateway from what was captured.
 deterministic = recorder.replay()
@@ -495,7 +495,7 @@ new result's `.data` field and the serializer would `json.dumps` the
 dataclass instead of surfacing the error string.  The agent loop
 then sees a `ToolResult(result="ERROR: disk is full")` on the next
 turn, ready for the model to react to.  See
-[`examples/15_testing/test_agent_unit.py::test_agent_surfaces_structured_tool_error`](../examples/15_testing/test_agent_unit.py)
+[`examples/11_testing/test_agent_unit.py::test_agent_surfaces_structured_tool_error`](../examples/11_testing/test_agent_unit.py)
 for a runnable end-to-end test of this pattern.
 
 ---
@@ -633,14 +633,14 @@ async for event in fake_event_stream(events):
     ...  # drive a TUI renderer, an SSE route, a WS bridge
 ```
 
-Perfect for testing anything that consumes `Agent.stream()` — it lets
+Perfect for testing anything that consumes `Run.events()` — it lets
 the consumer handle each event type without the overhead of a real
 gateway and a real `StreamingAgentLoop`.
 
 ### `MockStreamingGateway` — stream-capable gateway
 
 A tiny `AsyncTensorZeroGateway` duck for driving
-`Agent.stream()` through a full turn loop:
+`Run.events()` through a full turn loop:
 
 ```python
 from t0_agents.testing import MockStreamingGateway
@@ -653,7 +653,7 @@ gateway = MockStreamingGateway([
 
 Each turn emits a single `ChatChunk` carrying the chunk counterparts
 of the scripted blocks, followed by a terminal `Usage`-only chunk.
-Enough to exercise `Agent.stream()`'s turn loop and tool-dispatch
+Enough to exercise `Run.events()`'s turn loop and tool-dispatch
 path deterministically.
 
 Calls with `stream=False` are rejected with `ValueError` so
@@ -683,7 +683,7 @@ from t0_agents.testing import EmbeddedGatewayHelper
 async def test_real_prompt_parses():
     async with EmbeddedGatewayHelper.from_config("tests/configs/minimal.toml") as gw:
         agent = Agent(..., t0=gw, tool_provider=...)
-        result = await agent.run("...")
+        result = await agent.invoke("...")
         assert result.response
 ```
 
@@ -974,7 +974,7 @@ This chapter completes the progressive tour. Starting from a single `Agent` prim
 
 For deeper reference material that spans the tour — the full public API, the exception taxonomy, episode-level observability, production deployment trade-offs, multi-server composition — see the **Appendices** on the [index](index.md):
 
-- Runnable example: [`examples/15_testing/`](../examples/15_testing/README.md).
+- Runnable example: [`examples/11_testing/`](../examples/11_testing/README.md).
 - Contributing guide: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Agent reference: [`agent.md`](agent.md).
 - Error handling (what assertion helpers fire alongside): [`error-handling.md`](error-handling.md).

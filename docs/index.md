@@ -8,7 +8,7 @@ The documentation is written as a progressive tour: start with [Getting Started]
 
 | Module | Status | Description |
 |--------|--------|-------------|
-| `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, and the JSON-function dispatch (`function_kind="json"`, `output_schema`, `json_mode`, the permissive parser, the retry orchestration) covered in [Structured outputs](structured-outputs.md) |
+| `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, the v1.0 four-abstraction surface (`Run[T]`, `Middleware`, `OutputMode[T]`, `Composer`), and the JSON-function dispatch covered in [Output modes](output-modes.md) and the legacy [Structured outputs](structured-outputs.md) reference. |
 | `t0_agents.mcp` | Stable | MCP adapter (`convert_tools`, `serialize_tool_result`, `build_tool_result`), agent loop (`run_agent`, `execute_tool_calls`, `execute_tool_calls_parallel`, `has_tool_calls`), and reference elicitation handlers (`auto_approve_handler`, `auto_decline_handler`) |
 | `t0_agents.memory` | Stable | Cross-run persistence keyed by TensorZero's episode id: the `MemoryProvider` Protocol, `MemoryRecord` dataclass, `render_memory_summary` renderer, the ephemeral `InMemoryMemory`, the SQLite-backed `SqliteMemory`, and `TensorZeroMemory` for episode-scoped reads from TZ's observability log (with the `memory_strategy="messages"` native-history path that threads conversation history through `input.messages` without stringification) |
 | `t0_agents.guardrails` | Stable | Declarative policy layer: `require_approval`, `max_cost`, `max_tool_calls`, `block_tools`, plus the `Guardrail` Protocol for custom policies and the `GuardedToolProvider` wrapper installed by `Agent` when guardrails are configured |
@@ -16,11 +16,11 @@ The documentation is written as a progressive tour: start with [Getting Started]
 | `t0_agents.compose` | Stable | Multi-agent composition: register sub-agents as `{name}_ask` MCP tools on an orchestrator's in-process FastMCP server via `AgentConfig.sub_agents=[...]` or the standalone `agent_as_tool`, with `SubAgentError` for non-fatal delegation failures and `t0_agents.parent_episode_id` tags for ClickHouse correlation |
 | `t0_agents.serve` | Stable | HTTP serving layer: `create_app` / `mount_agent` wrap an `Agent` in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` (plus `/chat/stream` SSE and `/chat/ws` WebSocket when `streaming=True`); `SessionFactory` + the `SessionProvider` Protocol (and the `CallableSessionProvider` adapter) drive per-session `Client` wiring for auth, multi-tenant routing, and live elicitation |
 | `t0_agents.cli` | Beta | Terminal UI behind the `[cli]` extra: the `t0-agents` console script (`run`, `serve`, `info`) plus public primitives `TUIRenderer`, `rich_elicitation_handler`, `make_rich_elicitation_handler`, `get_active_renderer`, and `load_agent_factory` for driving an agent factory through a Rich `Live` panel |
-| `t0_agents.testing` | Beta | Test-authoring surface in the base distribution: `MockGateway` (chat: `script` / `canned` / `recording`; JSON: `script_json` / `canned_json` for `function_kind="json"` agents), `MockToolProvider` with custom schemas, ten `assert_*` helpers (five chat + five JSON: `assert_parsed_equals`, `assert_parsed_matches_schema`, `assert_invalid_json`, `assert_parse_strategy`, `assert_retry_attempts`), a `scenarios` catalogue, `EmbeddedGatewayHelper` for real TensorZero inference without Docker, `MockStreamingGateway` + `fake_event_stream` for `Agent.stream()` consumers, and four pytest fixtures (`mock_t0`, `mock_tool_provider`, `embedded_t0`, `agent_test_factory`) |
+| `t0_agents.testing` | Beta | Test-authoring surface in the base distribution: `MockGateway` (chat: `script` / `canned` / `recording`; JSON: `script_json` / `canned_json` for agents whose `AgentConfig.output` is a `JsonOutput` / `StructuredOutput`), `MockToolProvider` with custom schemas, ten `assert_*` helpers (five chat + five JSON: `assert_parsed_equals`, `assert_parsed_matches_schema`, `assert_invalid_json`, `assert_parse_strategy`, `assert_retry_attempts`), a `scenarios` catalogue, `EmbeddedGatewayHelper` for real TensorZero inference without Docker, `MockStreamingGateway` + `fake_event_stream` for `Run.events()` consumers, and four pytest fixtures (`mock_t0`, `mock_tool_provider`, `embedded_t0`, `agent_test_factory`) |
 
 ## Reading path
 
-1. **[Getting Started](getting-started.md)** — install the library and run your first agent in under five minutes, using the low-level `run_agent` API directly.
+1. **[Getting Started](getting-started.md)** — install the library and run your first agent in under five minutes via the canonical `Agent.invoke` surface.
 2. **[Agent](agent.md)** — meet the declarative `Agent` class, its `AgentConfig`, and the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`) the later chapters wire in.
 3. **[Run](run.md)** — `agent.invoke(message)` returns a `Run[T]`: the first-class invocation handle.  Await it for the final `AgentResult`, iterate `events()` for live `AgentEvent`s, cancel, replay, fork, attach feedback.
 4. **[Middleware](middleware.md)** — what runs around every inference: memory hydration, guardrail gating, cost tracking, sub-agent orchestration, JSON retry.  Add your own via the Starlette-style chain.
@@ -41,13 +41,22 @@ The documentation is written as a progressive tour: start with [Getting Started]
 Cross-cutting references that span every chapter above. Reach for them when you need detail on a specific axis instead of the narrative.
 
 - **[API Reference](api-reference.md)** — library-wide symbol index: public signatures and the shortest import path for every exported class, function, and Protocol.
-- **[Migration v0.12 → v1.0](migration-v0.12-to-v1.0.md)** — the two-tier upgrade walkthrough: `Agent.run` / `.stream` deprecation (Tier 1, removed in v1.1) and the 5 JSON config kwargs removed in v1.0 (Tier 2 — one-line migration per `AgentConfig`).
+- **[Migration v0.12 → v1.0](migration-v0.12-to-v1.0.md)** — the two surfaces removed in v1.0 (`Agent.run` / `Agent.stream` → `Agent.invoke` / `Run.events`, and five JSON config kwargs → `output=JsonOutput(...)`), each a one-line migration per call site.
 - **[Error Handling](error-handling.md)** — tool-error semantics, recoverable inference retries, `ToolError` vs `McpError`, and the full exception taxonomy.
 - **[Observability](observability.md)** — episode and inference correlation, the `t0.feedback` API, structured logging conventions, and ClickHouse analytics hooks.
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.
 - **[Multi-Server Composition](multi-server.md)** — mounting multiple FastMCP servers behind one agent with namespace prefixes, plus the TensorZero configuration to match.
 - **[Concurrency](concurrency.md)** — the three places parallelism lives in the stack (intra-turn `parallel_tools`, batch tools, multi-agent dispatch), with the decision table and the patterns the library deliberately does not provide.
 - **[Structured outputs](structured-outputs.md)** — TensorZero `json` functions, dynamic `output_schema` overrides, per-call `json_mode` swaps, the three-layer recovery ladder (strict → permissive → retry), the `require_parsed()` guardrail, and the JSON testing helpers (`MockGateway.script_json`, `assert_parsed_*`).
+
+## Guides
+
+Production patterns that compose t0-agents with adjacent tooling.  Each
+guide is self-contained for the system it covers; they cross-link to
+each other when a pattern spans both sides.
+
+- **[Elicitation in your API](guides/elicitation-in-api.md)** — wiring `t0-agents` into a FastAPI + SSE backend that forwards elicitation prompts to a browser and resolves them back through the same channel.  Covers `ElicitationForwarder`, per-session lifecycle, sticky-session and timeout constraints, scripted tests, and the production checklist.
+- **[Elicitation in your FastMCP server](guides/elicitation-in-mcp-server.md)** — the server-side companion: the four `ctx.elicit()` shapes, dynamic-survey topologies, schema constraints, decline / cancel handling, graceful degradation when no handler is wired, and isolation tests with no `t0-agents` import.
 
 ## Public API
 

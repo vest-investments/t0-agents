@@ -18,7 +18,7 @@ Usage::
 
     async with EmbeddedGatewayHelper.from_config("tests/configs/minimal.toml") as t0:
         agent = Agent(AgentConfig(...), t0=t0, tool_provider=client)
-        result = await agent.run("hi")
+        result = await agent.invoke("hi")
 """
 
 from __future__ import annotations

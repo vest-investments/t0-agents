@@ -1,6 +1,6 @@
 # Concepts
 
-The previous chapter introduced the [`Agent`](agent.md) class as the declarative entry point for building an application. This chapter opens the engine that `Agent.run()` delegates to: the `run_agent` loop in `t0_agents.mcp`.
+The previous chapter introduced the [`Agent`](agent.md) class as the declarative entry point for building an application. This chapter opens the engine that `Agent.invoke()` delegates to: the `run_agent` loop in `t0_agents.mcp`.
 
 ## The three participants
 

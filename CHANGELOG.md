@@ -10,18 +10,17 @@ The v1.0 four-abstraction refactor lands as one cumulative release.
 Four new abstractions — `Run[T]`, `Middleware`, `OutputMode[T]`,
 `Composer` — give power users a first-class surface for invocation
 handles, cross-cutting concerns, output polymorphism, and topology
-orchestration without forking `core/agent.py`.  The migration story
-is **two-tier**: `Agent.run()` / `Agent.stream()` keep working as
-deprecated shims (removed in v1.1); five v0.12 JSON-only `AgentConfig`
-kwargs are removed directly (one-line migration to
-`output=JsonOutput(...)`).  Chat-mode stdout stays byte-identical to
-v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
-`examples/17_structured/` is migrated to the new `output=...` shape.
-`mcp/` is untouched across the entire refactor (invariant §2.1).
+orchestration without forking `core/agent.py`.  Two v0.12 surfaces are
+removed: `Agent.run()` / `Agent.stream()` (replaced by
+`Agent.invoke(...) -> Run[T]` and `run.events()`) and the five
+JSON-only `AgentConfig` kwargs (replaced by `output=JsonOutput(...)`).
+Both are one-line migrations per call site; the migration walkthrough
+is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
+`mcp/` is untouched across the entire refactor.
 
 ### Added
 
-#### `Run[T]` — first-class invocation handle (M1)
+#### `Run[T]` — first-class invocation handle
 
 - **`Agent.invoke(user_message, *, ...) -> Run[T]`** is the canonical
   entry point.  Returns a `Run` you can `await` for the final
@@ -48,7 +47,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   exception (`MaxTurnsExceededError`, `GuardrailBlockedError`, ...)
   directly.
 
-#### `Middleware` — composable cross-cutting concerns (M2)
+#### `Middleware` — composable cross-cutting concerns
 
 - **`Middleware` Protocol** — `name: str` + `async __call__(ctx, next_) -> AgentResult`.
 - **`RunContext`** — mutable per-Run state threaded through the
@@ -74,7 +73,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`RunUsage`** — frozen dataclass with `input_tokens`,
   `output_tokens`, `cost` aggregates.  Returned by `Run.usage()`.
 
-#### `OutputMode[T]` — output polymorphism (M3)
+#### `OutputMode[T]` — output polymorphism
 
 - **`OutputMode[T]` protocol** — `expects_tool_loop` /
   `supports_streaming` capability flags; `shape_inference(req)`
@@ -104,7 +103,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`[pydantic]` extra** — `pip install 't0-agents[pydantic]'` pulls
   `pydantic>=2.0` for `StructuredOutput`.
 
-#### `Composer` — topology primitive (M4)
+#### `Composer` — topology primitive
 
 - **`Composable[Input, T]` Protocol** — `@runtime_checkable`; an
   object whose `.invoke(input)` returns a `Run[T]`.  Both `Agent`
@@ -155,10 +154,10 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   compensation contract, `retry_chain` exception asymmetry,
   declarative-vs-explicit two-paths comparison, deferred
   `CompositeRun` APIs.
-- **`docs/migration-v0.12-to-v1.0.md`** — two-tier migration
-  walkthrough (Tier 1 `Agent.run` / `.stream` deprecation, Tier 2 5
-  JSON config kwargs removal) with side-by-side snippets and
-  PaaS-specific notes.
+- **`docs/migration-v0.12-to-v1.0.md`** — migration walkthrough for
+  the two v0.12 surfaces removed in v1.0 (`Agent.run` / `.stream` →
+  `Agent.invoke` / `Run.events`; five JSON config kwargs →
+  `output=JsonOutput(...)`) with side-by-side snippets.
 - **`docs/api-reference.md`** — new "Run", "Middleware", "RunUsage",
   "Output modes", and "Composers" sections; cross-links to the
   canonical narrative pages.
@@ -195,17 +194,11 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   per-call `output: OutputMode[T]` is supplied, `Run[T]` is narrowed
   by mypy via overload pair.  Default (no per-call override) returns
   `Run[Any]`.
-- **`JsonRetryMiddleware` activated** at M3 — consults
-  `ctx.output.recover(failure, attempts)` between attempts; mutates
-  `ctx.user_message` and `ctx.prior_messages` to thread the
-  corrective hint into the next inference.  `allow_retry = True`
-  class attribute signals `build_pipeline` to skip the `_NextGuard`.
-- **`Agent.run` (Tier 1 shim)** — when called with the v0.12
-  per-call JSON kwargs (`output_schema`, `json_mode`,
-  `max_json_retries`), translates them into a synthesised per-call
-  `JsonOutput(...)` and forwards via the canonical `output=`
-  channel.  Preserves Tier 1 byte-identity for callers that used
-  per-call overrides on JSON agents.
+- **`JsonRetryMiddleware`** — consults `ctx.output.recover(failure,
+  attempts)` between attempts; mutates `ctx.user_message` and
+  `ctx.prior_messages` to thread the corrective hint into the next
+  inference.  `allow_retry = True` class attribute signals
+  `build_pipeline` to skip the `_NextGuard`.
 - **`Run.cost()` / `Run.usage()`** populated by
   `CostTrackingMiddleware` on every inference.  v0.12 only tracked
   cost when guardrails were configured; v1.0 makes it always-on
@@ -214,12 +207,6 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   (one-line widening + weakref guard).  Required so `CompositeRun`
   can satisfy the `Run` nominal type without a synthetic Agent
   stub.
-- **Internal call-sites** (`compose/delegation.py`,
-  `compose/orchestrator.py`, `serve/routes.py`,
-  `serve/streaming_routes.py`) migrated from `agent.run(...)` /
-  `agent.stream(...)` shims to `agent.invoke(...).result()` /
-  `agent.invoke(...).events()`.  Eliminates ~4 internal
-  `DeprecationWarning` emissions per process.
 - **HTTP / WS serialization of `DoneEvent`** explicitly projects
   through the v0.12 read-side keys (`response`, `parsed`,
   `parse_strategy`, `json_parse_attempts`, `function_kind`) so
@@ -227,17 +214,15 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`docs/structured-outputs.md`** updated for the v1.0 surface
   with explicit v0.12 → v1.0 migration block.
 
-### Deprecated
-
-- **`Agent.run(...)`** — emits `DeprecationWarning` once per source
-  line.  Use `await agent.invoke(msg, ...)` (a `Run` is awaitable
-  and returns the same `AgentResult`).  Removed in **v1.1**.
-- **`Agent.stream(...)`** — emits `DeprecationWarning` once per
-  source line.  Use `async for ev in agent.invoke(msg, ...).events()`.
-  Removed in **v1.1**.
-
 ### Removed
 
+- **`Agent.run(...)`** — replaced by `await agent.invoke(msg, ...)`
+  (a `Run` is awaitable and returns the same `AgentResult`).
+  Migration is a one-liner per call site; see
+  [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
+- **`Agent.stream(...)`** — replaced by `async for ev in
+  agent.invoke(msg, ...).events()`.  Two-channel consumption is now
+  supported — see [`docs/run.md`](docs/run.md).
 - **`AgentConfig.function_kind`** — replaced by
   `AgentConfig.output: OutputMode`.  Passing it raises `TypeError`.
 - **`AgentConfig.json_mode`** — replaced by
@@ -255,9 +240,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   → `AgentConfig(output=JsonOutput(schema=S, json_mode="strict",
   permissive=True, max_retries=2))`.
 - **`Agent.invoke(..., output_schema=, json_mode=, max_json_retries=)`**
-  M1-deprecated per-call kwargs — removed in lockstep with the
-  config-level fields.  The `Agent.run` shim continues to accept
-  them for Tier 1 byte-identity and translates internally.
+  per-call kwargs — pass a per-call `output=JsonOutput(...)` instead.
 - **`RunInput.function_kind/output_schema/json_mode/max_json_retries`**
   — dispatch routes via `Run.output.expects_tool_loop`.
 - **`Agent._RETRY_HINT_BASE` + `Agent._build_retry_hint`** — moved
@@ -275,7 +258,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   `examples/{02,03,04,05,06,07,18}/docker-compose.yml` pinned the
   non-existent `clickhouse/clickhouse-server:lts`; replaced with
   the canonical `clickhouse:lts`.
-- **`examples/02_basic_agent/README.md` directory drift** — README
+- **`examples/01_first_agent/README.md` directory drift** — README
   still referenced the directory by its old name `01_basic_agent`;
   replaced and stale forward-reference removed.
 - **429 regression test** — `tests/test_mcp/test_harness.py::
@@ -285,15 +268,12 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 
 ### Notes
 
-- **Industrial middlewares deferred** — the original M5 scope
-  included `BulkheadMiddleware`, `CircuitBreakerMiddleware`,
-  `TenantIsolationMiddleware`, `PiiRedactorMiddleware`,
-  `RedisRateLimitMiddleware`, and an `OTelTracerAdapter`.  Dropped
-  during M5 close after a scope review (no concrete consumer asks
-  for them today).  See
-  `docs/internal/v1-refactor/logs/milestone-5-dev-log.md` §2; the
-  related open questions Q4/Q5/Q6 are marked
-  `Status: deferred` in `02-open-questions.md`.
+- **Industrial middlewares deferred** — `BulkheadMiddleware`,
+  `CircuitBreakerMiddleware`, `TenantIsolationMiddleware`,
+  `PiiRedactorMiddleware`, `RedisRateLimitMiddleware`, and an
+  `OTelTracerAdapter` were considered for the v1.0 release and
+  dropped after a scope review (no concrete consumer asks for them
+  today).
 
 ## [0.13.0] — Unreleased
 
@@ -322,10 +302,10 @@ the wire.  Backwards compatible: any caller that does not pass
   `system_arguments`"** — decision matrix for the two kwargs across
   schema'd / schema-less functions, plus guidance on when to reach
   for each.
-- **`examples/18_raw_system_prompt/`** — runnable PaaS-style demo:
+- **`examples/02_agent_class/`** — runnable PaaS-style demo:
   the same `Agent` is invoked three times with three runtime-supplied
   personalities (haiku, pirate, lawyer), driving the model purely
-  through `system="..."`.  Companion to `examples/03_system_prompt/`
+  through `system="..."`.  Companion to `examples/02_agent_class/`
   (which demonstrates the templated, recommended pattern via
   `system_template`).
 
@@ -378,7 +358,7 @@ passing an explicit provider) continues to work byte-identically.
 
 ### Examples and docs
 
-- `examples/17_structured/structured_agent.py`,
+- `examples/03_output_modes/structured_agent.py`,
   `ner_dynamic_schema.py`, `recovery_real_provider.py`, and
   `recovery_demo.py` no longer build a placeholder `FastMCP("noop")`
   server just to satisfy the constructor; they pass only the gateway.
@@ -533,7 +513,7 @@ is bit-for-bit untouched.
 
 #### Examples and docs
 
-- **`examples/17_structured/`** — five runnable demos:
+- **`examples/03_output_modes/`** — five runnable demos:
   - `main.py` — `run_structured_inference()` against the
     `extract_customer_info` function.
   - `structured_agent.py` — same function through `Agent.run`.
@@ -545,7 +525,7 @@ is bit-for-bit untouched.
     `extract_entities` function showing per-call `output_schema`
     overrides and a per-call `json_mode = "tool"` swap.
 - **`config/functions/extract_entities/`** and the mirrored
-  `examples/17_structured/config/functions/extract_entities/` —
+  `examples/03_output_modes/config/functions/extract_entities/` —
   four-category NER schema (people, locations, organizations, topics)
   and system template, declared in both the repo-root and example-folder
   `config/tensorzero.toml` under `[functions.extract_entities]`.
@@ -676,7 +656,7 @@ is bit-for-bit untouched.
   submodule.
 - **Agent testing framework** (`from t0_agents.testing import MockGateway,
   MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
-  Milestone M8: Testable Agents.  Ships from the base distribution — no
+  Ships from the base distribution — no
   new extra, no new dependency.  Two complementary paths:
   - **`MockGateway`** — duck-typed `AsyncTensorZeroGateway` with three
     construction modes.  `script(turns)` pops a pre-scripted content
@@ -727,7 +707,7 @@ is bit-for-bit untouched.
   Protocol, and that `MockToolProvider.call_tool` returns a real
   `fastmcp.CallToolResult`.  Fails fast on any future drift between
   mocks and the real surfaces.
-- **Example** [`examples/15_testing/`](examples/15_testing/) — a
+- **Example** [`examples/11_testing/`](examples/11_testing/) — a
   three-tool demo agent (`agent.py`) with both `test_agent_unit.py`
   (runs in < 1 s, no Docker, no API keys) and `test_agent_embedded.py`
   (opt-in via `RUN_EMBEDDED_TESTS=1`), plus a self-contained
@@ -742,12 +722,12 @@ is bit-for-bit untouched.
 
 ### Changed
 
-- Phase H does not modify `core/`, `mcp/`, `stream/`, `serve/`,
-  `memory/`, `guardrails/`, `compose/`, or `cli/`.  `run_agent`,
-  `AgentResult`, `Agent`, and every pre-existing public symbol are
-  byte-identical to 0.8.0 (contract §2.1, §6.1–§6.3).  All 399 prior
-  offline tests remain green alongside the 56 new `tests/test_testing/`
-  tests — 455 total passing in `-m "not integration and not embedded"`.
+- The testing release does not modify `core/`, `mcp/`, `stream/`,
+  `serve/`, `memory/`, `guardrails/`, `compose/`, or `cli/`.
+  `run_agent`, `AgentResult`, `Agent`, and every pre-existing public
+  symbol are byte-identical to 0.8.0.  All 399 prior offline tests
+  remain green alongside the 56 new `tests/test_testing/` tests —
+  455 total passing in `-m "not integration and not embedded"`.
 
 ## [0.8.0] — Unreleased
 
@@ -755,16 +735,16 @@ is bit-for-bit untouched.
 
 - **Multi-agent composition** (`from t0_agents import agent_as_tool,
   SubAgentError`; `from t0_agents.compose import install_sub_agents,
-  assert_unique_names, default_tool_name`).  Milestone M7: Composed
-  Agents.  No new dependencies — built on top of the existing
-  `core/` + `mcp/` surfaces and FastMCP's public runtime-registration
-  APIs (`Tool.from_function(...)` + `server.add_tool(tool)`).
+  assert_unique_names, default_tool_name`).  No new dependencies —
+  built on top of the existing `core/` + `mcp/` surfaces and
+  FastMCP's public runtime-registration APIs
+  (`Tool.from_function(...)` + `server.add_tool(tool)`).
 - **`AgentConfig.sub_agents: list[Agent]`** — declarative
   delegation.  When non-empty, `Agent.__init__` registers each entry
   as a `{sub_agent.config.name}_ask` tool on the orchestrator's
   in-process FastMCP server via
   `t0_agents.compose.install_sub_agents`.  Empty (the default)
-  preserves Phase A byte-identity.  Requires a `fastmcp.Client`
+  preserves single-agent byte-identity.  Requires a `fastmcp.Client`
   backed by an in-process `FastMCPTransport`; remote MCP transports
   raise `ConfigurationError` at construction time, as do duplicate
   sub-agent names and collisions with pre-existing tools.
@@ -792,12 +772,12 @@ is bit-for-bit untouched.
 - **Public doc** [`docs/multi-agent.md`](docs/multi-agent.md)
   covering the why, the public API, the error model, episode
   propagation, and the in-process / stable-schema caveats.
-- **Example** [`examples/14_multi_agent/`](examples/14_multi_agent/)
+- **Example** [`examples/08_multi_agent/`](examples/08_multi_agent/)
   ships a researcher + writer + orchestrator trio with its own
   `docker-compose.yml`, `config/tensorzero.toml` (three functions:
   `research`, `writing`, `orchestrator`), and both a `main.py`
   entrypoint and an `orchestrator_factory` for
-  `t0-agents run examples.14_multi_agent.agents:orchestrator_factory`.
+  `t0-agents run examples.08_multi_agent.agents:orchestrator_factory`.
 
 ## [0.7.0] — Unreleased
 
@@ -805,8 +785,8 @@ is bit-for-bit untouched.
 
 - **CLI** (`from t0_agents.cli import TUIRenderer, rich_elicitation_handler,
   make_rich_elicitation_handler, load_agent_factory`) — Typer + Rich
-  terminal UI. Milestone M6: TUI Agent. Ships behind the new `[cli]`
-  extra (`pip install 't0-agents[cli]'`), which pulls `typer>=0.12.0`,
+  terminal UI. Ships behind the new `[cli]` extra
+  (`pip install 't0-agents[cli]'`), which pulls `typer>=0.12.0`,
   `rich>=13.7.0`, plus the streaming + serving deps (`fastapi`,
   `uvicorn[standard]`, `pydantic`, `sse-starlette`).
 - **`t0-agents` entry-point script** wired to `t0_agents.cli.app:main`.
@@ -816,13 +796,13 @@ is bit-for-bit untouched.
     prompts. `--verbose` surfaces reasoning content.
   - `t0-agents serve <module:attr>` — wraps
     `t0_agents.serve.create_app(..., share_client=True)` in uvicorn.
-    Phase D non-streaming routes by default (`POST /chat`, `/feedback`,
+    Non-streaming routes by default (`POST /chat`, `/feedback`,
     `/health`, `/info`); opt in to SSE + WS with `--streaming`. WS
     elicitation is incompatible with shared-Client mode (FastMCP Q3),
     so `--streaming` is only useful for tools that never call
     `ctx.elicit` — for full browser elicitation, call `create_app`
     directly with a `client_factory` + `elicitation_client_factory`
-    (see `examples/12_streaming_http/agent_app.py`). `--host`,
+    (see `examples/07_streaming/agent_app.py`). `--host`,
     `--port`, `--deployment` flags.
   - `t0-agents info <module:attr>` — prints a Rich `Table` of the
     loaded `AgentConfig`.
@@ -850,7 +830,7 @@ is bit-for-bit untouched.
   that distinguishes "malformed spec", "missing module", "missing
   attribute", "resolved to a bare Agent instance", and "resolved to a
   non-callable" so the error path is actionable.
-- Example `examples/13_tui/` — runnable demo with a FastMCP server
+- Example `examples/10_cli/` — runnable demo with a FastMCP server
   (`add`, `set_reminder` with `ctx.elicit(response_type=Reminder)`),
   a `@asynccontextmanager` factory, and a README walkthrough of the
   three subcommands.
@@ -860,11 +840,10 @@ is bit-for-bit untouched.
 
 ### Changed
 
-- Phase F does not modify `core/`, `mcp/`, `stream/`, `serve/`,
+- This release does not modify `core/`, `mcp/`, `stream/`, `serve/`,
   `memory/`, or `guardrails/`. `run_agent`, `AgentResult`, `Agent`,
-  and every existing public symbol are byte-identical to 0.6.0
-  (contract §2.1, §6.1–§6.3). Pre-existing offline tests remain
-  green (363 passed across Phase A–F).
+  and every existing public symbol are byte-identical to 0.6.0.
+  Pre-existing offline tests remain green (363 passed total).
 
 ## [0.6.0] — Unreleased
 
@@ -874,13 +853,13 @@ is bit-for-bit untouched.
   TextDeltaEvent, TextEndEvent, ToolCallDeltaEvent, ToolCallEvent,
   ToolResultEvent, ThoughtDeltaEvent, ThoughtEvent, TurnEndEvent,
   ErrorEvent, StreamingAgentLoop, TurnStreamAssembler`) — typed event
-  union emitted by `Agent.stream()`.  Milestone M5: Live Agent.  Ships
-  from the base distribution (no extra needed).
+  union emitted by `Agent.stream()`.  Ships from the base distribution
+  (no extra needed).
 - **`Agent.stream(message, *, episode_id=None) -> AsyncIterator[AgentEvent]`**
   — streaming analogue of `Agent.run`.  Same memory / guardrail
   scaffolding; the terminal event is always `DoneEvent(result=...)`
   carrying a full `AgentResult`.  Non-streaming `Agent.run` is
-  byte-identical to Phase D.
+  byte-identical to the previous release.
 - **`TurnStreamAssembler`** — folds `AsyncIterator[ChatChunk]` from
   `AsyncTensorZeroGateway.inference(stream=True)` into an
   `AsyncIterator[AgentEvent]` with stable correlation ids per T0 Q1.
@@ -889,11 +868,11 @@ is bit-for-bit untouched.
   recoverable-retry contract from `mcp/`.  `run_agent` and the `mcp/`
   submodule are untouched (contract §2.1, §6.1).
 - **`ElicitationForwarder` full completion** (`from t0_agents import
-  ElicitationForwarder`) — Phase D skeleton grows `on_request` +
+  ElicitationForwarder`) — the bridge grows `on_request` +
   `default_timeout` constructor kwargs, a Future-based `handler`, and
   public `resolve(elicitation_id, payload)` / `cancel_all(action=...)`
-  methods.  Empty-constructor behaviour (always decline) is preserved
-  for Phase D compatibility.
+  methods.  The empty-constructor "always decline" behaviour is
+  preserved for backward compatibility.
 - **`SessionProvider` Protocol + `CallableSessionProvider` adapter**
   (`from t0_agents.serve import SessionProvider,
   CallableSessionProvider`) — advanced extension point for per-session
@@ -907,14 +886,14 @@ is bit-for-bit untouched.
   (bidirectional).  `session_provider` is the advanced WS wiring slot.
   `elicitation_client_factory: Callable[[ElicitationHandler],
   Client[Any]]` is the simple WS wiring slot — pair it with the existing
-  `client_factory`.  Phase D callers that set only `client_factory` or
+  `client_factory`.  Existing callers that set only `client_factory` or
   `share_client=True` keep working unchanged.
 - **WS wire protocol** (`from t0_agents.serve.ws_protocol import
   WSUserMessage, WSElicitationResponse, WSErrorFrame,
   WSElicitationRequest`) — Pydantic v2 envelopes for every frame in each
   direction.  Documented in `docs/streaming.md`.
 - **`sse-starlette>=2.0`** added to the `[serve]` extra.
-- Example `examples/12_streaming_http/` — runnable demo with a FastMCP
+- Example `examples/07_streaming/` — runnable demo with a FastMCP
   server, `agent_app.py`, browser WS client (`static/index.html` +
   `static/app.js`) covering every `AgentEvent.type` and the elicitation
   round-trip.
@@ -926,7 +905,7 @@ is bit-for-bit untouched.
 
 - `SessionFactory` now accepts `session_provider=...` alongside
   `client_factory=...` and `shared_tool_provider=...` (three-way XOR).
-  Phase D XOR validation error wording is preserved when exactly
+  The original XOR validation error wording is preserved when exactly
   `client_factory` + `share_client` are both set (test compat).  The
   existing `session(extra_tags=...)` context manager gains an optional
   `elicitation_handler=...` kwarg that threads through to the
@@ -962,7 +941,7 @@ is bit-for-bit untouched.
 
 - **HTTP serving layer** (`from t0_agents.serve import create_app,
   mount_agent, SessionFactory`) — declarative FastAPI wrap of an
-  `Agent`. Milestone M4: Hosted Agent. Requires the new `[serve]`
+  `Agent`. Requires the new `[serve]`
   extra (`pip install 't0-agents[serve]'`), which pulls
   `fastapi>=0.115.0`, `uvicorn[standard]>=0.32.0`, and `pydantic>=2.0`.
 - **`create_app(agent, *, client_factory=..., share_client=False,
@@ -979,33 +958,32 @@ is bit-for-bit untouched.
 - **`SessionFactory`** — advanced: per-session `(Client, Agent)`
   builder that `create_app` uses internally. Exposes
   `session(extra_tags=...)` async context manager whose lifetime is
-  the caller's `async with` block (one HTTP request in Phase D; Phase
-  E's SSE / WS streams will reuse the same primitive unchanged).
-  Enforces the FastMCP Q3 / contract §3.5 per-session-Client mandate
-  by default.
+  the caller's `async with` block (one HTTP request initially; SSE /
+  WS streams in the next release reuse the same primitive unchanged).
+  Enforces the per-session-Client mandate by default.
 - **`ElicitationForwarder`, `ElicitationRequest`**
   (`from t0_agents import ElicitationForwarder, ElicitationRequest`)
-   — future-based elicitation bridge. Phase D ships the skeleton with
+   — future-based elicitation bridge. The skeleton ships here with
   a default `handler` that declines everything (HTTP has no return
-  channel). Phase E will complete `forward()` / `resolve()` /
+  channel). A later release completes `forward()` / `resolve()` /
   `wait_for()` for SSE + WS piping.
 - **`Agent.warmup()`** — async readiness hook. Default no-op;
   override in a subclass to front-load readiness probes. Called by
   `serve.build_lifespan` during FastAPI startup.
-- Example `examples/11_http_agent/` — runnable single-agent demo with
+- Example `examples/09_serving/` — runnable single-agent demo with
   `server.py`, `agent_app.py`, `run.sh`, `client.sh`, and a README
   that covers the multi-agent `mount_agent` pattern and the
   `share_client=True` trade-off.
 - Public documentation at `docs/serving.md` — quickstart, per-surface
   deployment recipe, concurrency model, `share_client` trade-off,
-  GKE / cloud-LB deployment notes (sticky sessions planned for
-  Phase E).
+  GKE / cloud-LB deployment notes (sticky sessions arrive with the
+  streaming release).
 
 ### Changed
 
-- Phase D does not modify `AgentConfig`; the serving layer wraps an
-  existing `Agent` instance. `run_agent` and the `mcp/` submodule are
-  untouched (contract §2.1, §6.1).
+- This release does not modify `AgentConfig`; the serving layer
+  wraps an existing `Agent` instance. `run_agent` and the `mcp/`
+  submodule are untouched.
 
 ## [0.4.0] — Unreleased
 
@@ -1013,7 +991,7 @@ is bit-for-bit untouched.
 
 - **Guardrail subsystem** (`from t0_agents.guardrails import require_approval,
   max_cost, max_tool_calls, block_tools`) — declarative policy layer on top
-  of `Agent`. Milestone M3: Trusted Agent.
+  of `Agent`.
 - **`require_approval(tools=..., handler=...)`** — interactive approval gate
   riding FastMCP's `elicitation_handler` signature. Developers can reuse
   the exact handler they already pass to `Client(elicitation_handler=...)`.
@@ -1048,7 +1026,7 @@ is bit-for-bit untouched.
   by `Agent.run()` to track cumulative cost for `max_cost`.
 - **`AgentResult.guardrail_log`** — new field (default empty list)
   carrying per-hook activations for audit and manual feedback emission.
-- Example `examples/10_guardrails/` demonstrating all four built-ins
+- Example `examples/06_guardrails/` demonstrating all four built-ins
   composed on one agent with a CLI approval handler.
 - Public documentation at `docs/guardrails.md`.
 
@@ -1056,7 +1034,7 @@ is bit-for-bit untouched.
 
 - `AgentConfig` gained a `guardrails: list[Guardrail]` field (default
   empty). When empty, `Agent.run()` forwards the raw `tool_provider` and
-  passes `on_inference=None` — byte-identical to Phase B.
+  passes `on_inference=None` — byte-identical to 0.2.0.
 
 ## [0.3.0] — Unreleased
 
@@ -1065,7 +1043,7 @@ is bit-for-bit untouched.
 - **Memory subsystem** (`from t0_agents.memory import InMemoryMemory, SqliteMemory,
   MemoryProvider`) — repository-pattern memory for `Agent`. Configure
   `AgentConfig(memory=SqliteMemory("./db"))` to persist state across
-  `.run()` calls. Milestone M2: Stateful Agent.
+  `.run()` calls.
 - **`InMemoryMemory`** — ephemeral, dict-backed backend for tests and
   single-process apps.
 - **`SqliteMemory`** — persistent backend behind the `[memory-sqlite]`
@@ -1077,7 +1055,7 @@ is bit-for-bit untouched.
   `"system_template"`).
 - `system_arguments` keyword argument on `run_agent` — forwards template
   arguments to `input.system.arguments` in TensorZero inference calls.
-- Example `examples/09_memory/` demonstrating cross-session memory.
+- Example `examples/05_memory/` demonstrating cross-session memory.
 - Public documentation at `docs/memory.md`.
 
 ## [0.2.0] — Unreleased
@@ -1086,7 +1064,7 @@ is bit-for-bit untouched.
 
 - **Agent class** (`from t0_agents import Agent, AgentConfig`) — declarative
   wrapper around `run_agent`. Configure once with `AgentConfig`, then call
-  `agent.run(message)` with no boilerplate. Milestone M1: Declarative Agent.
+  `agent.run(message)` with no boilerplate.
 - **ToolProvider Protocol** — structural type matching `fastmcp.Client`'s
   `list_tools()` + `call_tool()` interface for testing and extensibility.
 - **T0AgentsError** base exception — all library exceptions now inherit from
@@ -1095,7 +1073,7 @@ is bit-for-bit untouched.
   parameters are invalid (empty name, negative max_turns, etc.).
 - `tags` and `namespace` keyword arguments on `run_agent` — forwarded to every
   `t0.inference()` call for observability and experimentation routing.
-- Example `examples/08_agent_class/` demonstrating `Agent` usage.
+- Example `examples/02_agent_class/` demonstrating `Agent` usage.
 - Public documentation at `docs/agent.md`.
 
 ### Changed

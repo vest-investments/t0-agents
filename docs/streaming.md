@@ -2,7 +2,7 @@
 
 Guardrails constrain what the agent may do. Streaming reveals what the agent *is* doing. Both are complementary — a streamed run honours every configured guardrail and surfaces the approval/block events as part of the same stream the caller consumes for text deltas and tool calls.
 
-`Agent.stream()` returns an async iterator of **typed `AgentEvent`
+`Run.events()` returns an async iterator of **typed `AgentEvent`
 variants** — one per assistant-text delta, one per tool call, one per
 thought chunk, plus terminal consolidation events.  The `stream/`
 submodule defines the event model; the `serve/` package exposes it over
@@ -13,13 +13,13 @@ required when a tool calls `ctx.elicit()`).
 from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEvent
 ```
 
-> **Chat-only.**  `Agent.stream(...)` supports chat-flavoured agents
+> **Chat-only.**  `Run.events(...)` supports chat-flavoured agents
 > only.  For an agent whose `AgentConfig.function_kind == "json"`, the
 > stream raises `ConfigurationError` at first `__anext__` — TensorZero
 > does not emit `output.parsed` mid-stream, so a JSON stream would
 > yield events whose `parsed` is permanently `None`.  See
 > [Structured outputs — Why you cannot stream JSON functions](structured-outputs.md#why-you-cannot-stream-json-functions)
-> for the rationale and recommended pattern (call `Agent.run(...)` and
+> for the rationale and recommended pattern (call `Agent.invoke(...)` and
 > present the JSON on the consumer side once it lands).
 
 ## Why stream?
@@ -32,13 +32,13 @@ from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEve
   a browser click before proceeding.
 - **Backpressure visibility** — the stream stops progressing when the
   client is slow; no hidden buffering.
-- **Drop-in** — `Agent.run()` is byte-identical to the non-streaming
+- **Drop-in** — `Agent.invoke()` is byte-identical to the non-streaming
   path.  Add streaming when you need it; keep batch callers untouched.
 
 ## Install
 
 Streaming primitives (the event dataclasses, `TurnStreamAssembler`,
-`StreamingAgentLoop`, and `Agent.stream()`) ship in the base
+`StreamingAgentLoop`, and `Run.events()`) ship in the base
 distribution — no new dependency, no extra:
 
 ```bash
@@ -61,7 +61,7 @@ The TUI renderer that consumes the same events lives in
 
 ### Easy — consume a mock stream (no Docker, no gateway)
 
-This snippet covers the shape of `Agent.stream()` without booting
+This snippet covers the shape of `Run.events()` without booting
 TensorZero.  `fake_event_stream` from `t0_agents.testing.streaming_mocks`
 wraps a list of `AgentEvent`s into the same `AsyncIterator[AgentEvent]`
 shape the real method returns, so you can design a renderer or test a
@@ -105,7 +105,7 @@ Use it as the template for writing unit tests of anything that consumes
 `AsyncIterator[AgentEvent]` — TUI renderers, SSE routes, reducers,
 background workers.
 
-### Real — `Agent.stream()` against a running gateway
+### Real — `Run.events()` against a running gateway
 
 Once you have `docker compose up` running and a `GROQ_API_KEY` in your
 environment, the full loop looks like this:
@@ -133,7 +133,7 @@ async def chat(query: str) -> None:
             tool_provider=tools,
         )
 
-        async for event in agent.stream(query):
+        async for event in agent.invoke(query).events():
             match event:
                 case TextDeltaEvent(delta=text):
                     sys.stdout.write(text)
@@ -146,7 +146,7 @@ async def chat(query: str) -> None:
 
 ### What just happened
 
-1. `Agent.stream()` starts a turn: it lists MCP tools, builds a T0
+1. `Run.events()` starts a turn: it lists MCP tools, builds a T0
    request, and calls `t0.inference(stream=True)`.
 2. TensorZero delivers chunks — one per content-block delta.
    `TurnStreamAssembler` folds them into `AgentEvent`s *as they arrive*
@@ -156,12 +156,12 @@ async def chat(query: str) -> None:
    (with parsed args) per tool call, one `ThoughtEvent` per thought —
    then the runner emits `TurnEndEvent(turn=N)`.
 4. If the assistant emitted tool calls, the runner executes them via
-   the same `execute_tool_calls` path `Agent.run()` uses, yields one
+   the same `execute_tool_calls` path `Agent.invoke()` uses, yields one
    `ToolResultEvent` per call, and opens the next turn.
 5. The first tool-call-free turn is terminal: the runner builds an
    `AgentResult` and yields `DoneEvent(result=...)`.
 
-`Agent.run()`'s non-streaming path goes through the same turn shape —
+`Agent.invoke()`'s non-streaming path goes through the same turn shape —
 the streaming loop is an additive layer, not a replacement.
 
 ## Concepts
@@ -170,7 +170,7 @@ the streaming loop is an additive layer, not a replacement.
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│  Agent.stream(message, *, episode_id=None, tags=None)             │
+│  Run.events(message, *, episode_id=None, tags=None)             │
 │      │                                                            │
 │      │  memory.load()  +  guardrail before_run hooks              │
 │      ▼                                                            │
@@ -258,8 +258,8 @@ list_tools()  →  t0.inference(stream=True)
   builds a fresh `Client` per connection; the SSE path is one-way so
   it can share.  The `SessionProvider` section below covers the
   advanced wiring.
-- **`Agent.run()` stays byte-identical.**  The streaming loop is an
-  additive submodule; `run_agent` and the non-streaming `Agent.run`
+- **`Agent.invoke()` stays byte-identical.**  The streaming loop is an
+  additive submodule; `run_agent` and the non-streaming `Agent.invoke`
   path are unchanged.  Tests that exercise the non-streaming contract
   remain valid verbatim.
 - **TensorZero-first.**  The framework never invents a parallel
@@ -270,7 +270,7 @@ list_tools()  →  t0.inference(stream=True)
 
 ## API reference
 
-### `Agent.stream`
+### `Run.events`
 
 ```python
 async def stream(
@@ -282,7 +282,7 @@ async def stream(
 ) -> AsyncIterator[AgentEvent]
 ```
 
-The streaming analogue of `Agent.run()`.  Shares memory hydration,
+The streaming analogue of `Agent.invoke()`.  Shares memory hydration,
 guardrail scaffolding, and tool execution with the non-streaming path;
 the terminal event is always a `DoneEvent` wrapping an `AgentResult`
 (including `guardrail_log` when guardrails are configured).
@@ -324,7 +324,7 @@ dataclass is `slots=True`; JSON serialisation at the HTTP boundary is
 
 ### `StreamingAgentLoop` — advanced
 
-The loop that `Agent.stream()` delegates to.  Exposed so frameworks
+The loop that `Run.events()` delegates to.  Exposed so frameworks
 can drive the streaming turn loop directly — for example, in a renderer
 that pre-dates an `Agent` wrapper:
 
@@ -375,13 +375,13 @@ the client as soon as it arrives.
 
 ### Intermediate — REPL with Rich
 
-[`examples/13_tui/`](../examples/13_tui/) wraps `Agent.stream()` in a
+[`examples/10_cli/`](../examples/10_cli/) wraps `Run.events()` in a
 `rich.live.Live` display.  `t0_agents.cli.TUIRenderer` folds the event
 iterator into a live panel; `rich_elicitation_handler` provides
 browser-free `Prompt.ask()` modals when a tool calls `ctx.elicit()`.
 
 ```bash
-uv run t0-agents run examples.13_tui.agent:assistant
+uv run t0-agents run examples.10_cli.agent:assistant
 ```
 
 See [`docs/cli.md`](cli.md) for the factory convention and the three
@@ -389,7 +389,7 @@ CLI subcommands (`run`, `serve`, `info`).
 
 ### Advanced — HTTP with SSE, WebSocket, and elicitation
 
-[`examples/12_streaming_http/`](../examples/12_streaming_http/) ships a
+[`examples/07_streaming/`](../examples/07_streaming/) ships a
 full browser demo — a FastAPI app, a vanilla-JS client, a FastMCP
 server with elicitation-gated tools, and `InMemoryMemory` for
 multi-turn conversations.  The recipe below wires the four HTTP
@@ -490,7 +490,7 @@ auto-declines the pending request — no hanging tool.
 #### Browser client recipe
 
 A 180-line vanilla-JS client that covers every event is in
-[`examples/12_streaming_http/static/app.js`](../examples/12_streaming_http/static/app.js).
+[`examples/07_streaming/static/app.js`](../examples/07_streaming/static/app.js).
 The core pattern:
 
 ```js
@@ -600,7 +600,7 @@ library-wide exception hierarchy and the
   right user.  The WS route always builds a fresh `Client` per
   connection via `elicitation_client_factory` (or via
   `SessionProvider.build_client`).
-- **Backpressure**.  `Agent.stream()` does not buffer.  Each event is
+- **Backpressure**.  `Run.events()` does not buffer.  Each event is
   yielded synchronously as the TensorZero SDK delivers a chunk.  On
   the WS route, events are sent one-per-`ws.send_json()` call — if
   the client is slow, the WS transport back-pressures the `send_json`
@@ -626,7 +626,7 @@ analogue:
 
 - **Episode continuity** — `DoneEvent.result.episode_id` is the
   stable identifier the caller threads back through the next
-  `Agent.stream(episode_id=...)` call.  TensorZero attaches episode
+  `Run.events(episode_id=...)` call.  TensorZero attaches episode
   metadata to every inference for ClickHouse-backed analytics.
 - **Per-turn inference IDs** — `DoneEvent.result.inference_ids` is
   the ordered list of T0 inference IDs, one per turn (including
@@ -667,10 +667,10 @@ Streaming makes a single agent's work visible. When a single agent is not enough
 
 ## See also
 
-- [`examples/12_streaming_http/`](../examples/12_streaming_http/) —
+- [`examples/07_streaming/`](../examples/07_streaming/) —
   runnable browser demo covering every event type and the
   elicitation round-trip.
-- [`examples/13_tui/`](../examples/13_tui/) — streaming REPL with
+- [`examples/10_cli/`](../examples/10_cli/) — streaming REPL with
   Rich and `rich_elicitation_handler`.
 - [`docs/elicitation.md`](elicitation.md) — the HITL contract the WS
   route bridges.

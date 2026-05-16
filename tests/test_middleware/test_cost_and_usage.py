@@ -4,8 +4,8 @@ v0.12 only tracked cost when guardrails were configured (the tracker
 was a closure on ``GuardrailContext``).  v1.0's always-on
 :class:`CostTrackingMiddleware` exposes totals on the public
 :meth:`Run.cost` and :meth:`Run.usage` accessors regardless of
-guardrail configuration.  Tests assert the M1 D-5 carry-forward is
-honoured (placeholders now return live data).
+guardrail configuration.  Tests assert the accessors return live data
+under every shape (default chain, opt-out, guardrails-only).
 """
 
 from __future__ import annotations
@@ -116,7 +116,8 @@ class TestExplicitNoMiddleware:
         # Power-user opt-out: passing ``middleware=[]`` disables every
         # default middleware, including ``CostTrackingMiddleware``.
         # ``Run.cost`` / ``Run.usage`` remain at their initial values
-        # (the same shape M1 returned before the M2 wiring).
+        # (the same shape they take when no middleware can populate
+        # them).
         t0 = FakeT0(
             [
                 FakeChatResponse(

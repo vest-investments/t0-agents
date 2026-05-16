@@ -11,12 +11,12 @@ CLI opens the context around the REPL / the uvicorn lifespan / the
 :class:`tensorzero.AsyncTensorZeroGateway` and the
 :class:`fastmcp.Client` that the :class:`Agent` delegates to.  Neither
 of those resources is usable without its ``async with`` entered —
-:meth:`Agent.stream` calls through to ``Client.list_tools`` which fails
+:meth:`Agent.invoke` calls through to ``Client.list_tools`` which fails
 without an open MCP session.
 
 Example user factory::
 
-    # examples/13_tui/agent.py
+    # examples/10_cli/agent.py
     from contextlib import asynccontextmanager
     from typing import Awaitable, cast
 
@@ -104,7 +104,7 @@ def load_agent_factory(spec: str) -> AgentFactory:
     if ":" not in spec:
         raise typer.BadParameter(
             f"Spec must be of the form 'module:attr', got {spec!r}. "
-            "Example: 'examples.13_tui.agent:assistant'.",
+            "Example: 'examples.10_cli.agent:assistant'.",
         )
 
     module_name, attr_name = spec.rsplit(":", 1)

@@ -1,4 +1,4 @@
-"""Typed event union emitted by :meth:`Agent.stream`.
+"""Typed event union emitted by :meth:`Run.events`.
 
 Every event carries a ``type`` discriminator literal so callers can ``match``
 on the variant without isinstance checks.  Every delta event carries the

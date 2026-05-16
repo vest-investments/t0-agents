@@ -60,7 +60,7 @@ async def test_require_parsed_passes_when_parsed() -> None:
     )
     agent = _json_agent(t0=t0, guardrails=[require_parsed()])
 
-    result = await agent.run("go")
+    result = await agent.invoke("go")
 
     assert result.parsed == {"a": 1}
     assert result.parse_strategy == "strict"
@@ -86,7 +86,7 @@ async def test_require_parsed_aborts_when_none() -> None:
     )
 
     with pytest.raises(GuardrailBlockedError, match="parsed=None"):
-        await agent.run("go")
+        await agent.invoke("go")
 
 
 async def test_require_parsed_noop_on_chat_run() -> None:
@@ -103,7 +103,7 @@ async def test_require_parsed_noop_on_chat_run() -> None:
         tool_provider=cast(ToolProvider, client),
     )
 
-    result = await agent.run("go")
+    result = await agent.invoke("go")
 
     assert result.function_kind == "chat"
     assert result.parsed is None

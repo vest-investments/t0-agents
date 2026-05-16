@@ -62,7 +62,7 @@ quickstart for the CLI (the factory contract requires live resources).
 ## Quickstart
 
 Run the shipped example agent end-to-end. The example lives at
-[`examples/13_tui/`](../examples/13_tui/) and exposes two tools: `add`
+[`examples/10_cli/`](../examples/10_cli/) and exposes two tools: `add`
 (plain) and `set_reminder` (elicitation).
 
 ```bash
@@ -70,7 +70,7 @@ docker compose up -d                   # boots gateway + clickhouse
 export GROQ_API_KEY=gsk_...            # or whichever provider the function uses
 uv sync --extra cli
 
-uv run t0-agents info examples.13_tui.agent:assistant
+uv run t0-agents info examples.10_cli.agent:assistant
 ```
 
 `info` prints a Rich table with every field on the `AgentConfig` the
@@ -93,7 +93,7 @@ AgentConfig · tui-assistant
 Now start the streaming REPL:
 
 ```bash
-uv run t0-agents run examples.13_tui.agent:assistant
+uv run t0-agents run examples.10_cli.agent:assistant
 ```
 
 A cyan Rich panel appears, titled with the agent's name. Type at the
@@ -181,7 +181,7 @@ Why a factory rather than a bare `Agent` at module level? The
 and `AsyncTensorZeroGateway.build_http` returns an awaitable that must
 be `await`-ed. A zero-arg context-manager factory is the cleanest way
 for the CLI to bracket both lifecycles around the REPL, the uvicorn
-lifespan, or the `info` lookup. `Agent.stream()` ultimately calls
+lifespan, or the `info` lookup. `Run.events()` ultimately calls
 through to `Client.list_tools()`, which fails unless the session is
 open; trying to use a pre-built `Agent` would need the CLI to reach
 into private attributes to open the client.
@@ -225,7 +225,7 @@ t0-agents <cmd> <module:attr>
               │
               ├─ agent.warmup()             ← optional readiness probe
               │
-              └─ (run: renderer.consume(agent.stream(...)))
+              └─ (run: renderer.consume(agent.invoke(...).events()))
                  (serve: uvicorn.Server(create_app(agent, ...)).serve())
                  (info: print(agent.config))
         │
@@ -240,11 +240,11 @@ server lifetime and is torn down cleanly when the user presses
 
 ### Rendering pipeline
 
-`t0-agents run` turns the async stream from `Agent.stream()` into a
+`t0-agents run` turns the async stream from `Run.events()` into a
 live terminal frame:
 
 ```
-Agent.stream() ──▶ AsyncIterator[AgentEvent] ──▶ TUIRenderer.consume()
+Run.events() ──▶ AsyncIterator[AgentEvent] ──▶ TUIRenderer.consume()
                                                       │
                                                       └─ Rich Live + Panel
                                                           (refresh 20×/s)
@@ -314,7 +314,7 @@ attribute is not callable.
 Before importing, the loader prepends the current working directory to
 `sys.path` if it isn't already there. Installed console scripts do not
 get `cwd` on `sys.path` the way `python script.py` does, so this lets
-`t0-agents run examples.13_tui.agent:assistant` work from the repo root
+`t0-agents run examples.10_cli.agent:assistant` work from the repo root
 without a `PYTHONPATH=.` prefix.
 
 ### `AgentFactory`
@@ -460,7 +460,7 @@ resolves to. `Ctrl-D` or `Ctrl-C` at the `You:` prompt exits cleanly.
 uv run t0-agents run my_package.my_agent:assistant
 ```
 
-Each user turn drives one `agent.stream(...)` invocation. The renderer
+Each user turn drives one `agent.invoke(...).events()` invocation. The renderer
 folds the event stream into:
 
 - A pending / success / error status line per tool call
@@ -476,7 +476,7 @@ folds the event stream into:
 
 - **Episode continuity.** The REPL captures the last
   `DoneEvent.result.episode_id` and threads it into the next
-  `agent.stream(...)` call automatically, so memory state and
+  `agent.invoke(...).events()` call automatically, so memory state and
   TensorZero's episode tracking stay coherent across the whole session.
 
 - `--debug-log PATH` — write `DEBUG`-level logs from every
@@ -556,7 +556,7 @@ Use `--streaming` only when the served agent's tools never call
 For full streaming + browser elicitation, drop the CLI and call
 [`create_app`](serving.md) directly with a `client_factory` plus an
 `elicitation_client_factory`. The reference implementation is at
-[`examples/12_streaming_http/agent_app.py`](../examples/12_streaming_http/agent_app.py),
+[`examples/07_streaming/agent_app.py`](../examples/07_streaming/agent_app.py),
 and the protocol reference lives in [Streaming](streaming.md).
 
 ---
@@ -675,9 +675,9 @@ async def my_elicitation_handler(message, response_type, params, context):
 For a fully runnable version that also composes on
 `make_rich_elicitation_handler` (so the stock pause / resume + schema
 dispatch stay in place) and writes an audit trail, see
-[`examples/13_tui/advanced.py`](../examples/13_tui/advanced.py) — it
+[`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) — it
 exposes `assistant_with_audit`, runnable via `t0-agents run
-examples.13_tui.advanced:assistant_with_audit`.
+examples.10_cli.advanced:assistant_with_audit`.
 
 The binding is a process-wide module global guarded by a
 `threading.Lock`. It is NOT a `ContextVar` on purpose: FastMCP's
@@ -777,7 +777,7 @@ recursion. For scalar responses, FastMCP wraps the field in
   prompt dispatch — the wrapper adds behaviour (logging, consent gates,
   side-channel notifications) while the stock handler keeps driving
   the actual prompts. See
-  [`examples/13_tui/advanced.py`](../examples/13_tui/advanced.py) for a
+  [`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) for a
   runnable audit-logging wrapper.
 
 ---
@@ -791,7 +791,7 @@ scriptable and CI-friendly.
 
 | Condition | Message shape |
 | --- | --- |
-| Missing `:` in spec | `"Spec must be of the form 'module:attr', got '<spec>'. Example: 'examples.13_tui.agent:assistant'."` |
+| Missing `:` in spec | `"Spec must be of the form 'module:attr', got '<spec>'. Example: 'examples.10_cli.agent:assistant'."` |
 | Empty module or attr name | `"Spec must have a non-empty module and attribute, got '<spec>'."` |
 | `ModuleNotFoundError` | `"Could not import module '<name>': <exc>. Make sure the module is importable…"` |
 | Generic `ImportError` | `"Failed to import module '<name>': <exc>."` |
@@ -815,7 +815,7 @@ right surface:
 
 - **`t0-agents run` is interactive only.** There is no way to drive it
   from a pipe or a cron job because the REPL owns `stdin`. For
-  headless automation, call `Agent.run` or `Agent.stream` directly
+  headless automation, call `Agent.invoke` or `Run.events` directly
   from Python (see [Agent](agent.md)), or run `t0-agents serve` behind
   a request-driven caller.
 
@@ -846,7 +846,7 @@ story.
 
 - **Episode threading.** The REPL captures each turn's
   `DoneEvent.result.episode_id` and threads it into the next
-  `agent.stream(...)` call automatically. Memory load/save stays
+  `agent.invoke(...).events()` call automatically. Memory load/save stays
   keyed by the same episode; TensorZero sees one long trace per REPL
   session rather than one per user turn.
 
@@ -874,11 +874,11 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 - **`t0-agents: command not found`** — the `[cli]` extra isn't
   installed. Run `uv sync --extra cli` or `pip install 't0-agents[cli]'`.
 
-- **`could not import module 'examples.13_tui.agent'`** — the factory's
+- **`could not import module 'examples.10_cli.agent'`** — the factory's
   module isn't on `PYTHONPATH`. The loader auto-prepends the current
   working directory, so running from the repo root usually fixes it.
   For installed packages, make sure the module is importable via
-  `python -c "import examples.13_tui.agent"` first.
+  `python -c "import examples.10_cli.agent"` first.
 
 - **Prompt garbled by the Live panel (custom handler)** — your handler
   isn't pausing the active renderer. Use
@@ -895,7 +895,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 
 - **Browser client needs elicitation** — the CLI's Rich handler only
   works in the same terminal the REPL runs in. For browser-hosted
-  serving, see [`examples/12_streaming_http/`](../examples/12_streaming_http/)
+  serving, see [`examples/07_streaming/`](../examples/07_streaming/)
   for the `SessionProvider`-based WS wiring.
 
 ---
@@ -917,7 +917,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
   the flat-object + primitives + `enum` / `const` guarantees it relies
   on.
 - [TensorZero streaming](https://www.tensorzero.com/docs/gateway/guides/inference#streaming-inference)
-  — the stream the CLI drives through `Agent.stream()`. Stable
+  — the stream the CLI drives through `Run.events()`. Stable
   per-content-block ids are what the renderer uses to correlate
   deltas into coherent UI regions.
 
@@ -926,7 +926,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 ## Example
 
 A runnable end-to-end walkthrough lives at
-[`examples/13_tui/`](../examples/13_tui/):
+[`examples/10_cli/`](../examples/10_cli/):
 
 - `server.py` — FastMCP server exposing `add` and `set_reminder`
   (structured-elicitation tool).
@@ -941,8 +941,8 @@ A runnable end-to-end walkthrough lives at
 ```bash
 docker compose up -d
 uv sync --extra cli
-uv run t0-agents run examples.13_tui.agent:assistant
-uv run t0-agents run examples.13_tui.advanced:assistant_with_audit
+uv run t0-agents run examples.10_cli.agent:assistant
+uv run t0-agents run examples.10_cli.advanced:assistant_with_audit
 ```
 
 ---

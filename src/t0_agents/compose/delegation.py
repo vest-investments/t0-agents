@@ -10,7 +10,7 @@ Error handling is **hybrid fatal**: any
 :class:`~t0_agents.core.exceptions.T0AgentsFatalError` (for example a
 :class:`~t0_agents.core.exceptions.GuardrailBlockedError` raised by the
 sub-agent's own guardrail) propagates unchanged so hard blocks reach the
-caller of :meth:`Agent.run`.  Every other exception is wrapped in
+caller of :meth:`Agent.invoke`.  Every other exception is wrapped in
 :class:`~t0_agents.core.exceptions.SubAgentError`, which the orchestrator's
 :mod:`~t0_agents.mcp.loop` stringifies as a tool error so the LLM can
 decide to retry or re-delegate.
@@ -66,11 +66,9 @@ def agent_as_tool(
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
 
         try:
-            # v1.0: dispatch via the canonical Agent.invoke API so the
+            # Dispatch via the canonical Agent.invoke API so the
             # sub-agent runs its own middleware chain (memory,
-            # guardrails, cost-tracking, sub-agents).  ``.result()`` is
-            # equivalent to the v0.12 ``agent.run(...)`` shape — without
-            # the DeprecationWarning emitted from internal call-sites.
+            # guardrails, cost-tracking, sub-agents).
             result = await sub_agent.invoke(message, tags=delegation_tags).result()
         except T0AgentsFatalError:
             raise

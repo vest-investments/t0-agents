@@ -24,12 +24,12 @@ right before the terminal.  Each layer's responsibility:
 - :class:`CostTrackingMiddleware` — always-on accumulator independent of
   guardrails; writes :class:`RunUsage` totals onto the live
   :class:`Run` so :meth:`Run.cost` / :meth:`Run.usage` read live data.
-- :class:`JsonRetryMiddleware` — **M3 activated**.  Drives the
-  parse-failure retry loop for single-shot output modes
-  (:class:`JsonOutput`, :class:`StructuredOutput`).  Calls the terminal
-  in a loop, inspects ``result.diagnostics.parse_strategy``, and on
-  ``"none"`` consults ``ctx.output.recover(...)`` for retry / accept /
-  fail.
+- :class:`JsonRetryMiddleware` — drives the parse-failure retry loop
+  for single-shot output modes (:class:`JsonOutput`,
+  :class:`StructuredOutput`).  Calls the terminal in a loop, inspects
+  ``result.diagnostics.parse_strategy``, and on ``"none"`` consults
+  ``ctx.output.recover(...)`` for retry / accept / fail.  No-op
+  pass-through for chat agents.
 - :class:`ObservabilityMiddleware` — wraps the run in
   ``tracer.start_as_current_span(f"agent.invoke/{name}")``; ``None``
   tracer falls back to a no-op span.
@@ -489,16 +489,16 @@ class SubAgentMiddleware:
 
 
 # ---------------------------------------------------------------------------
-# JsonRetryMiddleware (M2 placeholder)
+# JsonRetryMiddleware
 # ---------------------------------------------------------------------------
 
 
 class JsonRetryMiddleware:
     """Drives the parse-failure retry loop for single-shot output modes.
 
-    Placed at the innermost position in the default chain (Q13 resolution)
-    so memory, guardrails, and cost tracking see only the final
-    successful inference rather than every retry attempt.  Audit of
+    Placed at the innermost position in the default chain so memory,
+    guardrails, and cost tracking see only the final successful
+    inference rather than every retry attempt.  Audit of
     retries surfaces via ``result.diagnostics.attempts`` and TensorZero
     tags.
 

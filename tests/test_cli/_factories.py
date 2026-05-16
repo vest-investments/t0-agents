@@ -8,14 +8,16 @@ the spec — e.g. ``tests.test_cli._factories:fake_factory``.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.output import OutputMode
+from t0_agents.core.run import Run, RunInput
 from t0_agents.core.types import AgentResult, ToolProvider
-from t0_agents.stream.events import AgentEvent
+from t0_agents.stream.events import AgentEvent, DoneEvent
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0
 
@@ -73,21 +75,56 @@ not_callable: dict[str, int] = {"foo": 1}
 """Non-callable attribute — used to verify the loader rejects non-callables."""
 
 
+class _ScriptedRun(Run[Any]):
+    """:class:`Run` subclass whose ``events()`` yields scripted events.
+
+    Built non-eagerly (no background drive task) so ``events()`` can
+    return the scripted iterator directly without contending with the
+    middleware chain.
+    """
+
+    def __init__(
+        self,
+        agent: Agent | None,
+        input_: RunInput,
+        output: OutputMode[Any],
+        events_or_exc: tuple[list[AgentEvent], BaseException | None],
+    ) -> None:
+        super().__init__(agent, input_, output, eager=False)
+        self._scripted_events, self._scripted_exception = events_or_exc
+
+    async def events(self, replay: bool = False) -> AsyncIterator[AgentEvent]:  # type: ignore[override]
+        if self._scripted_exception is not None:
+            raise self._scripted_exception
+        for event in self._scripted_events:
+            if isinstance(event, DoneEvent):
+                self._result = event.result
+                self._state = "succeeded"
+            yield event
+
+
 class _ScriptedAgent(Agent):
-    """Agent subclass whose ``stream`` yields scripted events.
+    """:class:`Agent` subclass whose ``invoke()`` returns a scripted Run.
 
     Reads turns from :data:`SCRIPTED_TURNS`, records each call into
     :data:`SCRIPTED_CALLS`, and raises from :data:`SCRIPTED_EXCEPTIONS`
     when that slot is populated for a turn.
     """
 
-    async def stream(  # type: ignore[override]
+    def invoke(  # type: ignore[override]
         self,
         user_message: str,
         *,
+        output: OutputMode[Any] | None = None,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+        system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
+        prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        middleware: Sequence[Any] | None = None,
+        eager: bool = True,
+        context: Mapping[str, Any] | None = None,
+    ) -> Run[Any]:
         SCRIPTED_CALLS.append(
             {
                 "user_message": user_message,
@@ -98,12 +135,18 @@ class _ScriptedAgent(Agent):
         exc: BaseException | None = None
         if SCRIPTED_EXCEPTIONS:
             exc = SCRIPTED_EXCEPTIONS.pop(0)
-        if exc is not None:
-            raise exc
-        if not SCRIPTED_TURNS:
-            raise AssertionError("_ScriptedAgent: no scripted turn queued")
-        for event in SCRIPTED_TURNS.pop(0):
-            yield event
+        events: list[AgentEvent] = []
+        if exc is None:
+            if not SCRIPTED_TURNS:
+                raise AssertionError("_ScriptedAgent: no scripted turn queued")
+            events = SCRIPTED_TURNS.pop(0)
+        input_ = RunInput(
+            user_message=user_message,
+            function_name=self.config.function_name,
+            episode_id=episode_id,
+            tags=tags,
+        )
+        return _ScriptedRun(self, input_, self.config.output, (events, exc))
 
 
 @asynccontextmanager

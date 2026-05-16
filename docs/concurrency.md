@@ -11,7 +11,7 @@ This page maps the three layers, says which knob applies to which, and lists the
 | The LLM emits several tool calls in one assistant turn (e.g. three independent lookups) and you want them to run at the same time | [Intra-turn](#l1-intra-turn-parallel-tool-execution) | `AgentConfig(parallel_tools=True)` |
 | The LLM keeps emitting one tool per turn and you want to compress that into a single round trip | [Inter-turn](#l2-inter-turn-dependencies-and-the-batch-tool-pattern) | A "batch tool" on your MCP server |
 | You have an orchestrator with sub-agents and you want them to work concurrently when the orchestrator delegates to several at once | [Multi-agent](#l3-multi-agent-parallel-composition) | Same `parallel_tools=True` on the orchestrator |
-| You want to drive several agents from your own Python code (no orchestrator LLM) | [Multi-agent](#l3-multi-agent-parallel-composition) | `asyncio.gather(a.run(...), b.run(...))` |
+| You want to drive several agents from your own Python code (no orchestrator LLM) | [Multi-agent](#l3-multi-agent-parallel-composition) | `asyncio.gather(a.invoke(...), b.invoke(...))` |
 
 If your problem does not fit any of the above, t0-agents is the wrong layer for it — see [Anti-patterns](#anti-patterns-that-t0-agents-deliberately-omits).
 
@@ -29,12 +29,12 @@ agent = Agent(
     t0=t0,
     tool_provider=mcp_client,
 )
-result = await agent.run("Fetch the abstracts of arXiv 2401.0001, 2401.0002, 2401.0003")
+result = await agent.invoke("Fetch the abstracts of arXiv 2401.0001, 2401.0002, 2401.0003")
 ```
 
 With `parallel_tools=False` (the default) the three abstract fetches run one after the other and the run takes ~3 × the per-call latency. With `parallel_tools=True` they overlap and the run takes ~1 × the per-call latency. Result order is preserved regardless of completion order — `asyncio.gather` returns in argument order, not completion order.
 
-The same flag is accepted by the low-level [`run_agent`](api-reference.md#run_agent) entry point, the [`Agent`](agent.md) class, and the [`Agent.stream`](streaming.md) variant.
+The same flag is accepted by the low-level [`run_agent`](api-reference.md#run_agent) entry point, the [`Agent`](agent.md) class, and the [`Run.events`](streaming.md) variant.
 
 ### When to leave it `False`
 
@@ -58,7 +58,7 @@ When in doubt, leave it off and turn it on per-agent once you have read the [Pro
    - mentions of the BFCL parallel-category benchmark
    - whether the provider's API exposes a `parallel_tool_calls: bool` parameter — if it does, the model is probably capable
 
-   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/16_parallel/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
+   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/12_concurrency/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
 
 2. **Provider-gateway support inside TensorZero.** Even when the upstream model is capable, the gateway has to forward the parallel-emission hint. TensorZero maintains an allowlist; at the time of writing **Groq is not on it** (`tests/test_mcp/test_integration.py:388` documents the constraint), while OpenAI and Fireworks AI are. Check TensorZero's release notes and your provider block in `tensorzero.toml`.
 
@@ -109,10 +109,10 @@ gateway = MockGateway.script(
     ]
 )
 agent = Agent(config, t0=cast(AsyncTensorZeroGateway, gateway), tool_provider=...)
-result = await agent.run("...")
+result = await agent.invoke("...")
 ```
 
-`examples/16_parallel/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
+`examples/12_concurrency/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
 
 ## L2: Inter-turn dependencies and the "batch tool" pattern
 
@@ -154,13 +154,13 @@ If you want **deterministic** fan-out — "always run these two sub-agents in pa
 
 ```python
 research, draft = await asyncio.gather(
-    researcher.run("Find arXiv 2401.* RLHF papers"),
-    writer.run("Draft a markdown outline for a 2025 RLHF report"),
+    researcher.invoke("Find arXiv 2401.* RLHF papers"),
+    writer.invoke("Draft a markdown outline for a 2025 RLHF report"),
 )
-final = await editor.run(f"Combine:\n\n{research.response}\n\n{draft.response}")
+final = await editor.invoke(f"Combine:\n\n{research.response}\n\n{draft.response}")
 ```
 
-This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other frameworks. `Agent.run` is an `async def` returning `AgentResult`; that is the only contract you need.
+This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other frameworks. `Agent.invoke` is an `async def` returning `AgentResult`; that is the only contract you need.
 
 ## Anti-patterns that t0-agents deliberately omits
 

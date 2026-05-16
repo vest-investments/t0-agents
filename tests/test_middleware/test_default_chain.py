@@ -58,7 +58,7 @@ class TestDefaultChain:
     def test_bare_config_has_cost_tracking_and_json_retry_only(self) -> None:
         # No memory, no guardrails, no sub_agents — but cost-tracking
         # and json_retry are always present (the former wires Run.cost,
-        # the latter is the M2 placeholder that M3 activates).
+        # the latter activates for any non-chat output mode).
         cfg = AgentConfig(name="bare", function_name="agent")
         assert cfg.middleware is not None
         assert _names(cfg.middleware) == ["cost_tracking", "json_retry"]

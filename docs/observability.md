@@ -115,4 +115,4 @@ LEFT JOIN feedback f ON f.inference_id = i.id AND f.metric_name = 'quality_score
 GROUP BY i.episode_id ORDER BY avg_quality DESC LIMIT 20;
 ```
 
-See `examples/06_feedback_loop/` for a complete runnable example.
+See `examples/13_observability/` for a complete runnable example.

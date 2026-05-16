@@ -1,6 +1,6 @@
 # Memory
 
-The `run_agent` loop is stateless: every `Agent.run()` call starts with a fresh message history, and continuity is carried only by the optional `episode_id` argument. To let an agent *remember* earlier turns — conversations with the same user last week, facts it learned in a previous process, decisions it made before a redeploy — wire a `MemoryProvider` into `AgentConfig`.
+The `run_agent` loop is stateless: every `Agent.invoke()` call starts with a fresh message history, and continuity is carried only by the optional `episode_id` argument. To let an agent *remember* earlier turns — conversations with the same user last week, facts it learned in a previous process, decisions it made before a redeploy — wire a `MemoryProvider` into `AgentConfig`.
 
 Cross-run persistence for an `Agent`, keyed by TensorZero's episode id.
 
@@ -8,7 +8,7 @@ The memory subsystem lets an `Agent` remember earlier turns — both within
 a single process (ephemeral, dict-backed) and across processes
 (persistent, via SQLite or a custom backend). Configuration is a single
 field on `AgentConfig`; the `Agent` handles load + save automatically
-around every `.run()` / `.stream()` call.
+around every `invoke()` call.
 
 ```python
 from t0_agents import Agent, AgentConfig, MemoryProvider
@@ -114,7 +114,7 @@ both classes satisfy the `MemoryProvider` Protocol.
 ## Quickstart — `Agent` with memory (Docker required)
 
 The real value shows up when memory wraps an agent loop. Boot the
-TensorZero gateway, then run two `agent.run()` calls on the same
+TensorZero gateway, then run two `agent.invoke()` calls on the same
 `episode_id` — the second one sees the first turn as context.
 
 ```bash
@@ -156,12 +156,12 @@ async def main() -> None:
         )
 
         # Turn 1 — fresh episode
-        r1 = await agent.run("My name is Alice. Please remember that.")
+        r1 = await agent.invoke("My name is Alice. Please remember that.")
         print(f"Episode: {r1.episode_id}")
         print(f"Reply:   {r1.response}\n")
 
         # Turn 2 — reuse the episode id so memory loads the first turn
-        r2 = await agent.run(
+        r2 = await agent.invoke(
             "What is my name?",
             episode_id=r1.episode_id,
         )
@@ -180,7 +180,7 @@ the same `episode_id` still loads it.
 A complete runnable version, with both `InMemoryMemory` and
 `SqliteMemory` exercised in one script and a simulated process
 restart, lives at
-[`examples/09_memory/`](../examples/09_memory/).
+[`examples/05_memory/`](../examples/05_memory/).
 
 ---
 
@@ -195,10 +195,10 @@ Because memory wraps the call rather than participating in it, you can
 add, remove, or swap backends without touching the `tensorzero.toml`
 configuration or any tool schemas.
 
-### Lifecycle of one `agent.run()`
+### Lifecycle of one `agent.invoke()`
 
 ```
-agent.run(message, episode_id=<id or None>)
+agent.invoke(message, episode_id=<id or None>)
    │
    ├─ 1. Load          memory.load(episode_id)  ─►  List[MemoryRecord]
    │                   (skipped when episode_id is None or
@@ -231,7 +231,7 @@ agent.run(message, episode_id=<id or None>)
                         never persists under an empty key)
 ```
 
-`Agent.stream()` runs the same four phases around the streaming loop;
+`Run.events()` runs the same four phases around the streaming loop;
 load and save sit at the outer edge, so every consumer of an
 `AsyncIterator[AgentEvent]` sees memory hydrated into the prompt and
 persisted after `DoneEvent`.
@@ -266,8 +266,8 @@ explicitly.
 
 TensorZero has no explicit "close an episode" API — episodes are
 defined implicitly by inferences that share an `episode_id`. The
-`Agent` therefore writes a record on every `.run()` / `.stream()` call
-that produces a truthy `episode_id`, rather than waiting for an
+`Agent` therefore writes a record on every `invoke()` call that
+produces a truthy `episode_id`, rather than waiting for an
 end-of-session signal that never comes. The side effect: memory is
 always current, and each turn is independently recoverable if the
 process crashes.
@@ -402,7 +402,7 @@ class SqliteMemory:
 ```
 
 Each method opens its own `aiosqlite` connection and closes it in an
-`async with` block. That means concurrent `Agent.run()` calls on the
+`async with` block. That means concurrent `Agent.invoke()` calls on the
 same process do not contend on a shared connection object; SQLite's own
 file-level locking handles the cross-call coordination.
 
@@ -555,12 +555,12 @@ nor the user message is modified.
 
 #### Combining memory with caller-supplied template variables
 
-`Agent.run` and `Agent.stream` accept their own `system_arguments`
+`Agent.invoke` and `Run.events` accept their own `system_arguments`
 kwarg, which is shallow-merged with whatever the memory strategy
 injects:
 
 ```python
-await agent.run(
+await agent.invoke(
     "question",
     episode_id=ep,
     system_arguments={"max_turns": 5, "user_name": "Alice"},
@@ -578,7 +578,7 @@ strategy contributes.
 
 `memory_strategy="system_template"` writes a dict to `input.system`
 via the configured template, so it cannot be combined with the raw
-`system` string kwarg on `Agent.run` / `Agent.stream` — the two
+`system` string kwarg on `Agent.invoke` / `Run.events` — the two
 shapes are mutually exclusive at the gateway. The `Agent` rejects
 that combination up front with `ValueError`. If you need to pass a
 raw system prompt at runtime (the prompt-as-a-service shape — see
@@ -641,7 +641,7 @@ to operate and the most aligned with TensorZero's design — episodes
 are *defined* as the unit of cross-inference correlation. This backend
 just exposes that log as a `MemoryProvider`.
 
-The trade-off is that every `Agent.run` with an `episode_id` adds one
+The trade-off is that every `Agent.invoke` with an `episode_id` adds one
 HTTP round-trip to the gateway before the inference (the read of the
 prior history) — the gateway is the source of truth, so each turn
 re-reads it. With the recommended `memory_strategy="messages"` that
@@ -682,8 +682,8 @@ async def main() -> None:
             tool_provider=client,
         )
 
-        r1 = await agent.run("My name is Alice. Please remember.")
-        r2 = await agent.run(
+        r1 = await agent.invoke("My name is Alice. Please remember.")
+        r2 = await agent.invoke(
             "What is my name?", episode_id=r1.episode_id,
         )
         print(r2.response)  # → "Your name is Alice."
@@ -771,7 +771,7 @@ empty results instead.
 
 `TensorZeroMemory` keeps a reference to the gateway. The gateway must
 outlive the memory instance — close the `AsyncTensorZeroGateway` only
-after every `Agent.run` / `Agent.stream` that depends on the memory has
+after every `Agent.invoke` / `Run.events` that depends on the memory has
 completed. Inside `t0_agents.serve`, build the memory inside the
 per-session `SessionFactory` so each request gets its own scope.
 
@@ -791,7 +791,7 @@ directly against an `asyncio.Lock`-guarded dict. `InMemoryMemory`
 itself is a 40-line reference at
 [`src/t0_agents/memory/in_memory.py`](../src/t0_agents/memory/in_memory.py).
 For a runnable no-Docker walkthrough of the store primitives on their
-own, see [`examples/09_memory/easy.py`](../examples/09_memory/easy.py).
+own, see [`examples/05_memory/easy.py`](../examples/05_memory/easy.py).
 
 ```python
 import asyncio
@@ -941,7 +941,7 @@ embeddings and vector store — while giving the `Agent` a familiar
 For a runnable no-Docker example of a custom `MemoryProvider` written
 from scratch — implementing per-tenant namespacing and per-episode LRU
 eviction in under 70 lines — see
-[`examples/09_memory/advanced.py`](../examples/09_memory/advanced.py).
+[`examples/05_memory/advanced.py`](../examples/05_memory/advanced.py).
 
 ### Advanced — memory as MCP Resources
 
@@ -949,7 +949,7 @@ If the memory you care about is a knowledge base the *LLM* should
 read (not context the framework should inject), expose it as MCP
 Resources or as MCP tools instead of plugging it into
 `MemoryProvider`. The runnable example at
-[`examples/09_memory/server.py`](../examples/09_memory/server.py)
+[`examples/05_memory/server.py`](../examples/05_memory/server.py)
 ships a FastMCP server with `remember(key, value)` / `recall(key)`
 tools the LLM invokes explicitly — a different pattern, useful when
 you want the model in control of what it stores and retrieves.
@@ -1034,7 +1034,7 @@ and tool-level `McpError` / `ToolError` wrapping, see
 - `TensorZeroMemory` holds an `AsyncTensorZeroGateway` reference and
   delegates concurrency to whatever the gateway provides. Each
   `load`/`load_history` is one HTTP round-trip; safety across
-  concurrent `Agent.run` calls follows the gateway's connection pool.
+  concurrent `Agent.invoke` calls follows the gateway's connection pool.
   Build the memory inside the per-session `SessionFactory` in
   `t0_agents.serve` so the gateway lifetime always wraps the memory
   lifetime, never the other way round.
