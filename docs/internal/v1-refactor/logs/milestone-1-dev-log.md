@@ -215,9 +215,12 @@ Commands run and outcomes:
 | `uv run ruff check tests/test_run/` | **passed** after fixing 4 trivial issues (unused imports, dead-code class, mutable default). |
 | `git diff src/t0_agents/mcp/` | **empty** — invariant §2.1 holds. |
 
-Manual / pending verification (requires user-side docker):
+User-side verification (executed by the user against a live gateway):
 
-- `uv run pytest -m integration` — to be run by the user with `docker compose up -d` and a valid `GROQ_API_KEY` in `.env`.
+- `uv run pytest -m integration` (with `docker compose up -d` + `GROQ_API_KEY` in `.env`) — **passed** — 57 passed, 699 deselected, 35 deprecation warnings.  Warning breakdown (all expected, deferred to M2 per D-2): ~17 library-internal (compose/orchestrator + serve/routes + serve/streaming_routes), ~18 test-suite (integration tests calling `agent.run/stream` directly), 1 subclass-override (`tests/test_compose/test_integration.py:140` using `super().run(...)`).
+
+Manual / still-pending verification (low priority — no behavioural risk):
+
 - 18-examples byte-identity smoke (subprocess capture of `examples/00..16, 18` stdout against a v0.12 baseline; `examples/17_structured/` is unchanged in M1 since it imports `run_structured_inference` directly).
 
 Numbers for the regression baseline:
