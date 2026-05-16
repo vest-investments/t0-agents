@@ -31,7 +31,7 @@
 
 ## Q3 — `Composer.cancel()` timeout configurable
 
-**Status:** open.
+**Status:** resolved (M4, 2026-05-16).
 
 **Context.** `await root_run.cancel()` propagates to all sub-Runs.  Sub-Runs may be in `await tool_call()` and need time to clean up.
 
@@ -40,9 +40,7 @@
 - Hard kill → tools may not run cleanup, leaving DB transactions / file handles open.
 - 30s default with kwarg override → pragmatic.
 
-**Recommendation.** 30s default; per-topology kwarg (`saga(..., cancel_timeout=60.0)`); global override via `BulkheadMiddleware`-style config.
-
-**Resolution target:** M4 dev-log §3.
+**Resolution.** **30s default + per-topology `cancel_timeout=` kwarg** on every factory.  Module constant `DEFAULT_CANCEL_TIMEOUT = 30.0` exported from `t0_agents.compose.topology`.  Overshoot logs a single WARN per ``CompositeRun`` instance via `t0_agents.compose.topology` and lets sub-Run cancellation continue best-effort; the parent then transitions to `cancelled` regardless.  Per-call override via `composer.invoke(input, cancel_timeout=…)` takes precedence over the factory default.  Implemented in `src/t0_agents/compose/topology.py:CompositeRun._cancel_sub_runs`.
 
 ---
 
@@ -109,7 +107,7 @@
 
 ## Q8 — `parallel` reducer signature
 
-**Status:** open.
+**Status:** resolved (M4, 2026-05-16).
 
 **Context.** `parallel(*nodes, reducer=...)` runs nodes, collects results, applies reducer.
 
@@ -117,19 +115,13 @@
 - `Callable[[list[AgentResult[T]]], U]` — reducer sees full results (cost, episode_id, diagnostics, etc.).
 - `Callable[[list[T]], U]` — reducer sees only values; simpler but loses metadata.
 
-**Trade-offs:**
-- Full AgentResult: more expressive, enables "pick by lowest cost" or "filter by parse_strategy".
-- Just values: simpler API, matches `consensus(merge=...)` natural shape.
-
-**Recommendation.** `Callable[[list[AgentResult[T]]], U]` for `parallel`, `Callable[[list[T]], T]` for `consensus.merge` (which conceptually operates on agreed values).
-
-**Resolution target:** M4 dev-log §3.
+**Resolution.** **`Callable[[list[AgentResult[T]]], U]` for `parallel`** under `error_policy="fail_fast"` (default).  Under `error_policy="continue"` the type widens to `Callable[[list[AgentResult[T] | BaseException]], U]` — failed slots surface as the raw exception so the reducer can `isinstance(item, BaseException)` to detect them.  Reducer exceptions are wrapped in `ComposerError(node=parent_composer, cause=...)`.  `consensus.merge` stays `Callable[[list[T]], T]` (operates on agreed values only; failures bubble before merge).  Decision matches user interview 2026-05-16 (Pythonic, explicit, fail-loud).
 
 ---
 
 ## Q9 — `conditional` router signature
 
-**Status:** open.
+**Status:** resolved (M4, 2026-05-16).
 
 **Context.** `conditional(*, router=..., routes={...})` routes input to a sub-node based on a key.
 
@@ -137,15 +129,13 @@
 - `Callable[[Input], str]` — sync router on raw input; no inference yet.
 - `Callable[[AgentResult[T]], str]` — async router after a classifier run.  Requires preceding classifier — but that's just `sequential(classifier, conditional(router=lambda res: res.value.label, ...))`.
 
-**Recommendation.** Sync `Callable[[Input], str]`.  If user needs an LLM-driven router, they explicitly wrap with `sequential(classifier, conditional(...))`.
-
-**Resolution target:** M4 dev-log §3.
+**Resolution.** **Sync `Callable[[Input], str]`** on raw input.  LLM-driven routing is composed explicitly: `sequential(classifier_agent, conditional(router=lambda r: r.value.label, routes=...))`.  Router exceptions wrap in `ComposerError(node=conditional, cause=...)`; unknown route keys with no `default` set raise `ComposerError(node=conditional, cause=ValueError(...))`.  Implementation in `src/t0_agents/compose/_runtime.py:_drive_conditional`.
 
 ---
 
 ## Q10 — `saga` compensation idempotency
 
-**Status:** open.
+**Status:** resolved (M4, 2026-05-16).
 
 **Context.** Saga pattern: each step has a compensate step.  On failure at step N, run compensate(N-1), compensate(N-2), ..., compensate(0).
 
@@ -153,9 +143,7 @@
 - Enforce idempotency in code (e.g., dedupe by ID).  Adds complexity to every compensation.
 - Document as user responsibility.  Saga is an advanced pattern; users adopting it understand distributed transactions.
 
-**Recommendation.** Document as user responsibility.  Add a note in `docs/composition.md`.
-
-**Resolution target:** M4 dev-log §3.
+**Resolution.** **Document as user responsibility.**  No runtime enforcement.  The `saga` docstring spells out that compensations must be idempotent because a partial failure may invoke them more than once; M5's `docs/composition.md` repeats the caveat.  Compensation also receives the **same input** that its paired action received (the chained value flowing into action_N) — a corollary decided at the same time (user interview 2026-05-16): the compensate is a regular `Composable[Input, Any]`, symmetric with the action.  A raising compensate logs a WARN but does not block earlier compensations in the cascade.  Implemented in `src/t0_agents/compose/_runtime.py:_drive_saga` + `_run_compensations`.
 
 ---
 
