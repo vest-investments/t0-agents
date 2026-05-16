@@ -83,6 +83,13 @@ class StructuredOutput(Generic[M]):
 
     expects_tool_loop: bool = field(default=False, init=False)
     supports_streaming: bool = field(default=False, init=False)
+    #: Strict-tightened JSON schema derived from ``model`` at
+    #: construction time.  ``model_json_schema()`` is expensive on
+    #: complex models, and both :meth:`shape_inference` (called once
+    #: per attempt in the retry loop) and :meth:`recover` (called on
+    #: parse failure) need the schema — caching here keeps the work
+    #: O(1) regardless of how many retries fire.
+    _strict_schema: dict[str, Any] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         pydantic = _require_pydantic()
@@ -92,6 +99,9 @@ class StructuredOutput(Generic[M]):
                 "StructuredOutput.model must be a pydantic.BaseModel "
                 f"subclass, got {self.model!r}."
             )
+        self._strict_schema = _enforce_strict_object_schema(
+            self.model.model_json_schema()
+        )
 
     @property
     def name(self) -> str:
@@ -111,9 +121,7 @@ class StructuredOutput(Generic[M]):
         chat = params.setdefault("chat_completion", {})
         chat["json_mode"] = self.json_mode
         req.params = params
-        req.output_schema = _enforce_strict_object_schema(
-            self.model.model_json_schema()
-        )
+        req.output_schema = self._strict_schema
         return req
 
     async def materialize(
@@ -228,8 +236,7 @@ class StructuredOutput(Generic[M]):
         # Plain JSON parse failure — reuse JsonOutput's hint shape so the
         # model sees the same base sentence regardless of which mode
         # surfaced the failure.
-        schema = _enforce_strict_object_schema(self.model.model_json_schema())
-        hint_helper = JsonOutput(schema=schema, json_mode=self.json_mode)
+        hint_helper = JsonOutput(schema=self._strict_schema, json_mode=self.json_mode)
         return Recovery.retry(hint_helper._build_retry_hint())
 
 
