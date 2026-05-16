@@ -93,6 +93,39 @@ class TestMaterialize:
         result = await out.materialize(response, attempts=[])
         assert len(result.value) == 1
         assert result.value[0] is tc
+        # The text block alongside the tool call is preserved on
+        # diagnostics so debuggers can recover the model's reasoning
+        # via ``result.response`` (the v0.12 read-side property).
+        assert result.response == "reasoning"
+
+    async def test_materialize_joins_multiple_text_blocks(self) -> None:
+        from tensorzero.types import Thought
+
+        out = ToolCallOutput()
+        tc = ToolCall(
+            id="call_3",
+            raw_arguments="{}",
+            raw_name="x",
+            arguments={},
+            name="x",
+            type="tool_call",
+        )
+        response = ChatInferenceResponse(
+            inference_id=uuid4(),
+            episode_id=uuid4(),
+            variant_name="v",
+            content=[
+                Text(text="step 1", type="text"),
+                Thought(text="hmm", type="thought"),
+                tc,
+                Text(text="step 2", type="text"),
+            ],
+            usage=Usage(input_tokens=5, output_tokens=3),
+        )
+        result = await out.materialize(response, attempts=[])
+        assert result.value == [tc]
+        # Text + Thought blocks joined with newline, in document order.
+        assert result.response == "step 1\nhmm\nstep 2"
 
     async def test_materialize_empty_tool_calls_reports_failure(self) -> None:
         out = ToolCallOutput()

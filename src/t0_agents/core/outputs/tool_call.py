@@ -59,9 +59,20 @@ class ToolCallOutput:
     async def materialize(
         self, response: Any, attempts: list[Attempt]
     ) -> AgentResult[list[ToolCall]]:
-        """Extract :class:`ToolCall` blocks from a chat response."""
+        """Extract :class:`ToolCall` blocks from a chat response.
+
+        Any accompanying ``Text`` and ``Thought`` blocks (reasoning the
+        model produced alongside the tool calls) are joined with
+        newlines and stashed on ``diagnostics.raw_text`` — mirroring
+        the streaming-parity convention used elsewhere — so callers
+        debugging a router agent can still see the model's reasoning
+        via ``result.response`` (the v0.12 read-side property), even
+        though ``result.value`` is the structured tool-call list.
+        """
         from tensorzero.types import (  # local import — keeps mcp/ standalone
             ChatInferenceResponse,
+            Text,
+            Thought,
             ToolCall,
         )
 
@@ -71,9 +82,14 @@ class ToolCallOutput:
                 f"got {type(response).__name__}"
             )
 
-        tool_calls: list[ToolCall] = [
-            block for block in response.content if isinstance(block, ToolCall)
-        ]
+        tool_calls: list[ToolCall] = []
+        text_parts: list[str] = []
+        for block in response.content:
+            if isinstance(block, ToolCall):
+                tool_calls.append(block)
+            elif isinstance(block, (Text, Thought)) and block.text:
+                text_parts.append(block.text)
+
         return AgentResult(
             value=tool_calls,
             episode_id=str(response.episode_id),
@@ -82,7 +98,7 @@ class ToolCallOutput:
             diagnostics=OutputDiagnostics(
                 parse_strategy="strict" if tool_calls else "none",
                 attempts=len(attempts),
-                raw_text=None,
+                raw_text="\n".join(text_parts) if text_parts else None,
             ),
         )
 
