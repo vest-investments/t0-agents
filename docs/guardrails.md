@@ -877,6 +877,52 @@ ceiling, but if you raised it, pair `require_approval` with
 
 ---
 
+## Guardrails vs. TensorZero rate limits
+
+`max_cost` and TensorZero's `rate_limiting.rules` look superficially
+similar — both can stop a run with a spend or quota signal — but they
+sit at **different layers** and compose, rather than substitute, for
+each other.  Conflating them is the most common t0-agents support
+question; this section clarifies the contract so you can pick the
+right tool.
+
+| Concern | Layer | Scope | Persistence | Signal |
+|---|---|---|---|---|
+| `max_cost(per_episode=…)` guardrail | t0-agents (Python, per-`Agent.invoke()`) | This invocation only | In-memory; cleared when the Run completes | `GuardrailBlockedError` (`T0AgentsFatalError`) |
+| `max_tool_calls(per_run=…)` guardrail | t0-agents (Python, per-`Agent.invoke()`) | This invocation only | In-memory | `GuardrailBlockedError` |
+| `rate_limiting.rules.*` (TensorZero gateway) | Gateway (Rust, cross-request) | Across requests; scope set by tags / api_key | Valkey or Postgres (configured in `tensorzero.toml`) | `TensorZeroError(status_code=429)` |
+
+**Use guardrails when** the policy is *about this invocation*: "this
+prompt may not cost more than 10¢", "this run may not call the search
+tool more than 5 times".  Activations land on
+`AgentResult.guardrail_log`.
+
+**Use TensorZero gateway rate limits when** the policy is *about a
+client across time*: "this tenant gets 1000 requests per minute",
+"this user has a $50/day budget".  Configure them in
+`tensorzero.toml`; t0-agents forwards `AgentConfig.tags` and
+`AgentConfig.namespace` to `t0.inference(...)` so the gateway has the
+attribution it needs.  On breach, the gateway returns `HTTP 429`,
+which surfaces in Python as a `TensorZeroError` with `status_code=429`
+and propagates **unchanged** out of `Agent.invoke()` / `run_agent` —
+the loop never auto-retries it (regression test:
+`tests/test_mcp/test_harness.py::test_429_rate_limit_re_raised`).
+
+You can use both together.  A common pattern:
+
+- **Gateway-level**: `cost_per_day` rule per `api_key` scope to bound
+  spend across all invocations from a tenant.
+- **Per-invocation**: `max_cost(per_episode=0.01)` to catch runaway
+  loops before they cost real money.
+
+> **Do not** add `429` to `RECOVERABLE_INFERENCE_STATUS_CODES` in
+> `src/t0_agents/mcp/loop.py` — that's a deliberate "propagate, never
+> auto-retry" contract.  See
+> [Production considerations](production.md#rate-limits-and-quotas)
+> for the cross-link summary.
+
+---
+
 ## External references
 
 - [**TensorZero inference**](https://www.tensorzero.com/docs) —

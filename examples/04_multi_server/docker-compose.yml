@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:lts
+    image: clickhouse:lts
     ports:
       - "8123:8123"
     environment:
