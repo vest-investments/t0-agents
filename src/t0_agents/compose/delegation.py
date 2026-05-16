@@ -66,7 +66,12 @@ def agent_as_tool(
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
 
         try:
-            result = await sub_agent.run(message, tags=delegation_tags)
+            # v1.0: dispatch via the canonical Agent.invoke API so the
+            # sub-agent runs its own middleware chain (memory,
+            # guardrails, cost-tracking, sub-agents).  ``.result()`` is
+            # equivalent to the v0.12 ``agent.run(...)`` shape — without
+            # the DeprecationWarning emitted from internal call-sites.
+            result = await sub_agent.invoke(message, tags=delegation_tags).result()
         except T0AgentsFatalError:
             raise
         except Exception as exc:

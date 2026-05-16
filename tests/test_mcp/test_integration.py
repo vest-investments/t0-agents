@@ -55,6 +55,12 @@ async def test_tool_choice_forces_tool_call(mcp_client: Client[Any]) -> None:
     -- TensorZero maps this to the object form Groq always accepts. This proves
     the plumbing end-to-end: `additional_tools` reach the LLM, `tool_choice` is
     honored, and the response contains a `ToolCall` block.
+
+    The prompt uses non-trivial operands and an explicit "use the add tool"
+    directive: the reasoning model short-circuits trivial arithmetic by
+    emitting the answer as plain text, which Groq's server-side
+    `tool_use_failed` guard then rejects (see commit 9b76ee9). Non-trivial
+    operands keep the model honest and let `tool_choice` actually do its job.
     """
     async with mcp_client:
         tools = await mcp_client.list_tools()
@@ -65,7 +71,10 @@ async def test_tool_choice_forces_tool_call(mcp_client: Client[Any]) -> None:
             function_name="agent",
             input={
                 "messages": [
-                    {"role": "user", "content": "Compute 2 plus 3."},
+                    {
+                        "role": "user",
+                        "content": "Use the add tool to compute 1247 plus 8932.",
+                    },
                 ]
             },
             additional_tools=t0_tools,

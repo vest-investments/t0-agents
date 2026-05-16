@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -148,11 +149,20 @@ async def test_deployment_label_adds_tag_for_every_inference(
     """``deployment_label=mobile`` → ``tags["t0_agents.deployment"]="mobile"``."""
 
     class CapturingAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> AgentResult:
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
+            # v1.0: routes call ``invoke().result()``; record config
+            # tags at invoke time and return a Run-shaped mock.
             self._captured_tags = dict(self._config.tags or {})  # type: ignore[attr-defined]
-            return AgentResult(response="ok", episode_id="e", inference_ids=[], turns=0)
+            mock_run = MagicMock()
+            mock_run.result = AsyncMock(
+                return_value=AgentResult(
+                    response="ok",
+                    episode_id="e",
+                    inference_ids=[],
+                    turns=0,
+                ),
+            )
+            return mock_run
 
     agent = CapturingAgent(
         base_config,

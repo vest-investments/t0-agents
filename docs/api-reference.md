@@ -552,6 +552,92 @@ exception type (e.g. `MaxTurnsExceededError`, `GuardrailBlockedError`).
 
 ---
 
+## `Middleware` *(v1.0)*
+
+`Middleware` is the v1.0 extension surface for cross-cutting concerns:
+memory hydration, guardrails, cost tracking, sub-agent orchestration,
+JSON retry, observability — and any custom layer users add (rate
+limiters, PII redactors, recovery policies).  Each middleware wraps
+the inner inference loop with `async def __call__(ctx, next_) ->
+AgentResult` and is composed by `AgentConfig.__post_init__` into a
+chain that wraps a single terminal callable.
+
+### Public surface (M2)
+
+| Symbol | Purpose |
+|--------|---------|
+| `Middleware` | Runtime-checkable Protocol; `name: str` + `async __call__(ctx, next_) -> AgentResult`. |
+| `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, output, t0, tool_provider, on_inference, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `replace_tool_provider(tp)`. |
+| `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour). |
+| `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
+| `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |
+| `SubAgentMiddleware(sub_agents)` | Wraps `tool_provider` with `_OrchestrationToolProvider`; binds `parent_episode_id` ContextVar. |
+| `JsonRetryMiddleware()` | **M2: no-op placeholder.** M3 activates it by consulting `OutputMode.recover()`. |
+| `ObservabilityMiddleware(tracer=None)` | Wraps the run in `tracer.start_as_current_span(f"agent.invoke/{name}")`.  Opt-in. |
+
+### Default chain
+
+When `AgentConfig.middleware is None`, `__post_init__` materialises:
+
+```
+Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
+```
+
+`Memory` is included only when `memory=` is set; `SubAgents` only
+when `sub_agents=` is non-empty; `Guardrails` only when `guardrails=`
+is non-empty.  `CostTracking` and `JsonRetry` are always present.
+
+`SubAgents` precedes `Guardrails` in chain order so the
+`_OrchestrationToolProvider` wrap is INNER and `GuardedToolProvider`
+is OUTER — preserving the v0.12 invariant that orchestrator-level
+guardrails observe sub-agent delegations as tool calls.
+
+### Overrides
+
+- `middleware=None` (default) — auto-materialise the chain.
+- `middleware=[]` — explicit "no middleware".  Disables every default
+  layer including `CostTracking`, so `Run.cost()` stays at `0.0`.
+- `middleware=[Custom1(), Custom2(), ...]` — replace the default
+  chain entirely.
+
+The static helper `AgentConfig.default_middleware_for(memory=, ...)`
+returns the same list `__post_init__` would build, so power users
+can sandwich the default:
+
+```python
+AgentConfig(
+    name="...",
+    function_name="...",
+    middleware=[
+        MyOutermost(),
+        *AgentConfig.default_middleware_for(memory=m, guardrails=g),
+        MyInnermost(),
+    ],
+)
+```
+
+---
+
+## `RunUsage` *(v1.0)*
+
+Frozen dataclass returned by `Run.usage()` after a Run that fired
+at least one inference.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `input_tokens` | `int` | Sum of `response.usage.input_tokens` over every inference. |
+| `output_tokens` | `int` | Sum of `response.usage.output_tokens`. |
+| `cost` | `float` | Sum of `response.usage.cost` (treats `None` as `0.0`). |
+
+`Run.cost() -> float` returns the same `cost` field as a convenience
+for callers that only need the dollar figure.  Both default to `0.0`
+/ `None` when no inference has fired (or when `middleware=[]`
+disabled `CostTrackingMiddleware`).
+
+---
+
 ## `MaxTurnsExceededError`
 
 Exception raised when the agent loop reaches `max_turns` without the LLM

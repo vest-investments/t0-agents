@@ -130,16 +130,13 @@ async def test_subagent_episode_isolation() -> None:
     sub_episode_ids: list[str] = []
 
     class _SpyAgent(Agent):
-        async def run(  # type: ignore[override]
-            self,
-            user_message: str,
-            *,
-            episode_id: str | None = None,
-            tags: dict[str, str] | None = None,
-        ) -> Any:
-            result = await super().run(
-                user_message, episode_id=episode_id, tags=tags,
-            )
+        # v1.0 idiom: override the inner terminal (the v0.12 ``run``
+        # override is no longer wired by the
+        # _OrchestrationToolProvider, which dispatches via
+        # ``invoke().result()``).  The terminal sees the final
+        # AgentResult before any outer middleware mutates it.
+        async def _chat_terminal(self, ctx: Any) -> Any:  # type: ignore[override]
+            result = await super()._chat_terminal(ctx)
             if result.episode_id is not None:
                 sub_episode_ids.append(result.episode_id)
             return result

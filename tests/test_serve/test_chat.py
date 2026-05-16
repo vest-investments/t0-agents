@@ -1,7 +1,7 @@
 """Unit tests for ``POST /chat``.
 
 Stays offline: goes through ``httpx.AsyncClient`` backed by
-``ASGITransport`` (no uvicorn) and runs the full ``Agent.run`` loop
+``ASGITransport`` (no uvicorn) and runs the full ``Agent.invoke`` loop
 against :class:`FakeT0` + :class:`FakeFastMCPClient`.  Live-gateway
 coverage lives in ``tests/test_serve/test_integration.py``.
 """
@@ -9,6 +9,7 @@ coverage lives in ``tests/test_serve/test_integration.py``.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 from httpx import ASGITransport, AsyncClient
 
@@ -19,6 +20,7 @@ from t0_agents.core.exceptions import (
     MaxTurnsExceededError,
     T0AgentsError,
 )
+from t0_agents.core.types import AgentResult
 from t0_agents.serve import create_app
 from tests.test_serve.conftest import FakeFastMCPClient
 
@@ -28,6 +30,25 @@ async def _post_chat(app: Any, payload: dict[str, Any]) -> Any:
         transport=ASGITransport(app=app), base_url="http://test",
     ) as http:
         return await http.post("/chat", json=payload)
+
+
+def _mock_run_raising(exc: BaseException) -> MagicMock:
+    """Build a Run-shaped MagicMock whose ``.result()`` raises ``exc``.
+
+    Used by subclass-override tests that previously raised exceptions
+    from ``Agent.run``; v1.0 routes call ``invoke().result()`` so the
+    subclass overrides ``invoke`` to return one of these mocks.
+    """
+    mock_run = MagicMock()
+    mock_run.result = AsyncMock(side_effect=exc)
+    return mock_run
+
+
+def _mock_run_returning(result: AgentResult) -> MagicMock:
+    """Build a Run-shaped MagicMock whose ``.result()`` returns ``result``."""
+    mock_run = MagicMock()
+    mock_run.result = AsyncMock(return_value=result)
+    return mock_run
 
 
 async def test_chat_round_trip(base_agent: Agent) -> None:
@@ -53,10 +74,12 @@ async def test_chat_maxturns_returns_408(
     """``MaxTurnsExceededError`` maps to HTTP 408."""
 
     class FailingAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> Any:
-            raise MaxTurnsExceededError("ran out of turns")
+        # v1.0: routes call ``agent.invoke().result()``; override
+        # ``invoke`` to return a Run-shaped mock that raises from
+        # ``result()``.  Bypasses the middleware chain entirely so
+        # the canned exception surfaces directly to the route.
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
+            return _mock_run_raising(MaxTurnsExceededError("ran out of turns"))
 
     agent = FailingAgent(
         base_config,
@@ -77,10 +100,8 @@ async def test_chat_guardrail_blocked_returns_409(
     """``GuardrailBlockedError`` maps to HTTP 409."""
 
     class BlockingAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> Any:
-            raise GuardrailBlockedError("cost cap exceeded")
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
+            return _mock_run_raising(GuardrailBlockedError("cost cap exceeded"))
 
     agent = BlockingAgent(
         base_config,
@@ -101,10 +122,8 @@ async def test_chat_generic_t0agents_error_returns_400(
     """Any other ``T0AgentsError`` maps to HTTP 400."""
 
     class ErroringAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> Any:
-            raise T0AgentsError("something else")
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
+            return _mock_run_raising(T0AgentsError("something else"))
 
     agent = ErroringAgent(
         base_config,
@@ -125,14 +144,15 @@ async def test_chat_tags_merge(
     captured: dict[str, Any] = {}
 
     class ObservingAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> Any:
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
             captured["tags"] = dict(self._config.tags or {})
-            # Return a minimal AgentResult shape
-            from t0_agents.core.types import AgentResult
-            return AgentResult(
-                response="ok", episode_id="e-1", inference_ids=[], turns=0,
+            return _mock_run_returning(
+                AgentResult(
+                    response="ok",
+                    episode_id="e-1",
+                    inference_ids=[],
+                    turns=0,
+                ),
             )
 
     cfg = AgentConfig(
@@ -166,31 +186,31 @@ async def test_chat_guardrail_log_serialized(
     fake_tool_provider: FakeFastMCPClient,
 ) -> None:
     """``AgentResult.guardrail_log`` serialises to plain dicts in JSON."""
-    from t0_agents.core.types import AgentResult, GuardrailLogEntry
+    from t0_agents.core.types import GuardrailLogEntry
 
     class LoggingAgent(Agent):
-        async def run(  # type: ignore[override]
-            self, user_message: str, *, episode_id: str | None = None,
-        ) -> Any:
-            return AgentResult(
-                response="ok",
-                episode_id="e-1",
-                inference_ids=[],
-                turns=0,
-                guardrail_log=[
-                    GuardrailLogEntry(
-                        guardrail_name="max_cost",
-                        hook="before_run",
-                        kind="pass",
-                    ),
-                    GuardrailLogEntry(
-                        guardrail_name="block_tools",
-                        hook="before_tool",
-                        kind="block",
-                        tool_name="delete_db",
-                        detail="forbidden",
-                    ),
-                ],
+        def invoke(self, user_message: str, **kwargs: Any) -> Any:  # type: ignore[override]
+            return _mock_run_returning(
+                AgentResult(
+                    response="ok",
+                    episode_id="e-1",
+                    inference_ids=[],
+                    turns=0,
+                    guardrail_log=[
+                        GuardrailLogEntry(
+                            guardrail_name="max_cost",
+                            hook="before_run",
+                            kind="pass",
+                        ),
+                        GuardrailLogEntry(
+                            guardrail_name="block_tools",
+                            hook="before_tool",
+                            kind="block",
+                            tool_name="delete_db",
+                            detail="forbidden",
+                        ),
+                    ],
+                ),
             )
 
     agent = LoggingAgent(

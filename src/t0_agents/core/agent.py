@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -10,13 +9,13 @@ from typing import Any, Literal, cast
 
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
-from tensorzero.types import ChatInferenceResponse, JsonInferenceResponse
+from tensorzero.types import JsonInferenceResponse
 
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
-    T0AgentsFatalError,
 )
+from t0_agents.core.middleware.base import RunContext, build_pipeline
 from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.structured import (
     ParseStrategy,
@@ -26,12 +25,9 @@ from t0_agents.core.structured import (
 )
 from t0_agents.core.types import (
     AgentResult,
-    GuardrailLogEntry,
     MemoryProvider,
     ToolProvider,
 )
-from t0_agents.guardrails.base import GuardrailContext
-from t0_agents.guardrails.runtime import GuardedToolProvider
 from t0_agents.mcp.loop import run_agent
 from t0_agents.memory.base import MemoryRecord, render_memory_summary
 from t0_agents.stream.events import AgentEvent, DoneEvent
@@ -42,50 +38,6 @@ logger = logging.getLogger(__name__)
 # Default tool timeout used when AgentConfig.tool_timeout is None.
 # Matches run_agent's own default so behaviour is identical.
 _DEFAULT_TOOL_TIMEOUT: float = 30.0
-
-
-def _make_cost_tracker(
-    ctx: GuardrailContext,
-) -> Callable[[ChatInferenceResponse], Awaitable[None]]:
-    """Build the ``on_inference`` closure that mutates a run's guardrail context.
-
-    Treats ``response.usage is None`` and ``response.usage.cost is None`` as
-    zero so the guardrail still sees a monotonically-increasing cost even
-    when the provider omits pricing (e.g. a locally-hosted model).  Also
-    increments ``ctx.turn`` so developer-defined guardrails can key behaviour
-    on turn count without re-implementing the counter.
-    """
-
-    async def _on_inference(response: ChatInferenceResponse) -> None:
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            ctx.cost_so_far += usage.cost or 0.0
-        ctx.turn += 1
-
-    return _on_inference
-
-
-def _make_json_cost_tracker(
-    ctx: GuardrailContext,
-) -> Callable[[JsonInferenceResponse], Awaitable[None]]:
-    """JSON-function analogue of :func:`_make_cost_tracker`.
-
-    Deliberate duplication of the chat tracker — both ``ChatInferenceResponse``
-    and ``JsonInferenceResponse`` expose a ``usage`` attribute but they are
-    not related by inheritance, and parameterising the chat tracker with a
-    structural ``Union`` would push the typing burden onto every caller.  The
-    closure fires once per inference, so a JSON run that retries N times
-    invokes it ``1 + N`` times and accumulates cost across every attempt
-    without additional wiring.
-    """
-
-    async def _on_inference(response: JsonInferenceResponse) -> None:
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            ctx.cost_so_far += usage.cost or 0.0
-        ctx.turn += 1
-
-    return _on_inference
 
 
 _RETRY_HINT_BASE = (
@@ -132,8 +84,8 @@ class Agent:
     """Declarative wrapper around :func:`run_agent`.
 
     Encapsulates configuration in an :class:`AgentConfig` dataclass and
-    exposes a clean ``.run(message)`` method that delegates to the existing
-    ``run_agent`` loop.  The caller owns the lifecycle of both the TensorZero
+    exposes ``agent.invoke(message) -> Run`` as the v1.0 canonical
+    entry point.  The caller owns the lifecycle of both the TensorZero
     gateway and the tool provider (when one is supplied — typically a
     ``fastmcp.Client``).
 
@@ -144,11 +96,18 @@ class Agent:
     are single-shot and never dispatch MCP tools, so a JSON agent can be
     constructed with just the gateway.
 
+    Cross-cutting concerns (memory, guardrails, cost-tracking, sub-agent
+    orchestration, JSON retry) are materialised by
+    :meth:`AgentConfig.__post_init__` as a middleware chain on
+    ``config.middleware``.  The agent itself is now a thin dispatch
+    layer that builds a :class:`RunContext`, composes the middleware
+    chain around the appropriate terminal callable, and drives it.
+
     Example (chat)::
 
         config = AgentConfig(name="assistant", function_name="agent")
         agent = Agent(config, t0=gateway, tool_provider=mcp_client)
-        result = await agent.run("What is 2 + 3?")
+        result = await agent.invoke("What is 2 + 3?")
 
     Example (JSON, no tool provider)::
 
@@ -159,7 +118,7 @@ class Agent:
             json_mode="strict",
         )
         agent = Agent(config, t0=gateway)
-        result = await agent.run("Hi, I'm Sarah Johnson <sarah@example.com>")
+        result = await agent.invoke("Hi, I'm Sarah Johnson <sarah@example.com>")
         print(result.parsed)
     """
 
@@ -206,12 +165,11 @@ class Agent:
             from t0_agents.compose.routing import default_tool_name
 
             install_sub_agents(self)
-            # Cache the tool-name -> sub-agent map so ``Agent.run`` /
-            # ``Agent.stream`` can wrap ``tool_provider`` with
-            # ``_OrchestrationToolProvider`` cheaply per run.  The
-            # orchestration wrapper needs this mapping to dispatch
-            # sub-agent calls inline without crossing FastMCP's
-            # transport task boundary.
+            # Cache the tool-name -> sub-agent map so the
+            # ``SubAgentMiddleware`` (which wraps ``tool_provider`` with
+            # ``_OrchestrationToolProvider``) can dispatch sub-agent
+            # calls inline without crossing FastMCP's transport task
+            # boundary.
             self._sub_agents_by_tool_name = {
                 default_tool_name(sub): sub for sub in config.sub_agents
             }
@@ -220,9 +178,9 @@ class Agent:
         # a positive latch — set to ``True`` after the first successful
         # ``list_tools()`` round-trip that confirms the provider is
         # empty.  We cannot decide at construction time whether the
-        # check is needed: ``Agent.run`` accepts a per-call
+        # check is needed: ``Agent.invoke`` accepts a per-call
         # ``json_mode`` override, so a config-level ``"strict"`` agent
-        # may still receive ``run(..., json_mode="tool")`` and must
+        # may still receive ``invoke(..., json_mode="tool")`` and must
         # verify the provider lazily.  ``_warned_anthropic_combination``
         # latches the once-per-instance Anthropic extended-thinking
         # compatibility warning (TZ guide §11.4).
@@ -305,8 +263,9 @@ class Agent:
                 to seed the inference loop; used by :meth:`Run.fork` to
                 continue from a recorded transcript.  Overrides any
                 ``prior_messages`` the memory strategy would supply.
-            middleware: **M2 placeholder** — stored on the Run, not
-                yet consulted by the orchestration.
+            middleware: Explicit middleware chain that overrides
+                ``config.middleware`` for this Run only.  ``None`` (the
+                default) uses the config-materialised chain.
             output: **M3 placeholder** — stored on the Run, not yet
                 consulted by the orchestration.
             eager: When ``True`` (default), the Run's drive task is
@@ -344,10 +303,10 @@ class Agent:
                 f"{self._config.function_kind!r}."
             )
         if self._config.function_kind == "json":
-            # Mirror ``_execute_json_legacy`` step 0 / step 1 sync
-            # validations so they raise before the Run task spawns
-            # — preserves the v0.12 caller experience (the same
-            # exception is raised from the same await).
+            # Mirror the JSON terminal's step 0 sync validations so they
+            # raise before the Run task spawns — preserves the v0.12
+            # caller experience (the same exception is raised from the
+            # same await).
             effective_mode_for_safety = (
                 json_mode if json_mode is not None else self._config.json_mode
             )
@@ -450,762 +409,191 @@ class Agent:
             yield ev
 
     # ------------------------------------------------------------------
-    # Legacy orchestration bodies (driven by Run in v1.0)
+    # Pipeline driver + terminals (v1.0 orchestration)
     # ------------------------------------------------------------------
 
-    async def _execute_chat_legacy(
+    async def _drive(
         self,
+        ctx: RunContext,
         *,
-        user_message: str,
-        episode_id: str | None = None,
-        tags: dict[str, str] | None = None,
-        system_arguments: dict[str, Any] | None = None,
-        system: str | None = None,
-        output_schema: Mapping[str, Any] | None = None,
-        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
-        max_json_retries: int | None = None,
-        prior_messages: list[Mapping[str, Any]] | None = None,
+        is_streaming: bool,
+        middleware: Sequence[Any] | None = None,
     ) -> AgentResult:
-        """Drive the chat or JSON path for one Run — legacy orchestration body.
+        """Build the middleware pipeline and drive it.
 
-        v1.0 internal helper called by :class:`~t0_agents.core.run.Run`.
-        Pre-refactor this was ``Agent.run``; the body is unchanged from
-        v0.12 except that the dispatch entry point is now
-        :meth:`Agent.invoke`.  M2 replaces the inline orchestration
-        (memory + guardrails + sub-agents + cost-tracking) with a
-        middleware chain.
+        Called by :class:`~t0_agents.core.run.Run` after the first
+        consumer (``result()`` or ``events()``) picks the drive mode.
+        Selects the terminal by ``(function_kind, is_streaming)`` and
+        wraps the supplied middleware chain around it.
 
-        ``prior_messages`` is new in v1.0: it lets :meth:`Run.fork`
-        thread the original transcript through ``mcp.run_agent``
-        directly, overriding the memory-strategy-derived prior_messages
-        when both are present.
-
-        Dispatches on ``config.function_kind``:
-
-        - ``"chat"`` (default) — runs the existing tool loop via
-          :func:`~t0_agents.mcp.loop.run_agent`.  Behaviour is byte-identical
-          to v0.9.0 for any caller that does not set the new
-          ``output_schema`` / ``json_mode`` kwargs.
-        - ``"json"`` — single-shot JSON inference via
-          :func:`~t0_agents.core.structured.run_structured_inference`.
-          The resulting :class:`AgentResult` carries
-          ``function_kind="json"``, ``parsed`` (the JSON-parsed object or
-          ``None`` when TensorZero could not parse the model output), and
-          ``response`` set to the raw JSON string.
-
-        When ``config.memory`` is set, memory records are loaded before the
-        loop (if *episode_id* is provided) and a new record is persisted
-        after the loop completes.  When ``config.guardrails`` is non-empty,
-        the tool provider is wrapped in a :class:`GuardedToolProvider` that
-        fires every hook around every ``call_tool`` and tracks per-run
-        counters on a fresh :class:`GuardrailContext`; the resulting
-        :class:`AgentResult` carries a populated ``guardrail_log``.  The
-        JSON path skips the tool-level hooks (``before_tool``/``after_tool``)
-        because JSON functions never call tools, but ``before_run`` and
-        ``after_run`` fire normally.
-
-        Args:
-            user_message: The user's query as a plain string.
-            episode_id: Existing TensorZero episode id to continue, or
-                ``None`` for a fresh episode.
-            tags: Per-call tags that shallow-merge on top of
-                ``config.tags`` for observability — values here win on key
-                collisions, and ``None`` leaves the configured tags
-                untouched.  The configured deployment label (if any) is
-                already part of ``config.tags`` and is preserved by the
-                merge.
-            system_arguments: Optional dict forwarded to TensorZero as
-                ``input.system`` for the system-template render.  When
-                the function declares ``schemas.system.path``, the dict
-                must match the schema directly — its keys are the
-                schema-described properties (no ``arguments`` wrapper).
-                Useful when the function's system template declares
-                variables beyond what the memory strategy injects (e.g.
-                ``{{ max_turns }}``, ``{{ user_name }}``).  Shallow-merged
-                with — not overwritten by — the ``system_arguments``
-                produced by ``memory_strategy="system_template"``: caller
-                keys take precedence on collision.  ``None`` (the
-                default) preserves today's behaviour exactly.
-            system: Optional raw system prompt forwarded as
-                ``input.system`` (string form) — the escape hatch for
-                prompt-as-a-service flows where the prompt body itself
-                is runtime data.  Only valid when the TensorZero
-                function does **not** declare ``schemas.system.path``;
-                the gateway returns HTTP 400 otherwise.  Mutually
-                exclusive with ``system_arguments`` and with
-                ``memory_strategy="system_template"`` — both raise
-                ``ValueError`` up front.  Prefer ``system_arguments``
-                (with a configured template) for production flows so
-                ClickHouse captures structured prompt variables instead
-                of opaque strings.  ``None`` (the default) preserves
-                existing behaviour.
-            output_schema: Per-call override for the JSON function's static
-                schema (TZ guide §4).  Only valid when
-                ``config.function_kind == "json"``; raises
-                :class:`ConfigurationError` on chat agents.  Takes
-                precedence over ``config.output_schema`` when both are set.
-            json_mode: Per-call override for the TensorZero ``json_mode``
-                (TZ guide §5).  Only valid when
-                ``config.function_kind == "json"``; raises
-                :class:`ConfigurationError` on chat agents.  Takes
-                precedence over ``config.json_mode`` when both are set.
-            max_json_retries: Per-call override for
-                ``config.max_json_retries``.  ``None`` (the default)
-                uses the configured value.  ``0`` disables the retry
-                loop for this call only — the permissive layer still
-                runs unless ``config.permissive_json_parsing`` is
-                ``False``.  Only meaningful for JSON agents; ignored on
-                chat agents (no error: chat callers may pass it
-                unconditionally without branching).
-
-        Returns:
-            :class:`~t0_agents.core.types.AgentResult` with the joined
-            text of the terminating turn, episode metadata, turn count,
-            and (when guardrails are configured) the per-hook audit log.
-            For JSON runs ``response`` is the raw text of the final
-            attempt (valid or not), ``parsed`` carries the recovered
-            object or ``None``, ``turns`` is ``1 + json_parse_attempts``,
-            ``inference_ids`` contains one id per attempt in order, and
-            ``parse_strategy`` reports which layer produced ``parsed``:
-
-            - ``"strict"`` — TensorZero's parser succeeded on the first
-              attempt.
-            - ``"permissive"`` — the in-Python recovery layer extracted
-              JSON from prose or a fenced block on the first attempt.
-            - ``"retry"`` — at least one retry was needed before a valid
-              ``parsed`` was produced (by either strict or permissive).
-            - ``"none"`` — every layer and every attempt failed;
-              ``parsed`` is ``None``.
-
-        Raises:
-            MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
-            GuardrailBlockedError: If any guardrail hard-aborts the run.
-            ConfigurationError: If ``output_schema`` or ``json_mode`` is
-                passed on an agent with ``config.function_kind == "chat"``,
-                or if a JSON run is configured with
-                ``memory_strategy == "messages"`` (use ``"prepended_message"``
-                or ``"system_template"`` instead).
-            ValueError: If ``system`` is set alongside ``system_arguments``
-                or alongside ``memory_strategy="system_template"``.
+        ``middleware=None`` (the default) reads from
+        ``ctx.config.middleware`` — the v0.12-compat chain materialised
+        by :meth:`AgentConfig.__post_init__`.  A per-Run override (the
+        ``middleware=`` kwarg to :meth:`Agent.invoke`) takes precedence
+        and is threaded in through ``Run._drive``.  An empty list (the
+        explicit "no middleware" override) bypasses the chain entirely;
+        the terminal runs unwrapped.
         """
-        self._validate_system_kwargs(system, system_arguments)
-
-        # Structured-output dispatch: JSON functions bypass the tool loop
-        # and route to ``run_structured_inference``.  The chat path below
-        # is unchanged from v0.9.0 for any caller that does not pass the
-        # new kwargs.  v1.0 :class:`Run` dispatches to
-        # :meth:`_execute_json_legacy` directly, so this branch is a
-        # safety net for direct callers of the legacy helper.
+        terminal: Callable[[RunContext], Awaitable[AgentResult]]
         if self._config.function_kind == "json":
-            return await self._execute_json_legacy(
-                user_message=user_message,
-                episode_id=episode_id,
-                tags=tags,
-                system_arguments=system_arguments,
-                system=system,
-                output_schema=output_schema,
-                json_mode=json_mode,
-                max_json_retries=max_json_retries,
-            )
-        if output_schema is not None or json_mode is not None:
-            raise ConfigurationError(
-                "output_schema/json_mode kwargs are only valid when "
-                "AgentConfig.function_kind == 'json'; got function_kind="
-                f"{self._config.function_kind!r}."
-            )
+            terminal = self._json_terminal
+        elif is_streaming:
+            terminal = self._chat_streaming_terminal
+        else:
+            terminal = self._chat_terminal
 
-        # --- 1. Load memory ---
-        # ``messages`` strategy uses load_history (called from
-        # _prepare_memory_injection); records are unused on that path so
-        # we skip the load() round-trip entirely.
-        memory_records: list[MemoryRecord] = []
-        strategy = self._resolve_memory_strategy()
-        if (
-            self._config.memory is not None
-            and episode_id is not None
-            and strategy != "messages"
-        ):
-            try:
-                raw_records = await self._config.memory.load(episode_id)
-                memory_records = cast(list[MemoryRecord], raw_records)
-            except Exception:
-                logger.warning(
-                    "Memory load failed for episode %s; proceeding without context",
-                    episode_id,
-                    exc_info=True,
-                )
+        if middleware is None:
+            effective: list[Any] = list(ctx.config.middleware or [])
+        else:
+            effective = list(middleware)
+        pipeline = build_pipeline(effective, terminal)
+        return await pipeline(ctx)
 
-        # --- 2. Prepare injection ---
-        effective_message, extra_kwargs = await self._prepare_memory_injection(
-            user_message, memory_records, episode_id=episode_id,
+    async def _chat_terminal(self, ctx: RunContext) -> AgentResult:
+        """Non-streaming chat terminal — drives the inner tool loop.
+
+        Calls :func:`run_agent` with the (possibly memory-injected)
+        ``ctx.user_message`` and the (possibly wrapped)
+        ``ctx.tool_provider``.  Memory hydration, guardrail wrapping,
+        sub-agent orchestration, and cost accumulation already happened
+        upstream in the middleware chain — the terminal is now the
+        slim "drive the inference loop" body.
+        """
+        tool_provider = ctx.tool_provider
+        assert tool_provider is not None, (
+            "Chat agents require a tool_provider; rejected at Agent.__init__."
         )
-        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
-        if prior_messages is not None:
-            # Explicit caller-provided history (Run.fork) wins over the
-            # memory-strategy-derived prior_messages: fork is by design
-            # the user's explicit intent to continue from this exact
-            # transcript.  Cast to list so run_agent's signature is
-            # honoured (Mapping is structurally compatible at runtime).
-            extra_kwargs["prior_messages"] = list(prior_messages)
-
-        # --- 3. Set up guardrails ---
-        # Empty-list case: forward the raw tool_provider and leave
-        # on_inference at None so run_agent's code path is unchanged.
-        guard_ctx: GuardrailContext | None = None
-        guard_log: list[GuardrailLogEntry] = []
-        # ``__init__`` rejects chat agents without a tool_provider; the
-        # JSON branch above bypasses this section entirely.  The assert
-        # both narrows the type for mypy and guards against future
-        # refactors that might unbalance the invariant.
-        assert self._tool_provider is not None
-        tool_provider: ToolProvider = self._tool_provider
-        on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
-
-        if self._config.sub_agents:
-            # Wrap before guardrails so orchestrator-level guardrails
-            # still observe sub-agent delegations, while the inline
-            # dispatch keeps the parent-episode ContextVar visible (the
-            # FastMCP in-process transport otherwise snapshots an empty
-            # context into its server sub-task before Agent.run can bind
-            # anything).
-            from t0_agents.compose.orchestrator import (
-                _OrchestrationToolProvider,
-            )
-
-            tool_provider = cast(
-                ToolProvider,
-                _OrchestrationToolProvider(
-                    tool_provider, self._sub_agents_by_tool_name,
-                ),
-            )
-
-        if self._config.guardrails:
-            guard_ctx = GuardrailContext(
-                agent_name=self._config.name,
-                function_name=self._config.function_name,
-                user_message=user_message,
-            )
-            tool_provider = GuardedToolProvider(
-                tool_provider,
-                list(self._config.guardrails),
-                guard_ctx,
-                guard_log,
-            )
-            on_inference = _make_cost_tracker(guard_ctx)
-
-        # --- 4. Delegate to run_agent ---
-        # ``before_run`` lives inside the try so a fatal abort still runs
-        # ``after_run`` via the finally block — docs/guardrails.md promises
-        # after_run fires even when GuardrailBlockedError propagates.
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
             else _DEFAULT_TOOL_TIMEOUT
         )
-        result: AgentResult | None = None
-        try:
-            if guard_ctx is not None:
-                for guardrail in self._config.guardrails:
-                    try:
-                        await guardrail.before_run(guard_ctx)
-                    except T0AgentsFatalError:
-                        raise
-                    except Exception:
-                        logger.exception(
-                            "Guardrail %r before_run raised a non-fatal exception; "
-                            "continuing",
-                            guardrail.name,
-                        )
-                    else:
-                        guard_log.append(
-                            GuardrailLogEntry(
-                                guardrail_name=guardrail.name,
-                                hook="before_run",
-                                kind="pass",
-                            )
-                        )
+        extra_kwargs: dict[str, Any] = {}
+        # Empty system_arguments dict collapses to "no key" so callers
+        # passing ``system_arguments={}`` produce input without
+        # ``input.system`` — matches v0.12 ``_merge_caller_system_arguments``
+        # semantics.
+        if ctx.system_arguments:
+            extra_kwargs["system_arguments"] = ctx.system_arguments
+        if ctx.prior_messages is not None:
+            extra_kwargs["prior_messages"] = list(ctx.prior_messages)
 
-            with contextlib.ExitStack() as stack:
-                if self._config.sub_agents:
-                    # Bind the orchestrator's episode id so sub-agent
-                    # tool handlers tag their inferences with it for
-                    # ClickHouse correlation.
-                    from t0_agents.compose.orchestrator import (
-                        bind_parent_episode_id,
-                        update_parent_episode_id,
-                    )
-
-                    stack.enter_context(bind_parent_episode_id(episode_id))
-
-                    if episode_id is None:
-                        # Fresh orchestrator episode: TensorZero only
-                        # allocates the real id on the first inference.
-                        # Wrap on_inference so the ContextVar is
-                        # refreshed before the turn's tool calls
-                        # dispatch — otherwise every sub-agent
-                        # invocation during this run tags
-                        # t0_agents.parent_episode_id=unknown for the
-                        # entire orchestrator run.
-                        base_on_inference = on_inference
-
-                        async def _refresh_parent_episode_id(
-                            response: ChatInferenceResponse,
-                        ) -> None:
-                            if response.episode_id:
-                                update_parent_episode_id(str(response.episode_id))
-                            if base_on_inference is not None:
-                                await base_on_inference(response)
-
-                        on_inference = _refresh_parent_episode_id
-                result = await run_agent(
-                    self._t0,
-                    cast(Client[Any], tool_provider),
-                    effective_message,
-                    self._config.function_name,
-                    episode_id=episode_id,
-                    max_turns=self._config.max_turns,
-                    tool_timeout=tool_timeout,
-                    parallel_tools=self._config.parallel_tools,
-                    dryrun=self._config.dryrun,
-                    tool_choice=self._config.tool_choice,
-                    tags=self._merge_tags(tags),
-                    namespace=self._config.namespace,
-                    on_inference=on_inference,
-                    system=system,
-                    **extra_kwargs,
-                )
-        finally:
-            if guard_ctx is not None:
-                for guardrail in self._config.guardrails:
-                    try:
-                        await guardrail.after_run(guard_ctx, result)
-                    except T0AgentsFatalError:
-                        # Fatal hooks (e.g. ``require_parsed``) must
-                        # propagate past the broad ``except Exception``
-                        # belt-and-braces trap so policy aborts surface
-                        # to the caller instead of being silently logged.
-                        # Documented at ``docs/guardrails.md`` §"Return
-                        # semantics" and mirrors the ``before_run``
-                        # precedent above.
-                        raise
-                    except Exception:
-                        logger.exception(
-                            "Guardrail %r after_run raised a non-fatal exception; "
-                            "continuing",
-                            guardrail.name,
-                        )
-                    else:
-                        guard_log.append(
-                            GuardrailLogEntry(
-                                guardrail_name=guardrail.name,
-                                hook="after_run",
-                                kind="pass",
-                            )
-                        )
-                if result is not None:
-                    result.guardrail_log = list(guard_log)
-
-        # Control reaches here only when ``run_agent`` returned normally
-        # (no exception propagated past the ``try``).  ``result`` is always
-        # populated at this point; the narrowing keeps mypy strict happy.
-        assert result is not None
-
-        # --- 5. Save memory ---
-        # Skip when episode_id is missing so we never persist records under an
-        # empty-string key (which would collide across runs and be unretrievable).
-        if self._config.memory is not None and result.episode_id:
-            record = MemoryRecord(
-                episode_id=result.episode_id,
-                user_message=user_message,
-                agent_response=result.response,
-                turns=result.turns,
-                inference_ids=list(result.inference_ids),
-            )
-            try:
-                await self._config.memory.save(record)
-            except Exception:
-                logger.warning(
-                    "Memory save failed for episode %s; run result is still valid",
-                    result.episode_id,
-                    exc_info=True,
-                )
-
-        return result
-
-    async def _execute_chat_streaming_legacy(
-        self,
-        *,
-        user_message: str,
-        episode_id: str | None = None,
-        tags: dict[str, str] | None = None,
-        system_arguments: dict[str, Any] | None = None,
-        system: str | None = None,
-        prior_messages: list[Mapping[str, Any]] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """Streaming-chat legacy orchestration body for v1.0 Run.
-
-        Internal helper called by :class:`~t0_agents.core.run.Run` when
-        the first consumer subscribes to ``events()``.  The body is
-        unchanged from v0.12 :meth:`Agent.stream` — only the public
-        entry point has moved to :meth:`Agent.invoke`.  ``prior_messages``
-        is new in v1.0 to let :meth:`Run.fork` thread the original
-        transcript through the streaming runner.
-
-        Same lifecycle — memory hydration, guardrail scaffolding, tool
-        execution — except the turn loop is driven by
-        :class:`~t0_agents.stream.runner.StreamingAgentLoop` and every
-        intermediate token / tool-call / thought is surfaced as an
-        :class:`~t0_agents.stream.events.AgentEvent`.
-
-        The terminal event is always a
-        :class:`~t0_agents.stream.events.DoneEvent` carrying a fully-
-        populated :class:`~t0_agents.core.types.AgentResult` (including
-        the ``guardrail_log`` when guardrails are configured).
-
-        Args:
-            user_message: The user's query as a plain string.
-            episode_id: Existing TensorZero episode id to continue, or
-                ``None`` for a fresh episode.
-            tags: Per-call tags that shallow-merge on top of
-                ``config.tags``.  Critical for the WebSocket serving path
-                where one :class:`Agent` is shared across many frames —
-                without this kwarg there is no way to vary tags
-                per-frame.  Matches :meth:`run`'s semantics.
-            system_arguments: Optional dict forwarded to TensorZero as
-                ``input.system`` for the system-template render.  Same
-                merge semantics as :meth:`run` — caller keys take
-                precedence over the ``memory_context`` injected by
-                ``memory_strategy="system_template"``.  ``None`` (the
-                default) preserves today's behaviour exactly.
-            system: Optional raw system prompt forwarded as
-                ``input.system`` (string form).  Same semantics as
-                :meth:`run`'s ``system`` kwarg — see that method for
-                the full rationale.  Mutually exclusive with
-                ``system_arguments`` and with
-                ``memory_strategy="system_template"``; both raise
-                ``ValueError`` before the first event is yielded.
-
-        Yields:
-            :class:`~t0_agents.stream.events.AgentEvent` instances as the
-            LLM streams them and tools execute.  The last event is always
-            a :class:`DoneEvent`.
-
-        Raises:
-            MaxTurnsExceededError: If the loop exceeds ``config.max_turns``.
-            GuardrailBlockedError: If any guardrail hard-aborts the run.
-            ConfigurationError: If ``config.function_kind == "json"`` —
-                TensorZero does not emit ``output.parsed`` mid-stream
-                (guide §7.1, §11.3), so streaming JSON functions is
-                refused before any event is yielded.  Use
-                :meth:`run` instead.
-            ValueError: If ``system`` is set alongside
-                ``system_arguments`` or alongside
-                ``memory_strategy="system_template"``.
-        """
-        self._validate_system_kwargs(system, system_arguments)
-
-        # --- 0. JSON-mode guard ---
-        # TZ does not emit ``output.parsed`` mid-stream (guide §7.1,
-        # §11.3), so surfacing a stream of ``parsed=None`` events would
-        # be a worse contract than refusing.  The check runs at the very
-        # top of the async-generator body, which means it fires at the
-        # caller's first ``__anext__``, before any setup work or token
-        # emission.
-        if self._config.function_kind == "json":
-            raise ConfigurationError(
-                "Agent.stream() is not supported for "
-                "function_kind='json'.  TensorZero does not emit "
-                "`output.parsed` mid-stream (guide §7.1, §11.3); use "
-                "Agent.run() instead."
-            )
-
-        # --- 1. Load memory --- (mirrors run())
-        # ``messages`` strategy uses load_history; skip the records load
-        # for that path.
-        memory_records: list[MemoryRecord] = []
-        strategy = self._resolve_memory_strategy()
-        if (
-            self._config.memory is not None
-            and episode_id is not None
-            and strategy != "messages"
-        ):
-            try:
-                raw_records = await self._config.memory.load(episode_id)
-                memory_records = cast(list[MemoryRecord], raw_records)
-            except Exception:
-                logger.warning(
-                    "Memory load failed for episode %s; proceeding without context",
-                    episode_id,
-                    exc_info=True,
-                )
-
-        # --- 2. Prepare injection ---
-        effective_message, extra_kwargs = await self._prepare_memory_injection(
-            user_message, memory_records, episode_id=episode_id,
+        return await run_agent(
+            self._t0,
+            cast(Client[Any], tool_provider),
+            ctx.user_message,
+            self._config.function_name,
+            episode_id=ctx.episode_id,
+            max_turns=self._config.max_turns,
+            tool_timeout=tool_timeout,
+            parallel_tools=self._config.parallel_tools,
+            dryrun=self._config.dryrun,
+            tool_choice=self._config.tool_choice,
+            tags=self._merge_tags(ctx.tags),
+            namespace=self._config.namespace,
+            on_inference=ctx.on_inference,
+            system=ctx.system,
+            **extra_kwargs,
         )
-        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
-        if prior_messages is not None:
-            # Mirrors the chat path: explicit caller history beats the
-            # memory strategy's prior_messages.
-            extra_kwargs["prior_messages"] = list(prior_messages)
 
-        # --- 3. Set up guardrails ---
-        guard_ctx: GuardrailContext | None = None
-        guard_log: list[GuardrailLogEntry] = []
-        # ``__init__`` rejects chat agents without a tool_provider, and
-        # ``Agent.stream`` rejects JSON agents earlier in this method —
-        # so reaching this point implies a non-None provider.
-        assert self._tool_provider is not None
-        tool_provider: ToolProvider = self._tool_provider
-        on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None
+    async def _chat_streaming_terminal(self, ctx: RunContext) -> AgentResult:
+        """Streaming chat terminal — pushes events to the Run buffer, returns final result.
 
-        if self._config.sub_agents:
-            # Mirror Agent.run: orchestration wrapping sits inside the
-            # guardrail wrapper so the streaming loop's tool dispatch
-            # hits the inline sub-agent path and keeps the parent-
-            # episode ContextVar visible to ``get_parent_episode_id``.
-            from t0_agents.compose.orchestrator import (
-                _OrchestrationToolProvider,
-            )
-
-            tool_provider = cast(
-                ToolProvider,
-                _OrchestrationToolProvider(
-                    tool_provider, self._sub_agents_by_tool_name,
-                ),
-            )
-
-        if self._config.guardrails:
-            guard_ctx = GuardrailContext(
-                agent_name=self._config.name,
-                function_name=self._config.function_name,
-                user_message=user_message,
-            )
-            tool_provider = GuardedToolProvider(
-                tool_provider,
-                list(self._config.guardrails),
-                guard_ctx,
-                guard_log,
-            )
-            on_inference = _make_cost_tracker(guard_ctx)
-
+        Mirrors :meth:`_chat_terminal` but drives via
+        :class:`StreamingAgentLoop`.  Every event yielded by the
+        streaming runner (except the terminal :class:`DoneEvent`) is
+        pushed to ``ctx.run._buffer`` so :meth:`Run.events` consumers
+        see them as they happen.  The :class:`DoneEvent`'s
+        ``AgentResult`` is captured and returned — the
+        :class:`~t0_agents.core.run.Run` driver pushes a synthetic
+        :class:`DoneEvent` with the result (after any outer middleware
+        modifies it, e.g.  :class:`GuardrailsMiddleware` populating
+        ``guardrail_log``) once the chain unwinds.
+        """
+        tool_provider = ctx.tool_provider
+        assert tool_provider is not None, (
+            "Chat agents require a tool_provider; rejected at Agent.__init__."
+        )
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
             else _DEFAULT_TOOL_TIMEOUT
         )
+        extra_kwargs: dict[str, Any] = {}
+        # Empty system_arguments dict collapses to "no key" (parity with
+        # :meth:`_chat_terminal`).
+        if ctx.system_arguments:
+            extra_kwargs["system_arguments"] = ctx.system_arguments
+        if ctx.prior_messages is not None:
+            extra_kwargs["prior_messages"] = list(ctx.prior_messages)
 
-        # --- 4. before_run hooks ---
-        if guard_ctx is not None:
-            for guardrail in self._config.guardrails:
-                try:
-                    await guardrail.before_run(guard_ctx)
-                except T0AgentsFatalError:
-                    raise
-                except Exception:
-                    logger.exception(
-                        "Guardrail %r before_run raised a non-fatal exception; "
-                        "continuing",
-                        guardrail.name,
-                    )
-                else:
-                    guard_log.append(
-                        GuardrailLogEntry(
-                            guardrail_name=guardrail.name,
-                            hook="before_run",
-                            kind="pass",
-                        )
-                    )
-
-        # --- 5. Drive the streaming loop ---
-        # DoneEvent is buffered so we can attach the full guardrail_log
-        # (populated by after_run hooks below) before surfacing it.  If the
-        # stream aborts (e.g. GuardrailBlockedError), done_result stays
-        # None and the caller sees the exception propagate.
         streamer = StreamingAgentLoop()
         done_result: AgentResult | None = None
-        try:
-            with contextlib.ExitStack() as stack:
-                if self._config.sub_agents:
-                    # Same binding as Agent.run — sub-agents invoked
-                    # from a streaming orchestrator see the same
-                    # ContextVar.
-                    from t0_agents.compose.orchestrator import (
-                        bind_parent_episode_id,
-                        update_parent_episode_id,
-                    )
+        run = ctx.run
+        assert run is not None, "_chat_streaming_terminal requires a live Run"
 
-                    stack.enter_context(bind_parent_episode_id(episode_id))
+        async for event in streamer.stream(
+            self._t0,
+            cast(Client[Any], tool_provider),
+            ctx.user_message,
+            self._config.function_name,
+            episode_id=ctx.episode_id,
+            max_turns=self._config.max_turns,
+            tool_timeout=tool_timeout,
+            parallel_tools=self._config.parallel_tools,
+            dryrun=self._config.dryrun,
+            tool_choice=self._config.tool_choice,
+            tags=self._merge_tags(ctx.tags),
+            namespace=self._config.namespace,
+            on_inference=ctx.on_inference,
+            system=ctx.system,
+            **extra_kwargs,
+        ):
+            if isinstance(event, DoneEvent):
+                done_result = event.result
+                # Don't push the streaming runner's DoneEvent — outer
+                # middlewares may still mutate ``result.guardrail_log``
+                # before the Run driver pushes a synthetic DoneEvent
+                # with the final, populated value.
+                break
+            await run._buffer.put(event)
 
-                    if episode_id is None:
-                        # Mirror Agent.run: refresh the parent-episode
-                        # ContextVar on the first inference so
-                        # mid-stream sub-agent delegations correlate
-                        # against the orchestrator's real episode id
-                        # instead of the "unknown" fallback.  The
-                        # streaming runner fires on_inference after
-                        # final_usage_chunk.episode_id is populated and
-                        # before tool dispatch, so the refresh lands in
-                        # time for every sub-agent call in this turn.
-                        base_on_inference = on_inference
+        if done_result is None:
+            raise RuntimeError(
+                "Streaming runner completed without a DoneEvent — "
+                "this indicates a bug in the streaming runner."
+            )
+        return done_result
 
-                        async def _refresh_parent_episode_id(
-                            response: ChatInferenceResponse,
-                        ) -> None:
-                            if response.episode_id:
-                                update_parent_episode_id(str(response.episode_id))
-                            if base_on_inference is not None:
-                                await base_on_inference(response)
+    async def _json_terminal(self, ctx: RunContext) -> AgentResult:
+        """JSON function dispatch — retry loop wrapping ``run_structured_inference``.
 
-                        on_inference = _refresh_parent_episode_id
-                async for event in streamer.stream(
-                    self._t0,
-                    cast(Client[Any], tool_provider),
-                    effective_message,
-                    self._config.function_name,
-                    episode_id=episode_id,
-                    max_turns=self._config.max_turns,
-                    tool_timeout=tool_timeout,
-                    parallel_tools=self._config.parallel_tools,
-                    dryrun=self._config.dryrun,
-                    tool_choice=self._config.tool_choice,
-                    tags=self._merge_tags(tags),
-                    namespace=self._config.namespace,
-                    on_inference=on_inference,
-                    system=system,
-                    **extra_kwargs,
-                ):
-                    if isinstance(event, DoneEvent):
-                        done_result = event.result
-                        # Don't yield DoneEvent yet — finally block populates
-                        # guardrail_log and persists memory first.
-                        break
-                    yield event
-        finally:
-            # --- 6. after_run hooks (fire even on error, parity with run()) ---
-            if guard_ctx is not None:
-                for guardrail in self._config.guardrails:
-                    try:
-                        await guardrail.after_run(guard_ctx, done_result)
-                    except T0AgentsFatalError:
-                        # See chat ``run()``'s after_run loop for the
-                        # rationale: fatal hooks must propagate past the
-                        # broad ``except Exception`` belt-and-braces trap
-                        # so policy aborts surface to the caller.
-                        raise
-                    except Exception:
-                        logger.exception(
-                            "Guardrail %r after_run raised a non-fatal exception; "
-                            "continuing",
-                            guardrail.name,
-                        )
-                    else:
-                        guard_log.append(
-                            GuardrailLogEntry(
-                                guardrail_name=guardrail.name,
-                                hook="after_run",
-                                kind="pass",
-                            )
-                        )
-                if done_result is not None:
-                    done_result.guardrail_log = list(guard_log)
+        Reproduces the v0.12 retry semantics inline.  In M2 the
+        :class:`JsonRetryMiddleware` is a no-op placeholder; M3 will
+        invert this — the retry loop moves into the middleware
+        (consulting ``OutputMode.recover()``) and the terminal becomes
+        a single ``run_structured_inference`` call.
 
-            # --- 7. Persist memory ---
-            if (
-                self._config.memory is not None
-                and done_result is not None
-                and done_result.episode_id
-            ):
-                record = MemoryRecord(
-                    episode_id=done_result.episode_id,
-                    user_message=user_message,
-                    agent_response=done_result.response,
-                    turns=done_result.turns,
-                    inference_ids=list(done_result.inference_ids),
-                )
-                try:
-                    await self._config.memory.save(record)
-                except Exception:
-                    logger.warning(
-                        "Memory save failed for episode %s; run result is still valid",
-                        done_result.episode_id,
-                        exc_info=True,
-                    )
-
-        # --- 8. Terminal DoneEvent (outside try so after_run fires first) ---
-        if done_result is not None:
-            yield DoneEvent(result=done_result)
-
-    async def _execute_json_legacy(
-        self,
-        *,
-        user_message: str,
-        episode_id: str | None = None,
-        tags: dict[str, str] | None = None,
-        system_arguments: dict[str, Any] | None = None,
-        system: str | None = None,
-        output_schema: Mapping[str, Any] | None = None,
-        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
-        max_json_retries: int | None = None,
-    ) -> AgentResult:
-        """JSON-function dispatch path for the v1.0 Run.
-
-        Internal helper called by :class:`~t0_agents.core.run.Run` when
-        ``agent.config.function_kind == "json"``.  Body unchanged from
-        v0.12 ``Agent._run_json``; only the public entry point moved
-        to :meth:`Agent.invoke`.
-
-        Wraps up to ``max_json_retries + 1`` calls to
-        :func:`run_structured_inference` in the same memory + run-level
-        guardrail scaffolding as the chat path.  When TensorZero's
-        strict parser returns ``parsed == None``, the orchestration
-        consults the in-Python recovery layer (:func:`permissive_parse`,
-        gated by ``AgentConfig.permissive_json_parsing``); when that
-        also fails and the retry budget is non-zero, it re-emits the
-        inference with the previous (invalid) assistant turn and a
-        corrective user-turn hint until either a valid parse is
-        produced or the budget is exhausted.
-
-        No tool loop, no sub-agent orchestration, no
-        ``before_tool``/``after_tool`` hooks — JSON functions never call
-        tools.  ``before_run`` and ``after_run`` fire exactly once
-        around the whole retry sequence; the cost-tracker closure fires
-        once per inference and so accumulates cost across every attempt
-        automatically.
-
-        Sub-agent composition is rejected at config construction
-        (``AgentConfig.__post_init__`` raises when
-        ``function_kind == "json"`` is combined with ``sub_agents``), so
-        this method does not exercise the ``_OrchestrationToolProvider``
-        path used by chat.
+        Memory load/save, ``before_run``/``after_run`` hooks, and
+        cost accumulation are handled by the outer middleware chain;
+        this terminal only manages the retry budget and the
+        ``permissive_parse`` recovery layer.
         """
-        # --- 0. Safety checks ---
-        # Resolve the effective json_mode for this call so the safety
-        # surfaces observe per-call overrides.  A caller may override
-        # ``config.json_mode`` on a per-run basis, which means a
-        # config-level ``"strict"`` agent can still legitimately
-        # receive ``run(..., json_mode="tool")`` and must be checked.
-        # The full ``effective_schema`` / ``effective_mode``
-        # resolution lives below in step 4; this is the early-bind for
-        # the safety pass only.  Operators see the clearest possible
-        # error: the Anthropic warning is informational (no abort);
-        # the tool-mode check is a hard error.
+        # --- 0. Safety check: json_mode='tool' against non-empty provider ---
+        # Uses ``self._tool_provider`` directly (not ``ctx.tool_provider``)
+        # so the check sees the raw agent-level provider rather than any
+        # GuardedToolProvider wrap.  Latched to once per Agent instance.
+        run_input = ctx.run.input if ctx.run is not None else None
+        per_call_json_mode = run_input.json_mode if run_input is not None else None
         effective_mode_for_safety = (
-            json_mode if json_mode is not None else self._config.json_mode
+            per_call_json_mode
+            if per_call_json_mode is not None
+            else self._config.json_mode
         )
-        self._maybe_warn_anthropic_quirk(effective_mode_for_safety)
         if (
             effective_mode_for_safety == "tool"
             and not self._tool_provider_verified_empty
         ):
-            # ``list_tools()`` is async, so ``Agent.__init__`` could not
-            # perform this check itself — it is verified the first time
-            # the agent actually needs ``"tool"`` mode, then cached.
-            # ``json_mode == "tool"`` against a tool provider that
-            # advertises tools is forbidden by TZ guide §11.1.  When the
-            # agent was constructed without a tool provider, the
-            # invariant holds vacuously: no provider means nothing to
-            # advertise.
             if self._tool_provider is None:
                 self._tool_provider_verified_empty = True
             else:
@@ -1220,240 +608,118 @@ class Agent:
                     )
                 self._tool_provider_verified_empty = True
 
-        # --- 1. Load memory (mirrors chat run()) ---
-        # ``memory_strategy="messages"`` would require turning prior-episode
-        # records into ``prior_messages`` for the helper, which the JSON
-        # path deliberately does not do — ``prior_messages`` is reserved
-        # for the retry loop below.  Reject the strategy here at the
-        # strategy level (rather than after a load round-trip that might
-        # silently see an empty history) so the misconfiguration is caught
-        # uniformly regardless of episode state.
-        strategy = self._resolve_memory_strategy()
-        if strategy == "messages":
-            raise ConfigurationError(
-                "memory_strategy='messages' is not supported for "
-                "function_kind='json' — JSON functions are single-shot. "
-                "Use memory_strategy='prepended_message' (the default) "
-                "or 'system_template' instead."
-            )
-
-        memory_records: list[MemoryRecord] = []
-        if self._config.memory is not None and episode_id is not None:
-            try:
-                raw_records = await self._config.memory.load(episode_id)
-                memory_records = cast(list[MemoryRecord], raw_records)
-            except Exception:
-                logger.warning(
-                    "Memory load failed for episode %s; proceeding without context",
-                    episode_id,
-                    exc_info=True,
-                )
-
-        # --- 2. Prepare memory injection ---
-        effective_message, extra_kwargs = await self._prepare_memory_injection(
-            user_message, memory_records, episode_id=episode_id,
+        # --- 1. Resolve effective output_schema / json_mode / max_json_retries ---
+        # Per-call kwargs (M1-deprecated; M3-removed) take precedence over
+        # the config-level fields.  ``AgentConfig.__post_init__`` resolves
+        # ``Path`` schemas into ``Mapping`` at construction time, so the
+        # config field is ``Mapping | None`` here.
+        per_call_output_schema = (
+            run_input.output_schema if run_input is not None else None
         )
-        self._merge_caller_system_arguments(extra_kwargs, system_arguments)
-
-        # --- 3. Set up guardrail scaffolding ---
-        # JSON has no tool loop, so the tool-provider is never wrapped
-        # and ``before_tool``/``after_tool`` never fire.  Run-level
-        # hooks (``before_run``/``after_run``) fire just like the chat
-        # path so cost-tracking and policy guardrails work uniformly.
-        guard_ctx: GuardrailContext | None = None
-        guard_log: list[GuardrailLogEntry] = []
-        on_inference: (
-            Callable[[JsonInferenceResponse], Awaitable[None]] | None
-        ) = None
-
-        if self._config.guardrails:
-            guard_ctx = GuardrailContext(
-                agent_name=self._config.name,
-                function_name=self._config.function_name,
-                user_message=user_message,
-            )
-            on_inference = _make_json_cost_tracker(guard_ctx)
-
-        # --- 4. Resolve effective output_schema / json_mode ---
-        # Per-call kwargs take precedence over the config-level fields.
-        # ``AgentConfig.__post_init__`` resolves ``Path`` schemas into
-        # ``Mapping`` at construction time, so the config field is
-        # ``Mapping | None`` here.
+        per_call_max_retries = (
+            run_input.max_json_retries if run_input is not None else None
+        )
         config_schema = self._config.output_schema
         effective_schema: Mapping[str, Any] | None
-        if output_schema is not None:
-            effective_schema = output_schema
+        if per_call_output_schema is not None:
+            effective_schema = per_call_output_schema
         elif config_schema is not None:
             effective_schema = cast(Mapping[str, Any], config_schema)
         else:
             effective_schema = None
         effective_mode = (
-            json_mode if json_mode is not None else self._config.json_mode
+            per_call_json_mode
+            if per_call_json_mode is not None
+            else self._config.json_mode
         )
 
-        # --- 5. Delegate to run_structured_inference (with retry loop) ---
-        # Per-call ``max_json_retries`` wins over the config value, and ``0``
-        # disables the retry layer entirely (the permissive layer still
-        # runs unless it too is disabled at the config level).
+        # --- 2. Retry budget + per-call override ---
         retry_budget = (
-            max_json_retries
-            if max_json_retries is not None
+            per_call_max_retries
+            if per_call_max_retries is not None
             else self._config.max_json_retries
         )
         permissive_enabled = self._config.permissive_json_parsing
 
         attempts = 0
         prior_msgs: list[Mapping[str, Any]] = []
-        current_user = effective_message
+        current_user = ctx.user_message
         inference_ids: list[str] = []
         captured_episode: str | None = None
         final_parsed: Any | None = None
         final_raw: str = ""
         final_strategy: ParseStrategy = "none"
 
-        result: AgentResult | None = None
-        try:
-            if guard_ctx is not None:
-                for guardrail in self._config.guardrails:
-                    try:
-                        await guardrail.before_run(guard_ctx)
-                    except T0AgentsFatalError:
-                        raise
-                    except Exception:
-                        logger.exception(
-                            "Guardrail %r before_run raised a non-fatal exception; "
-                            "continuing",
-                            guardrail.name,
-                        )
-                    else:
-                        guard_log.append(
-                            GuardrailLogEntry(
-                                guardrail_name=guardrail.name,
-                                hook="before_run",
-                                kind="pass",
-                            )
-                        )
+        on_inference_cb = cast(
+            Callable[[JsonInferenceResponse], Awaitable[None]] | None,
+            ctx.on_inference,
+        )
 
-            while True:
-                # ``captured_episode`` is None on attempt 0 — use the
-                # caller-supplied ``episode_id`` so the first inference may
-                # mint a fresh episode (when both are None) or continue an
-                # existing one.  Subsequent attempts always reuse the id
-                # TZ assigned the first response, so the whole retry chain
-                # belongs to one episode.
-                structured: StructuredOutput = await run_structured_inference(
-                    self._t0,
-                    function_name=self._config.function_name,
-                    user_message=current_user,
-                    prior_messages=prior_msgs if prior_msgs else None,
-                    output_schema=effective_schema,
-                    json_mode=effective_mode,
-                    system_arguments=extra_kwargs.get("system_arguments"),
-                    system=system,
-                    episode_id=(
-                        captured_episode
-                        if captured_episode is not None
-                        else episode_id
-                    ),
-                    tags=self._merge_tags(tags),
-                    namespace=self._config.namespace,
-                    dryrun=self._config.dryrun,
-                    on_inference=on_inference,
-                )
-                inference_ids.append(structured.inference_id)
-                if captured_episode is None:
-                    captured_episode = structured.episode_id
-                final_raw = structured.raw
+        while True:
+            # ``captured_episode`` is None on attempt 0 — use the
+            # caller-supplied ``episode_id`` so the first inference may
+            # mint a fresh episode (when both are None) or continue an
+            # existing one.  Subsequent attempts always reuse the id
+            # TZ assigned the first response, so the whole retry chain
+            # belongs to one episode.
+            structured: StructuredOutput = await run_structured_inference(
+                self._t0,
+                function_name=self._config.function_name,
+                user_message=current_user,
+                prior_messages=prior_msgs if prior_msgs else None,
+                output_schema=effective_schema,
+                json_mode=effective_mode,
+                # Empty dict collapses to None (parity with
+                # ``_merge_caller_system_arguments`` in v0.12).
+                system_arguments=ctx.system_arguments or None,
+                system=ctx.system,
+                episode_id=(
+                    captured_episode
+                    if captured_episode is not None
+                    else ctx.episode_id
+                ),
+                tags=self._merge_tags(ctx.tags),
+                namespace=self._config.namespace,
+                dryrun=self._config.dryrun,
+                on_inference=on_inference_cb,
+            )
+            inference_ids.append(structured.inference_id)
+            if captured_episode is None:
+                captured_episode = structured.episode_id
+            final_raw = structured.raw
 
-                if structured.parsed is not None:
-                    final_parsed = structured.parsed
-                    final_strategy = "retry" if attempts > 0 else "strict"
+            if structured.parsed is not None:
+                final_parsed = structured.parsed
+                final_strategy = "retry" if attempts > 0 else "strict"
+                break
+
+            if permissive_enabled:
+                candidate, _ = permissive_parse(structured.raw)
+                if candidate is not None:
+                    final_parsed = candidate
+                    final_strategy = "retry" if attempts > 0 else "permissive"
                     break
 
-                if permissive_enabled:
-                    candidate, _ = permissive_parse(structured.raw)
-                    if candidate is not None:
-                        final_parsed = candidate
-                        final_strategy = (
-                            "retry" if attempts > 0 else "permissive"
-                        )
-                        break
+            if attempts >= retry_budget:
+                final_parsed = None
+                final_strategy = "none"
+                break
 
-                if attempts >= retry_budget:
-                    final_parsed = None
-                    final_strategy = "none"
-                    break
+            prior_msgs.append({"role": "user", "content": current_user})
+            prior_msgs.append({"role": "assistant", "content": structured.raw})
+            current_user = _build_retry_hint(effective_schema)
+            attempts += 1
 
-                prior_msgs.append(
-                    {"role": "user", "content": current_user}
-                )
-                prior_msgs.append(
-                    {"role": "assistant", "content": structured.raw}
-                )
-                current_user = _build_retry_hint(effective_schema)
-                attempts += 1
-
-            result = AgentResult(
-                response=final_raw,
-                episode_id=captured_episode,
-                inference_ids=inference_ids,
-                turns=1 + attempts,
-                function_kind="json",
-                parsed=final_parsed,
-                parse_strategy=final_strategy,
-                json_parse_attempts=attempts,
-            )
-        finally:
-            if guard_ctx is not None:
-                for guardrail in self._config.guardrails:
-                    try:
-                        await guardrail.after_run(guard_ctx, result)
-                    except T0AgentsFatalError:
-                        # Fatal hooks (e.g. ``require_parsed``) must
-                        # propagate past the broad ``except Exception``
-                        # belt-and-braces trap.  See chat ``run()``'s
-                        # after_run loop for the full rationale.
-                        raise
-                    except Exception:
-                        logger.exception(
-                            "Guardrail %r after_run raised a non-fatal exception; "
-                            "continuing",
-                            guardrail.name,
-                        )
-                    else:
-                        guard_log.append(
-                            GuardrailLogEntry(
-                                guardrail_name=guardrail.name,
-                                hook="after_run",
-                                kind="pass",
-                            )
-                        )
-                if result is not None:
-                    result.guardrail_log = list(guard_log)
-
-        # Control reaches here only when the structured inference returned
-        # normally (no exception propagated past the ``try``).
-        assert result is not None
-
-        # --- 6. Save memory (mirrors chat run() ordering) ---
-        if self._config.memory is not None and result.episode_id:
-            record = MemoryRecord(
-                episode_id=result.episode_id,
-                user_message=user_message,
-                agent_response=result.response,
-                turns=result.turns,
-                inference_ids=list(result.inference_ids),
-            )
-            try:
-                await self._config.memory.save(record)
-            except Exception:
-                logger.warning(
-                    "Memory save failed for episode %s; run result is still valid",
-                    result.episode_id,
-                    exc_info=True,
-                )
-
-        return result
+        return AgentResult(
+            response=final_raw,
+            episode_id=captured_episode,
+            inference_ids=inference_ids,
+            turns=1 + attempts,
+            function_kind="json",
+            parsed=final_parsed,
+            parse_strategy=final_strategy,
+            json_parse_attempts=attempts,
+        )
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -1471,20 +737,20 @@ class Agent:
         routing, so the warning is generic — operators verify the
         deployment themselves.  The latch (``_warned_anthropic_combination``)
         keeps the warning to once per :class:`Agent` instance so a
-        long-lived agent that calls :meth:`run` repeatedly does not
-        emit log spam.  Modes ``"strict"`` and ``"off"`` are safe and
-        do not trigger the warning.
+        long-lived agent that invokes repeatedly does not emit log
+        spam.  Modes ``"strict"`` and ``"off"`` are safe and do not
+        trigger the warning.
 
         Takes the *effective* mode (per-call override resolved against
         the config field) so a chat-agent-style config that gets
-        ``run(..., json_mode="on")`` per call still surfaces the
+        ``invoke(..., json_mode="on")`` per call still surfaces the
         warning.
         """
         if self._warned_anthropic_combination:
             return
         if effective_mode in {"on", "tool"}:
             logger.warning(
-                "AgentConfig/Agent.run(json_mode=%r) — Anthropic "
+                "AgentConfig/Agent.invoke(json_mode=%r) — Anthropic "
                 "extended-thinking models reject this combination "
                 "(TensorZero guide §11.4).  Verify your provider routing.",
                 effective_mode,
@@ -1545,29 +811,6 @@ class Agent:
                 "`memory_context` key) or switch memory_strategy to "
                 "'prepended_message' or 'messages'."
             )
-
-    @staticmethod
-    def _merge_caller_system_arguments(
-        extra_kwargs: dict[str, Any],
-        caller_args: dict[str, Any] | None,
-    ) -> None:
-        """Merge caller-supplied ``system_arguments`` into ``extra_kwargs`` in-place.
-
-        Caller keys take precedence over memory-strategy keys on collision —
-        explicit caller intent should not be silently overwritten by an
-        implicit memory injection.  An empty merged dict collapses to "no
-        ``system_arguments`` key" so the gateway never sees
-        ``input.system={}``.
-
-        No-op when ``caller_args`` is ``None``: byte-identical to today's
-        behaviour for callers that omit the kwarg.
-        """
-        if caller_args is None:
-            return
-        merged = dict(extra_kwargs.pop("system_arguments", None) or {})
-        merged.update(caller_args)
-        if merged:
-            extra_kwargs["system_arguments"] = merged
 
     def _resolve_memory_strategy(
         self,
