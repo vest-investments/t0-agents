@@ -57,10 +57,17 @@ forked = await run.fork("Make it Madrid instead.")
 class TimingMiddleware:
     name = "timing"
     async def __call__(self, ctx, next_):
-        t0 = time.perf_counter()
+        start = time.perf_counter()
         result = await next_(ctx)
-        print(f"{ctx.config.name} took {time.perf_counter() - t0:.2f}s")
+        print(f"{ctx.config.name} took {time.perf_counter() - start:.2f}s")
         return result
+
+timed = Agent(AgentConfig(
+    name="assistant",
+    function_name="agent",
+    middleware=[TimingMiddleware()],     # plugs into the chain
+), t0=t0, tool_provider=client)
+await timed.invoke("Plan my trip to Lisbon under $1500.")
 
 # 3. OutputMode[T] — polymorphic outputs, typed end-to-end.
 from t0_agents import JsonOutput, StructuredOutput
