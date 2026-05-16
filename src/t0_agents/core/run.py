@@ -524,6 +524,9 @@ class Run(Generic[T]):
                 if self._input.prior_messages
                 else None
             ),
+            middleware=self._middleware,
+            output=self._output,
+            context=self._context,
         )
 
     async def fork(
@@ -559,6 +562,9 @@ class Run(Generic[T]):
             json_mode=self._input.json_mode,
             max_json_retries=self._input.max_json_retries,
             prior_messages=transcript,
+            middleware=self._middleware,
+            output=self._output,
+            context=self._context,
         )
 
     # ------------------------------------------------------------------
@@ -568,15 +574,17 @@ class Run(Generic[T]):
     def transcript(self) -> list[Mapping[str, Any]]:
         """Return the recorded conversation as a list of TZ-shaped messages.
 
-        In M1 the transcript is the boundary pair — the original user
-        turn plus the agent's final response — sufficient for
-        :meth:`fork` to continue the conversation.  Intermediate tool
-        turns are not captured at this milestone; M2/M3 may extend the
-        transcript with the full middleware-level message history.
+        In M1 the transcript is any ``prior_messages`` the Run was
+        seeded with (so a fork-of-a-fork preserves the full conversation
+        chain) followed by the boundary pair — this Run's user turn plus
+        the agent's final response.  Intermediate tool turns are not
+        captured at this milestone; M2/M3 may extend the transcript
+        with the full middleware-level message history.
         """
         if self._result is None:
             return []
         return [
+            *(dict(m) for m in self._input.prior_messages),
             {"role": "user", "content": self._input.user_message},
             {"role": "assistant", "content": self._final_response},
         ]

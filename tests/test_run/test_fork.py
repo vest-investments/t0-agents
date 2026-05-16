@@ -92,6 +92,36 @@ class TestForkContinuation:
         # FakeT0 (FakeChatResponse mints uuid4 per instance).
         assert original.episode_id != forked.episode_id
 
+    async def test_double_fork_preserves_full_history(self) -> None:
+        # Fork-of-a-fork must thread ALL prior turns (q1+ans1+q2+ans2)
+        # ahead of the new user message — not just the latest pair.
+        # Regression guard for the case where ``transcript()`` drops
+        # ``input.prior_messages`` and only emits the boundary pair.
+        fake_t0 = FakeT0([_resp("ans1"), _resp("ans2"), _resp("ans3")])
+        agent = _make_agent(fake_t0)
+        r1 = agent.invoke("q1")
+        await r1.result()
+        r2 = await r1.fork("q2")
+        await r2.result()
+        r3 = await r2.fork("q3")
+        await r3.result()
+        third_call_messages = fake_t0.calls[2]["input"]["messages"]
+        # Five-turn history: q1, ans1, q2, ans2 (prior) + q3 (new user).
+        assert len(third_call_messages) >= 5
+        assert third_call_messages[0]["role"] == "user"
+        assert third_call_messages[0]["content"] == "q1"
+        assert third_call_messages[1]["role"] == "assistant"
+        assert third_call_messages[1]["content"] == "ans1"
+        assert third_call_messages[2]["role"] == "user"
+        assert third_call_messages[2]["content"] == "q2"
+        assert third_call_messages[3]["role"] == "assistant"
+        assert third_call_messages[3]["content"] == "ans2"
+        last = third_call_messages[-1]
+        role = getattr(last, "role", None) or last["role"]
+        content = getattr(last, "content", None) or last["content"]
+        assert role == "user"
+        assert content == "q3"
+
     async def test_fork_is_independent_after_cancellation(self) -> None:
         # Cancel the original AFTER it produced its transcript; the
         # fork must still complete.

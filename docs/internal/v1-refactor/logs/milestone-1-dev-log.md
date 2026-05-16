@@ -19,7 +19,7 @@
 | `tests/test_run/test_events_buffer.py` | 188 | `EventBuffer` direct tests: live cursor, replay, double-subscribe, overflow + truncated + WARN. |
 | `tests/test_run/test_feedback.py` | 120 | `Run.feedback` dispatching to `episode_id` / `inference_id` targets. |
 | `tests/test_run/test_replay.py` | 117 | Q7 resolution: new episode by default; `episode_id=` opt-in; cross-agent; weakref-GC failure. |
-| `tests/test_run/test_fork.py` | 108 | Transcript boundary capture; `prior_messages` threaded into `mcp.run_agent`. |
+| `tests/test_run/test_fork.py` | 138 | Transcript boundary capture; `prior_messages` threaded into `mcp.run_agent`; multi-turn fork-chain transitivity (added under D-4 / D-7 follow-up). |
 | `tests/test_run/test_two_channel.py` | 88 | Concurrent `result()` + `events()`; two `events()` iterators on the same Run. |
 | `tests/test_run/test_compat_run_stream.py` | 179 | v0.12 byte-identity, `DeprecationWarning` emission, JSON-mode stream rejection, legacy-kwarg forwarding, line-based dedup. |
 | `tests/test_run/test_integration.py` | 111 | `@pytest.mark.integration`: live T0+FastMCP end-to-end. |
@@ -101,13 +101,15 @@ This silenced the internal `DeprecationWarning`s but broke ~9 tests across `test
 
 **Impact on M2+.**  Contract §5.2 amended (the line `RunFailedError(cause: Exception)` wraps the underlying error → "raised only when the drive completed in `failed` state without a captured exception").  No M2 carry-forward needed — the change is self-contained.
 
-### D-4.  `Run.transcript()` only captures the boundary user + assistant pair in M1.
+### D-4.  `Run.transcript()` captures `prior_messages + boundary pair` in M1 (no intermediate tool turns).
 
-**What changed.**  Spec §4 lists `Run.transcript() -> list[Message]` without specifying granularity.  M1 implements it as a 2-element list `[user, assistant]` (the original user message + the final response).  Intermediate tool turns are not captured.
+**What changed.**  Spec §4 lists `Run.transcript() -> list[Message]` without specifying granularity.  M1 implements it as `list(input.prior_messages) + [user, assistant]` — the history the Run was seeded with (via `fork()` or an explicit `prior_messages=` invoke) followed by the boundary pair (this Run's user message + the final response).  Intermediate tool turns are not captured.
 
-**Why.**  Capturing every turn would require either modifying `mcp.run_agent` (forbidden — invariant §2.1) or adding a transcript-recording callback to `Agent._execute_chat_*_legacy`.  The latter is a larger refactor and was deemed M2/M3-shaped: the middleware chain is the natural place to record transcripts.
+**Why.**  Capturing every tool turn would require either modifying `mcp.run_agent` (forbidden — invariant §2.1) or adding a transcript-recording callback to `Agent._execute_chat_*_legacy`.  The latter is a larger refactor and was deemed M2/M3-shaped: the middleware chain is the natural place to record transcripts.
 
-**Impact on M2+.**  M2's `Middleware.RunContext` can keep a full transcript field if useful; if so, `Run.transcript()` can switch to reading from there.  M1's `fork()` works correctly with the 2-element transcript for the spec test's use case (`test_fork.py::TestForkContinuation::test_fork_passes_transcript_as_prior_messages`).  Richer transcripts unlock multi-turn fork scenarios.
+The `prior_messages` prefix was added during post-implementation review (PR #30 feedback, 2026-05-16): without it, a fork-of-a-fork chain dropped every turn before the immediate parent — `r3 = r2.fork(...)` lost the q1/ans1 from `r1` because `r2.transcript()` only emitted `r2`'s boundary pair.  Including `input.prior_messages` makes the fork chain transitive: every fork sees the full conversation history its parent already knew about.
+
+**Impact on M2+.**  M2's `Middleware.RunContext` can keep a full transcript field if useful; if so, `Run.transcript()` can switch to reading from there and merge in the intermediate tool turns.  Multi-turn fork chains are already covered (`tests/test_run/test_fork.py::TestForkContinuation::test_double_fork_preserves_full_history`); the M2 extension is purely additive (intermediate turns interleaved between the prior pairs and the boundary pair).
 
 ### D-5.  `Run.cost()` and `Run.usage()` are M1 placeholders.
 
@@ -124,6 +126,14 @@ This silenced the internal `DeprecationWarning`s but broke ~9 tests across `test
 **Why.**  `Run.fork()` needs to thread the original transcript through `mcp.run_agent` / `StreamingAgentLoop.stream`.  Both of those already accept `prior_messages`; this just exposes it through the Agent layer.
 
 **Impact on M2+.**  When M2 moves orchestration into middleware, the new `MemoryMiddleware` should keep the same "caller-explicit overrides memory-derived" precedence.
+
+### D-7.  `Run.replay()` and `Run.fork()` propagate `middleware`, `output`, and `context` to the next `Agent.invoke(...)`.
+
+**What changed.**  Initial implementation passed only the input snapshot (user message, tags, system, prior messages, the three M1-only JSON kwargs) when constructing the replayed / forked Run.  The constructor-time orchestration kwargs (`middleware`, `output`, `context`) lived on the source Run but were dropped on replay/fork — meaning the target Run picked up the agent's defaults rather than the original orchestration configuration.
+
+**Why.**  Post-implementation PR review (PR #30, 2026-05-16) flagged this as an asymmetry: if `invoke()` accepts `middleware=` and `Run` stores it, then "replay this Run" or "fork from this Run" should preserve the same orchestration.  Otherwise replay-after-customisation silently reverts to defaults.  M1 doesn't yet exercise the wiring (M2 wires `middleware`, M3 wires `output`), so the propagation is currently a no-op at runtime — but it locks the semantics so the M2/M3 wiring lands without a behavioural change.
+
+**Impact on M2+.**  None — this is forward-compat plumbing.  When M2 starts consuming `middleware` and M3 starts consuming `output`, `replay()` and `fork()` will already do the right thing without a follow-up change.
 
 ---
 
@@ -201,7 +211,7 @@ Commands run and outcomes:
 |---------|---------|
 | `uv run ruff check src/` | **passed** — all checks passed. |
 | `uv run mypy src/` | **passed** — no issues found in 57 source files. |
-| `uv run pytest -m "not integration"` | **passed** — 696 passed, 2 skipped, 57 deselected, 151 deprecation warnings (expected from shim emissions). |
+| `uv run pytest -m "not integration"` | **passed** — 697 passed, 2 skipped, 57 deselected, 151 deprecation warnings (expected from shim emissions).  +1 over the initial 696 — `test_fork.py::test_double_fork_preserves_full_history` was added with the D-4 / D-7 fixes. |
 | `uv run ruff check tests/test_run/` | **passed** after fixing 4 trivial issues (unused imports, dead-code class, mutable default). |
 | `git diff src/t0_agents/mcp/` | **empty** — invariant §2.1 holds. |
 
@@ -213,6 +223,6 @@ Manual / pending verification (requires user-side docker):
 Numbers for the regression baseline:
 
 - Pre-M1 non-integration test count: 647.
-- Post-M1 non-integration test count: 696 (+49 tests under `tests/test_run/`).
+- Post-M1 non-integration test count: 697 (+50 tests under `tests/test_run/`).
 - New code: ~1670 lines across `core/run.py`, `core/_runtime.py`, exception additions, `__init__.py` exports, and tests.
 - Modified code: `core/agent.py` grew from 1414 → 1667 lines (the new `invoke()` method + shim bodies; the renamed-and-extended legacy helpers).  M2 reverses this growth when the orchestration moves into middleware.
