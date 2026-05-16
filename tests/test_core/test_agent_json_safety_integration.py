@@ -19,6 +19,7 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 
 pytestmark = pytest.mark.integration
@@ -39,8 +40,7 @@ async def test_stream_guard_against_real_gateway(
     config = AgentConfig(
         name="customer-extractor",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",
+        output=JsonOutput(json_mode="strict"),
     )
     async with await _gateway_factory() as t0, mcp_client:
         agent = Agent(
@@ -49,5 +49,5 @@ async def test_stream_guard_against_real_gateway(
             tool_provider=cast(ToolProvider, mcp_client),
         )
         gen = agent.stream("Hi, I'm Sarah at sarah@example.com")
-        with pytest.raises(ConfigurationError, match="function_kind='json'"):
+        with pytest.raises(ConfigurationError, match=r"streaming"):
             await gen.__anext__()

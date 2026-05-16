@@ -1,10 +1,17 @@
-"""Unit tests for the JSON retry orchestration inside ``Agent._run_json``.
+"""Unit tests for the JSON retry orchestration in :class:`JsonRetryMiddleware`.
 
 Scripts a multi-response :class:`MockGateway` to cover every transition
 in the three-layer ladder (strict → permissive → retry → none) plus the
-per-call override and the ``ConfigurationError`` on a negative retry
-budget.  Uses ``MockGateway.script_json`` for canned JSON responses; see
+per-call override and the ``TypeError`` raised when v0.12 legacy
+``function_kind=``/``max_json_retries=`` config kwargs leak in.  Uses
+``MockGateway.script_json`` for canned JSON responses; see
 ``tests/test_testing/test_json_helpers.py`` for the dict-shape semantic.
+
+Migrated from v0.12 in M3 — the test moved from exercising
+``Agent._run_json`` directly to exercising the
+:class:`JsonRetryMiddleware`-driven loop around
+:class:`Agent._single_shot_terminal` (the dispatcher is the same code
+path; only the shape of the configuration changed).
 """
 
 from __future__ import annotations
@@ -15,9 +22,9 @@ from uuid import uuid4
 import pytest
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.agent import _RETRY_HINT_BASE, Agent
+from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 from t0_agents.testing import MockGateway
 from tests._fake_mcp import FakeMCPClient
@@ -26,13 +33,13 @@ from tests._fake_mcp import FakeMCPClient
 def _json_agent(
     *,
     t0: MockGateway,
+    output: JsonOutput | None = None,
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
         "name": "extractor",
         "function_name": "extract_customer_info",
-        "function_kind": "json",
-        "json_mode": "strict",
+        "output": output if output is not None else JsonOutput(json_mode="strict"),
     }
     defaults.update(config_overrides)
     config = AgentConfig(**defaults)
@@ -61,7 +68,6 @@ class TestRetryOrchestration:
         assert result.parsed == {"a": 1}
         assert result.parse_strategy == "strict"
         assert result.json_parse_attempts == 0
-        assert result.turns == 1
         assert len(result.inference_ids) == 1
 
     async def test_permissive_recovers_without_retry(self) -> None:
@@ -81,7 +87,6 @@ class TestRetryOrchestration:
         assert result.parsed == {"a": 1}
         assert result.parse_strategy == "permissive"
         assert result.json_parse_attempts == 0
-        assert result.turns == 1
         assert len(result.inference_ids) == 1
 
     async def test_retry_once_succeeds(self) -> None:
@@ -99,11 +104,10 @@ class TestRetryOrchestration:
         assert result.parsed == {"a": 2}
         assert result.parse_strategy == "retry"
         assert result.json_parse_attempts == 1
-        assert result.turns == 2
         assert len(result.inference_ids) == 2
 
     async def test_retry_budget_exhausted(self) -> None:
-        # Three consecutive failures with max_json_retries=2 → all three
+        # Three consecutive failures with max_retries=2 → all three
         # attempts run, parse_strategy == "none", parsed is None.
         t0 = MockGateway.script_json(
             [
@@ -112,18 +116,20 @@ class TestRetryOrchestration:
                 {"raw": "fail three", "parsed": None},
             ]
         )
-        agent = _json_agent(t0=t0, max_json_retries=2)
+        agent = _json_agent(
+            t0=t0,
+            output=JsonOutput(json_mode="strict", max_retries=2),
+        )
         result = await agent.run("hello")
 
         assert result.parsed is None
         assert result.parse_strategy == "none"
         assert result.json_parse_attempts == 2
-        assert result.turns == 3
         assert len(result.inference_ids) == 3
         assert result.response == "fail three"  # raw of final attempt
 
     async def test_per_call_retry_override_zeroes_budget(self) -> None:
-        # Config grants 5 retries; the per-call kwarg overrides to 0.
+        # Config grants 5 retries; the per-call output= overrides to 0.
         # Only one inference is made; permissive layer still tried but
         # has no JSON to extract, so parse_strategy == "none".
         t0 = MockGateway.script_json(
@@ -132,8 +138,14 @@ class TestRetryOrchestration:
                 {"raw": '{"a": 1}', "parsed": {"a": 1}},
             ]
         )
-        agent = _json_agent(t0=t0, max_json_retries=5)
-        result = await agent.run("hello", max_json_retries=0)
+        agent = _json_agent(
+            t0=t0, output=JsonOutput(json_mode="strict", max_retries=5)
+        )
+        # Per-call kwargs are translated by the v0.12 deprecation shim
+        # into a per-call JsonOutput.  ``max_json_retries=0`` zeroes the
+        # retry budget for this invocation only.
+        with pytest.warns(DeprecationWarning):
+            result = await agent.run("hello", max_json_retries=0)
 
         assert result.parse_strategy == "none"
         assert result.json_parse_attempts == 0
@@ -163,19 +175,22 @@ class TestRetryOrchestration:
         # First call: caller-supplied episode_id (None) reaches the SDK.
         assert t0.calls[0]["episode_id"] is None
         # Second call: the captured episode_id from response 0 is used.
-        # ``StructuredOutput.episode_id`` is ``str`` (stringified UUID),
+        # ``StructuredInferenceResult.episode_id`` is ``str`` (stringified UUID),
         # so the kwarg threaded into the SDK is also a string.
         assert t0.calls[1]["episode_id"] == str(first_ep)
 
     async def test_permissive_disabled_skips_layer(self) -> None:
-        # permissive_json_parsing=False + max_json_retries=0 = TZ-pure mode.
+        # JsonOutput(permissive=False, max_retries=0) = TZ-pure mode.
         # Even though raw contains recoverable JSON, the permissive
         # layer is bypassed and parse_strategy stays "none".
         t0 = MockGateway.script_json(
             [{"raw": 'Here is: {"a": 1}', "parsed": None}]
         )
         agent = _json_agent(
-            t0=t0, permissive_json_parsing=False, max_json_retries=0
+            t0=t0,
+            output=JsonOutput(
+                json_mode="strict", permissive=False, max_retries=0
+            ),
         )
         result = await agent.run("hello")
 
@@ -184,16 +199,17 @@ class TestRetryOrchestration:
         assert result.json_parse_attempts == 0
         assert len(result.inference_ids) == 1
 
-    def test_negative_max_json_retries_is_config_error(self) -> None:
+    def test_legacy_max_json_retries_kwarg_raises_typeerror(self) -> None:
+        # v0.12 ``AgentConfig(max_json_retries=...)`` was removed in
+        # v1.0 (Tier 2 — contract §2.4).  Passing it now raises
+        # ``TypeError`` from the dataclass constructor.
         with pytest.raises(
-            ConfigurationError, match="max_json_retries must be ≥ 0"
+            TypeError, match="max_json_retries"
         ):
             AgentConfig(
                 name="bad",
                 function_name="extract",
-                function_kind="json",
-                json_mode="strict",
-                max_json_retries=-1,
+                max_json_retries=-1,  # type: ignore[call-arg]
             )
 
     async def test_retry_hint_appears_in_history(self) -> None:
@@ -217,4 +233,4 @@ class TestRetryOrchestration:
         assert second_call_messages[1]["role"] == "assistant"
         assert second_call_messages[2]["role"] == "user"
         last_user_content = second_call_messages[-1]["content"]
-        assert _RETRY_HINT_BASE in last_user_content
+        assert JsonOutput.RETRY_HINT_BASE in last_user_content

@@ -103,55 +103,28 @@ class TestStreamRejectsJsonAgent:
     """v0.12 :meth:`Agent.stream` raised ConfigurationError on JSON agents.
 
     The v1.0 shim preserves this — ``invoke().events()`` raises
-    :class:`ConfigurationError` on first iteration (D-2), and the
-    shim's ``async for`` surfaces that immediately.
+    :class:`ConfigurationError` on first iteration (now keyed on
+    ``output.supports_streaming``), and the shim's ``async for``
+    surfaces that immediately.
     """
 
     async def test_stream_on_json_agent_raises_configuration_error(
         self,
     ) -> None:
-        agent = _agent(
-            function_kind="json",
-            json_mode="strict",
-        )
-        with pytest.raises(ConfigurationError, match="json"):
+        from t0_agents.core.outputs import JsonOutput
+
+        agent = _agent(output=JsonOutput(json_mode="strict"))
+        with pytest.raises(ConfigurationError, match="streaming"):
             async for _ in agent.stream("extract X"):
                 pass
 
 
-class TestLegacyKwargsForwarded:
-    """The shim forwards the M1-deprecated per-call JSON kwargs.
-
-    Spec amendment D-3 (recorded in dev-log §2): ``output_schema``,
-    ``json_mode``, ``max_json_retries`` accepted on :meth:`Agent.invoke`
-    for the M1 generation; removed in M3 with the matching
-    :class:`AgentConfig` fields.
-    """
-
-    async def test_per_call_kwargs_reach_run_input(self) -> None:
-        # FakeT0 does not currently mock a real JsonInferenceResponse,
-        # so the unit-test bar for forwarding is met by constructing
-        # the Run synchronously and inspecting RunInput — the kwargs
-        # land on the snapshot before the drive task fires inference.
-        agent = _agent(
-            function_kind="json",
-            json_mode="strict",
-        )
-        # Build the Run synchronously without consuming it so the
-        # legacy kwargs land on RunInput without hitting the live
-        # gateway.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            run = agent.invoke(
-                "extract X",
-                output_schema={"type": "object"},
-                json_mode="strict",
-                max_json_retries=3,
-            )
-        assert run.input.output_schema == {"type": "object"}
-        assert run.input.json_mode == "strict"
-        assert run.input.max_json_retries == 3
-        await run.cancel()
+# v0.12 per-call JSON kwargs on ``Agent.invoke`` were removed in M3 — the
+# only remaining surface that accepts them is the ``Agent.run`` Tier-1
+# shim, which translates them into a per-call :class:`JsonOutput`.  The
+# v1.0 :class:`RunInput` no longer carries ``output_schema``/
+# ``json_mode``/``max_json_retries`` fields.  ``TestLegacyKwargsForwarded``
+# from M1 has been removed (M1 dev-log §4 M3 carry-forward 2).
 
 
 class TestDeprecationDeduplicationByLine:

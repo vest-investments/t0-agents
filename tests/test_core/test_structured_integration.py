@@ -21,7 +21,10 @@ from typing import cast
 import pytest
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.structured import StructuredOutput, run_structured_inference
+from t0_agents.core.structured import (
+    StructuredInferenceResult,
+    run_structured_inference,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -47,7 +50,7 @@ async def test_run_structured_inference_static_schema() -> None:
             json_mode="strict",
         )
 
-    assert isinstance(result, StructuredOutput)
+    assert isinstance(result, StructuredInferenceResult)
     assert result.parse_strategy == "strict"
     assert result.parsed is not None
     assert isinstance(result.parsed, dict)

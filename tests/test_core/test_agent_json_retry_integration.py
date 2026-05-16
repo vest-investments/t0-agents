@@ -29,6 +29,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 
 pytestmark = pytest.mark.integration
@@ -58,10 +59,12 @@ async def test_agent_json_retry_against_real_provider(
     config = AgentConfig(
         name="customer-extractor-loose",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",  # config baseline; overridden per call below
-        permissive_json_parsing=True,
-        max_json_retries=2,
+        # config baseline; overridden per call below.
+        output=JsonOutput(
+            json_mode="strict",
+            permissive=True,
+            max_retries=2,
+        ),
     )
     async with await _gateway_factory() as t0, mcp_client:
         agent = Agent(
@@ -69,11 +72,18 @@ async def test_agent_json_retry_against_real_provider(
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run(
+        # Per-call ``output=`` overrides the config-level mode for this
+        # invocation; ``json_mode="off"`` lets the model decide on the
+        # output format so the permissive layer is exercised.
+        result = await agent.invoke(
             "Tell me about Sarah Johnson, sarah.j@example.com. "
             "Feel free to wrap your reply in a brief comment.",
-            json_mode="off",
-        )
+            output=JsonOutput(
+                json_mode="off",
+                permissive=True,
+                max_retries=2,
+            ),
+        ).result()
 
     sys.stderr.write(
         f"[m3-integration] parse_strategy={result.parse_strategy!r} "

@@ -41,7 +41,7 @@ def _json_result(
     parse_strategy: str = "strict",
     json_parse_attempts: int = 0,
     response: str = '{"hello": "world"}',
-) -> AgentResult:
+) -> AgentResult[Any]:
     """Build an :class:`AgentResult` shaped like a JSON run for assert tests.
 
     The assert helpers only read four fields — ``parsed``,
@@ -49,13 +49,25 @@ def _json_result(
     ``response`` for error messages — so hand-building is much faster
     than spinning up a full :class:`~t0_agents.core.agent.Agent` for
     every assertion test.
+
+    Post-M3: ``AgentResult.value`` is the canonical field;
+    ``response``/``parsed``/``parse_strategy``/``json_parse_attempts``/
+    ``function_kind`` are read-side ``@property`` aliases.  This helper
+    builds the value from ``parsed`` (when set) or from ``response``
+    (chat fallback), and stamps the v0.12 read-side semantics via
+    :class:`OutputDiagnostics`.
     """
+    from t0_agents.core.output import OutputDiagnostics
+
+    # JSON shape — ``value`` is the parsed dict; ``response`` lives on
+    # diagnostics.raw_text so the v0.12 read-side property returns it.
     return AgentResult(
-        response=response,
-        function_kind="json",
-        parsed=parsed,
-        parse_strategy=parse_strategy,  # type: ignore[arg-type]
-        json_parse_attempts=json_parse_attempts,
+        value=parsed,
+        diagnostics=OutputDiagnostics(
+            parse_strategy=parse_strategy,  # type: ignore[arg-type]
+            attempts=json_parse_attempts,
+            raw_text=response,
+        ),
     )
 
 

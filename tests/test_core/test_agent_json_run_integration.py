@@ -24,6 +24,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 
 pytestmark = pytest.mark.integration
@@ -42,8 +43,7 @@ async def test_agent_run_json_end_to_end(mcp_client: Client[Any]) -> None:
     config = AgentConfig(
         name="customer-extractor",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",
+        output=JsonOutput(json_mode="strict"),
     )
     async with await _gateway_factory() as t0, mcp_client:
         agent = Agent(

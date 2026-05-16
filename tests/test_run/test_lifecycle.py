@@ -183,7 +183,9 @@ class TestInputProperty:
         )
         assert run.input.user_message == "hi"
         assert run.input.function_name == "agent"
-        assert run.input.function_kind == "chat"
+        # ``function_kind`` is no longer a RunInput field in v1.0 —
+        # dispatch routes via ``run.output.expects_tool_loop`` instead.
+        assert run.output.expects_tool_loop is True
         assert dict(run.input.tags or {}) == {"experiment": "alpha"}
         await run.result()
 

@@ -1,78 +1,95 @@
-"""Unit tests for :class:`AgentConfig`'s structured-output fields.
+"""Unit tests for :class:`AgentConfig`'s structured-output surface (M3).
 
-Covers the three configuration fields (``function_kind``,
-``output_schema``, ``json_mode``) and the ``__post_init__`` branches
-that protect them from incoherent combinations.  Uses
-:class:`AgentConfig` directly — no gateway, no MCP client, no fakes —
-because every assertion here is a config-shape contract, not a runtime
-behaviour.
+M3 removed the v0.12 ``function_kind``/``json_mode``/``output_schema``/
+``permissive_json_parsing``/``max_json_retries`` cluster (Tier 2 —
+contract §2.4) and replaced it with a single ``output: OutputMode``
+field.  These tests cover:
+
+- ``output`` defaults to :class:`ChatOutput`.
+- The 5 legacy kwargs raise ``TypeError`` when passed.
+- ``sub_agents`` with a single-shot output (e.g. ``JsonOutput``) raises
+  ``ConfigurationError`` — single-shot mode would render sub-agent
+  tools unreachable.
+- ``memory_strategy='messages'`` is incompatible with single-shot
+  output modes.
+
+Path-based schema loading (v0.12 ``output_schema: Path``) is no longer
+supported — users load the JSON themselves and pass a ``dict`` to
+``JsonOutput(schema=...)``.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.outputs import ChatOutput, JsonOutput
 
 
-class TestFunctionKindValidation:
-    """``function_kind`` drives the rest of the structured-output surface."""
-
-    def test_default_function_kind_is_chat(self) -> None:
+class TestDefaults:
+    def test_default_output_is_chat_output(self) -> None:
         cfg = AgentConfig(name="a", function_name="f")
-        assert cfg.function_kind == "chat"
-        assert cfg.json_mode is None
-        assert cfg.output_schema is None
+        assert isinstance(cfg.output, ChatOutput)
+        assert cfg.output.expects_tool_loop is True
+        assert cfg.output.supports_streaming is True
+        # Read-side properties on AgentResult still work — v0.12 byte-
+        # identity preserved by ``@property`` aliases.
+        assert cfg.output.name == "chat"
 
-    def test_function_kind_json_requires_json_mode(self) -> None:
-        with pytest.raises(ConfigurationError, match="json_mode"):
+
+class TestLegacyKwargsRemoved:
+    """The 5 v0.12 legacy kwargs raise TypeError when passed."""
+
+    def test_function_kind_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="function_kind"):
             AgentConfig(
                 name="a",
                 function_name="f",
-                function_kind="json",
+                function_kind="json",  # type: ignore[call-arg]
             )
 
-    def test_function_kind_chat_forbids_json_mode(self) -> None:
-        with pytest.raises(ConfigurationError, match="forbids json_mode"):
+    def test_json_mode_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="json_mode"):
             AgentConfig(
                 name="a",
                 function_name="f",
-                json_mode="strict",
+                json_mode="strict",  # type: ignore[call-arg]
             )
 
-    def test_function_kind_chat_forbids_output_schema(self) -> None:
-        with pytest.raises(ConfigurationError, match="forbids output_schema"):
+    def test_output_schema_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="output_schema"):
             AgentConfig(
                 name="a",
                 function_name="f",
-                output_schema={"type": "object"},
+                output_schema={"type": "object"},  # type: ignore[call-arg]
             )
 
-    def test_function_kind_json_with_valid_combo_constructs(self) -> None:
-        cfg = AgentConfig(
-            name="a",
-            function_name="f",
-            function_kind="json",
-            json_mode="strict",
-            output_schema={"type": "object", "required": ["x"]},
-        )
-        assert cfg.function_kind == "json"
-        assert cfg.json_mode == "strict"
-        assert cfg.output_schema == {"type": "object", "required": ["x"]}
+    def test_permissive_json_parsing_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="permissive_json_parsing"):
+            AgentConfig(
+                name="a",
+                function_name="f",
+                permissive_json_parsing=True,  # type: ignore[call-arg]
+            )
+
+    def test_max_json_retries_raises_typeerror(self) -> None:
+        with pytest.raises(TypeError, match="max_json_retries"):
+            AgentConfig(
+                name="a",
+                function_name="f",
+                max_json_retries=3,  # type: ignore[call-arg]
+            )
 
 
-class TestFunctionKindJsonForbidsSubAgents:
-    """Contract §3.6 — JSON functions are single-shot, sub-agents are unreachable."""
+class TestSingleShotForbidsSubAgents:
+    """Single-shot output modes are incompatible with sub-agents."""
 
-    def test_function_kind_json_forbids_sub_agents(self) -> None:
+    def test_jsonoutput_forbids_sub_agents(self) -> None:
         # The sub_agents-must-be-Agent check fires *before* the
-        # json-vs-sub_agents check, so we need a real Agent instance.
-        from typing import cast
-
+        # single-shot-vs-sub_agents check, so we need a real Agent instance.
         from tensorzero import AsyncTensorZeroGateway
 
         from t0_agents.core.agent import Agent
@@ -86,98 +103,38 @@ class TestFunctionKindJsonForbidsSubAgents:
             tool_provider=cast(ToolProvider, FakeMCPClient()),
         )
 
-        with pytest.raises(ConfigurationError, match="incompatible with sub_agents"):
+        with pytest.raises(ConfigurationError, match="incompatible"):
             AgentConfig(
                 name="orch",
                 function_name="extract",
-                function_kind="json",
-                json_mode="strict",
+                output=JsonOutput(json_mode="strict"),
                 sub_agents=[sub],
             )
 
 
-class TestOutputSchemaPath:
-    """``output_schema: Path`` is read at construction time (Q3 resolution)."""
+class TestSingleShotForbidsMessagesMemory:
+    """Single-shot output modes are incompatible with ``messages`` memory strategy."""
 
-    def test_output_schema_loads_from_absolute_path(self, tmp_path: Path) -> None:
-        schema = {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-        }
-        schema_file = tmp_path / "schema.json"
-        schema_file.write_text(json.dumps(schema), encoding="utf-8")
+    def test_jsonoutput_forbids_messages_strategy(self) -> None:
+        class _StubMemory:
+            async def load(self, episode_id: str) -> list[Any]:
+                return []
 
-        cfg = AgentConfig(
-            name="extract",
-            function_name="f",
-            function_kind="json",
-            json_mode="strict",
-            output_schema=schema_file,
-        )
-        assert cfg.output_schema == schema
+            async def save(self, record: Any) -> None: ...
 
-    def test_output_schema_loads_from_relative_path(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        schema = {"type": "object", "additionalProperties": False}
-        schema_file = tmp_path / "rel-schema.json"
-        schema_file.write_text(json.dumps(schema), encoding="utf-8")
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[Any]:
+                return []
 
-        # Q3 resolution: relative paths are resolved against cwd.
-        monkeypatch.chdir(tmp_path)
-        cfg = AgentConfig(
-            name="extract",
-            function_name="f",
-            function_kind="json",
-            json_mode="strict",
-            output_schema=Path("rel-schema.json"),
-        )
-        assert cfg.output_schema == schema
+            async def load_history(self, episode_id: str) -> list[Any]:
+                return []
 
-    def test_output_schema_missing_file_raises_configuration_error(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        with pytest.raises(ConfigurationError, match="could not be read"):
+        with pytest.raises(ConfigurationError, match="messages"):
             AgentConfig(
                 name="extract",
                 function_name="f",
-                function_kind="json",
-                json_mode="strict",
-                output_schema=tmp_path / "does-not-exist.json",
-            )
-
-    def test_output_schema_invalid_json_raises_configuration_error(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        bad = tmp_path / "broken.json"
-        bad.write_text("{not json", encoding="utf-8")
-        with pytest.raises(ConfigurationError, match="not valid JSON"):
-            AgentConfig(
-                name="extract",
-                function_name="f",
-                function_kind="json",
-                json_mode="strict",
-                output_schema=bad,
-            )
-
-    def test_output_schema_non_object_raises_configuration_error(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        # Top-level array — not a valid JSON Schema root for TZ.
-        arr = tmp_path / "array.json"
-        arr.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-        with pytest.raises(ConfigurationError, match="JSON object at the top level"):
-            AgentConfig(
-                name="extract",
-                function_name="f",
-                function_kind="json",
-                json_mode="strict",
-                output_schema=arr,
+                output=JsonOutput(json_mode="strict"),
+                memory=cast(Any, _StubMemory()),
+                memory_strategy="messages",
             )
