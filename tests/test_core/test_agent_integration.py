@@ -127,3 +127,63 @@ async def test_agent_stream_system_arguments_against_strict_schema(
     assert terminal is not None
     assert terminal.result.response
     assert terminal.result.episode_id is not None
+
+
+async def test_agent_run_raw_system_string_against_schemaless_function(
+    mcp_client: Client[Any],
+) -> None:
+    """Raw ``system="..."`` is accepted by a function without a system_schema.
+
+    The ``agent`` function declares ``type = "chat"`` with no
+    ``schemas.system.path``, so TensorZero accepts ``input.system`` as a
+    plain string per the gateway API reference.  Exercising this against
+    the live gateway confirms the on-wire shape is correct and that the
+    PaaS escape hatch works end-to-end.
+    """
+    config = AgentConfig(
+        name="raw-system-test",
+        function_name="agent",
+        dryrun=True,
+    )
+    async with await _gateway_factory() as t0, mcp_client:
+        agent = Agent(
+            config,
+            t0=t0,
+            tool_provider=cast(ToolProvider, mcp_client),
+        )
+        result = await agent.run(
+            "Say hi briefly.",
+            system="Respond with at most five words.",
+        )
+
+    assert result.response
+    assert result.episode_id is not None
+
+
+async def test_agent_stream_raw_system_string_against_schemaless_function(
+    mcp_client: Client[Any],
+) -> None:
+    """Streaming counterpart for the raw-string ``system`` escape hatch."""
+    config = AgentConfig(
+        name="raw-system-stream-test",
+        function_name="agent",
+        dryrun=True,
+    )
+    async with await _gateway_factory() as t0, mcp_client:
+        agent = Agent(
+            config,
+            t0=t0,
+            tool_provider=cast(ToolProvider, mcp_client),
+        )
+        terminal: DoneEvent | None = None
+        async for event in agent.stream(
+            "Say hi briefly.",
+            system="Respond with at most five words.",
+        ):
+            if isinstance(event, DoneEvent):
+                terminal = event
+                break
+
+    assert terminal is not None
+    assert terminal.result.response
+    assert terminal.result.episode_id is not None

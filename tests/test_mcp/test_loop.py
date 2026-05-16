@@ -17,6 +17,7 @@ import asyncio
 from typing import Any, cast
 from uuid import uuid4
 
+import pytest
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from fastmcp.exceptions import ToolError
@@ -720,3 +721,42 @@ class TestRunAgent:
         # If the loop aliased the list, ``prior`` would now have len 2 (or
         # more after tool roundtrips).  Caller-owned data must stay intact.
         assert len(prior) == 1
+
+    async def test_system_string_forwarded_as_input_system(self) -> None:
+        """``system="..."`` is forwarded as a raw string in input.system."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+            system="You are a translator. Reply only in French.",
+        )
+        assert t0.calls[0]["input"]["system"] == (
+            "You are a translator. Reply only in French."
+        )
+
+    async def test_system_and_system_arguments_mutually_exclusive(self) -> None:
+        """Passing both raises ``ValueError`` before any inference is issued."""
+        t0 = FakeT0([])  # never reached
+        with pytest.raises(ValueError, match="Pass either `system`"):
+            await run_agent(
+                cast(AsyncTensorZeroGateway, t0),
+                cast(Client[Any], FakeMCPClient()),
+                "go",
+                "agent",
+                system="raw prompt",
+                system_arguments={"foo": "bar"},
+            )
+        assert t0.calls == []
+
+    async def test_system_none_omits_system_key(self) -> None:
+        """Default ``system=None`` (with no ``system_arguments``) omits input.system."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+        )
+        assert "system" not in t0.calls[0]["input"]

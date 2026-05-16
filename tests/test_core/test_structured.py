@@ -102,6 +102,32 @@ class TestRunStructuredInference:
         assert t0.calls[0]["output_schema"] is None
         assert "system" not in t0.calls[0]["input"]
 
+    async def test_system_string_forwarded_as_input_system(self) -> None:
+        """``system="..."`` reaches the gateway as a raw string."""
+        t0 = MockGateway.script_json([{"raw": '{"a": 1}'}])
+        await run_structured_inference(
+            cast(AsyncTensorZeroGateway, t0),
+            function_name="extract",
+            user_message="hello",
+            system="Extract structured data from prose.",
+        )
+        assert t0.calls[0]["input"]["system"] == (
+            "Extract structured data from prose."
+        )
+
+    async def test_system_and_system_arguments_mutually_exclusive(self) -> None:
+        """Mixing both kwargs raises ``ValueError`` before the inference fires."""
+        t0 = MockGateway.script_json([])  # never reached
+        with pytest.raises(ValueError, match="Pass either `system`"):
+            await run_structured_inference(
+                cast(AsyncTensorZeroGateway, t0),
+                function_name="extract",
+                user_message="hello",
+                system="raw",
+                system_arguments={"who": "world"},
+            )
+        assert t0.calls == []
+
     async def test_on_inference_callback_fires_once(self) -> None:
         seen: list[JsonInferenceResponse] = []
 

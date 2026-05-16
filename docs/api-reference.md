@@ -44,6 +44,7 @@ async def run_agent(
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
     system_arguments: dict[str, Any] | None = None,
+    system: str | None = None,
     prior_messages: list[Message] | None = None,
 ) -> AgentResult:
 ```
@@ -63,6 +64,7 @@ async def run_agent(
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
 | `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.run` / `Agent.stream` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
+| `system` | `str \| None` | `None` | Raw system prompt forwarded to TensorZero as `input.system` (string form). Mutually exclusive with `system_arguments`. Only valid when the TensorZero function does **not** declare `schemas.system.path` — the gateway returns HTTP 400 otherwise. Escape hatch for prompt-as-a-service flows where the prompt body itself is runtime data; prefer `system_arguments` (with a configured template) for production code so ClickHouse captures structured prompt variables instead of opaque strings. See [Runtime system prompt: `system` vs `system_arguments`](#runtime-system-prompt-system-vs-system_arguments). |
 | `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.run` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
 
 ### Returns
@@ -77,6 +79,8 @@ IDs, turn count, and response source.
 - `TensorZeroError` -- Non-recoverable inference error from TensorZero
   (propagated). Recoverable errors (matching `RECOVERABLE_INFERENCE_PATTERNS`)
   trigger an automatic retry with a corrective user message.
+- `ValueError` -- Both `system` and `system_arguments` were supplied
+  (they're mutually exclusive — both target `input.system`).
 
 ### Behavior notes
 
@@ -132,6 +136,43 @@ result2 = await run_agent(
     tool_choice={"specific": "get_weather"},
 )
 ```
+
+### Runtime system prompt: `system` vs `system_arguments`
+
+Both kwargs target TensorZero's `input.system` field, but they encode
+different intents and the gateway accepts different shapes depending
+on the function's configuration.
+
+| Function in `tensorzero.toml`      | `system_arguments={"k": "v"}`         | `system="<string>"`              |
+|------------------------------------|---------------------------------------|----------------------------------|
+| No `schemas.system.path` declared  | Passes through as `input.system={...}` | Passes through as `input.system="…"` |
+| `schemas.system.path` declared     | Renders the configured template       | **HTTP 400 from the gateway**    |
+
+**Default to `system_arguments`.** It keeps the prompt template in
+`tensorzero.toml`, where you can iterate on wording or A/B-test
+variants without redeploying — and ClickHouse stores the structured
+*arguments* rather than an opaque rendered string, which keeps the
+captured inferences usable for fine-tuning later (TensorZero's
+[prompt-template rationale](https://www.tensorzero.com/docs/gateway/create-a-prompt-template.md)
+spells this out).
+
+**Reach for `system`** only when the prompt body is itself runtime
+data — for example a prompt-as-a-service product where each request
+ships the user's own prompt. In that case there's nothing to template
+against, and the structured-dataset benefit doesn't apply because the
+prompt *is* the user input.
+
+The two kwargs are mutually exclusive — passing both raises
+`ValueError`. The check is the same on every public surface
+(`run_agent`, `Agent.run`, `Agent.stream`, `run_structured_inference`,
+`StreamingAgentLoop.stream`).
+
+When using `Agent.run` / `Agent.stream`, `system` is **also**
+incompatible with `memory_strategy="system_template"` (the strategy
+injects `memory_context` into `input.system` via the template, which
+requires a dict). Use `memory_strategy="prepended_message"` (the
+default) or `memory_strategy="messages"` if you need raw `system`
+alongside memory.
 
 ---
 

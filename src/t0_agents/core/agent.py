@@ -255,6 +255,7 @@ class Agent:
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
         output_schema: Mapping[str, Any] | None = None,
         json_mode: Literal["off", "on", "strict", "tool"] | None = None,
         max_json_retries: int | None = None,
@@ -307,6 +308,19 @@ class Agent:
                 produced by ``memory_strategy="system_template"``: caller
                 keys take precedence on collision.  ``None`` (the
                 default) preserves today's behaviour exactly.
+            system: Optional raw system prompt forwarded as
+                ``input.system`` (string form) — the escape hatch for
+                prompt-as-a-service flows where the prompt body itself
+                is runtime data.  Only valid when the TensorZero
+                function does **not** declare ``schemas.system.path``;
+                the gateway returns HTTP 400 otherwise.  Mutually
+                exclusive with ``system_arguments`` and with
+                ``memory_strategy="system_template"`` — both raise
+                ``ValueError`` up front.  Prefer ``system_arguments``
+                (with a configured template) for production flows so
+                ClickHouse captures structured prompt variables instead
+                of opaque strings.  ``None`` (the default) preserves
+                existing behaviour.
             output_schema: Per-call override for the JSON function's static
                 schema (TZ guide §4).  Only valid when
                 ``config.function_kind == "json"``; raises
@@ -353,7 +367,11 @@ class Agent:
                 or if a JSON run is configured with
                 ``memory_strategy == "messages"`` (use ``"prepended_message"``
                 or ``"system_template"`` instead).
+            ValueError: If ``system`` is set alongside ``system_arguments``
+                or alongside ``memory_strategy="system_template"``.
         """
+        self._validate_system_kwargs(system, system_arguments)
+
         # Structured-output dispatch: JSON functions bypass the tool loop
         # and route to ``run_structured_inference``.  The chat path below
         # is unchanged from v0.9.0 for any caller that does not pass the
@@ -364,6 +382,7 @@ class Agent:
                 episode_id=episode_id,
                 tags=tags,
                 system_arguments=system_arguments,
+                system=system,
                 output_schema=output_schema,
                 json_mode=json_mode,
                 max_json_retries=max_json_retries,
@@ -525,6 +544,7 @@ class Agent:
                     tags=self._merge_tags(tags),
                     namespace=self._config.namespace,
                     on_inference=on_inference,
+                    system=system,
                     **extra_kwargs,
                 )
         finally:
@@ -592,6 +612,7 @@ class Agent:
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Streaming analogue of :meth:`run`.
 
@@ -621,6 +642,13 @@ class Agent:
                 precedence over the ``memory_context`` injected by
                 ``memory_strategy="system_template"``.  ``None`` (the
                 default) preserves today's behaviour exactly.
+            system: Optional raw system prompt forwarded as
+                ``input.system`` (string form).  Same semantics as
+                :meth:`run`'s ``system`` kwarg — see that method for
+                the full rationale.  Mutually exclusive with
+                ``system_arguments`` and with
+                ``memory_strategy="system_template"``; both raise
+                ``ValueError`` before the first event is yielded.
 
         Yields:
             :class:`~t0_agents.stream.events.AgentEvent` instances as the
@@ -635,7 +663,12 @@ class Agent:
                 (guide §7.1, §11.3), so streaming JSON functions is
                 refused before any event is yielded.  Use
                 :meth:`run` instead.
+            ValueError: If ``system`` is set alongside
+                ``system_arguments`` or alongside
+                ``memory_strategy="system_template"``.
         """
+        self._validate_system_kwargs(system, system_arguments)
+
         # --- 0. JSON-mode guard ---
         # TZ does not emit ``output.parsed`` mid-stream (guide §7.1,
         # §11.3), so surfacing a stream of ``parsed=None`` events would
@@ -800,6 +833,7 @@ class Agent:
                     tags=self._merge_tags(tags),
                     namespace=self._config.namespace,
                     on_inference=on_inference,
+                    system=system,
                     **extra_kwargs,
                 ):
                     if isinstance(event, DoneEvent):
@@ -870,6 +904,7 @@ class Agent:
         episode_id: str | None,
         tags: dict[str, str] | None,
         system_arguments: dict[str, Any] | None,
+        system: str | None,
         output_schema: Mapping[str, Any] | None,
         json_mode: Literal["off", "on", "strict", "tool"] | None,
         max_json_retries: int | None = None,
@@ -1070,6 +1105,7 @@ class Agent:
                     output_schema=effective_schema,
                     json_mode=effective_mode,
                     system_arguments=extra_kwargs.get("system_arguments"),
+                    system=system,
                     episode_id=(
                         captured_episode
                         if captured_episode is not None
@@ -1229,6 +1265,42 @@ class Agent:
         if not base and not extra:
             return None
         return {**base, **extra}
+
+    def _validate_system_kwargs(
+        self,
+        system: str | None,
+        system_arguments: dict[str, Any] | None,
+    ) -> None:
+        """Reject illegal combinations of ``system`` / ``system_arguments``.
+
+        ``system`` (raw string) and ``system_arguments`` (template dict)
+        both target ``input.system`` and are mutually exclusive at the
+        gateway level.  Memory strategy ``"system_template"`` also writes
+        to ``input.system`` via a memory-derived dict, so combining it
+        with a raw ``system`` string would silently drop the memory
+        context; that combination is rejected up front for the same
+        reason the gateway would reject mixed shapes.
+
+        ``"prepended_message"`` and ``"messages"`` memory strategies
+        leave ``input.system`` untouched and are compatible with both
+        kwargs.
+        """
+        if system is None:
+            return
+        if system_arguments is not None:
+            raise ValueError(
+                "Pass either `system` (raw string for input.system) or "
+                "`system_arguments` (dict for template variables), not both."
+            )
+        if self._resolve_memory_strategy() == "system_template":
+            raise ValueError(
+                "system=<str> is incompatible with "
+                "memory_strategy='system_template' — that strategy injects "
+                "memory_context into input.system via the template, which "
+                "requires a dict.  Either pass `system_arguments` (with a "
+                "`memory_context` key) or switch memory_strategy to "
+                "'prepended_message' or 'messages'."
+            )
 
     @staticmethod
     def _merge_caller_system_arguments(

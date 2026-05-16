@@ -265,6 +265,7 @@ async def run_structured_inference(
     output_schema: Mapping[str, Any] | None = None,
     json_mode: Literal["off", "on", "strict", "tool"] | None = None,
     system_arguments: dict[str, Any] | None = None,
+    system: str | None = None,
     prior_messages: list[Mapping[str, Any]] | None = None,
     episode_id: str | None = None,
     tags: dict[str, str] | None = None,
@@ -298,6 +299,14 @@ async def run_structured_inference(
         system_arguments: Template arguments forwarded as
             ``input.system``.  Matches the semantics of
             :func:`t0_agents.mcp.loop.run_agent`'s ``system_arguments``.
+        system: Raw system prompt forwarded as ``input.system`` (string
+            form), for JSON functions whose system template is itself
+            runtime data.  Only valid when the function does not declare
+            ``schemas.system.path``.  Mutually exclusive with
+            ``system_arguments``: a ``ValueError`` is raised when both
+            are set.  Mirrors
+            :func:`t0_agents.mcp.loop.run_agent`'s ``system`` kwarg —
+            see that function's docstring for the full rationale.
         prior_messages: Optional list of ``{role, content}`` message
             dicts to prepend before the ``user_message`` turn.  Used by
             :meth:`Agent._run_json`'s retry orchestration to thread the
@@ -329,13 +338,22 @@ async def run_structured_inference(
             (the configured function is not a JSON function), or if the
             call returned a streaming iterator (we never set
             ``stream=True``, but the SDK declares the union).
+        ValueError: If both ``system`` and ``system_arguments`` are set.
     """
+    if system is not None and system_arguments is not None:
+        raise ValueError(
+            "Pass either `system` (raw string for input.system) or "
+            "`system_arguments` (dict for template variables), not both."
+        )
+
     messages: list[Mapping[str, Any]] = []
     if prior_messages:
         messages.extend(prior_messages)
     messages.append({"role": "user", "content": user_message})
     input_dict: dict[str, Any] = {"messages": messages}
-    if system_arguments is not None:
+    if system is not None:
+        input_dict["system"] = system
+    elif system_arguments is not None:
         input_dict["system"] = system_arguments
 
     params: dict[str, Any] | None = None

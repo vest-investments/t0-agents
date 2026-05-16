@@ -86,6 +86,7 @@ class StreamingAgentLoop:
         tags: dict[str, str] | None = None,
         namespace: str | None = None,
         system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
         prior_messages: list[Message] | None = None,
     ) -> AsyncIterator[AgentEvent]:
@@ -99,7 +100,17 @@ class StreamingAgentLoop:
         :func:`~t0_agents.mcp.loop.run_agent` — when supplied, the loop
         seeds ``messages`` with the prior conversation before appending
         the new user prompt.  Used by the ``messages`` memory strategy.
+
+        ``system`` mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        ``system`` kwarg: a raw string forwarded as ``input.system``.
+        Mutually exclusive with ``system_arguments``; a ``ValueError``
+        is raised before the first chunk is yielded when both are set.
         """
+        if system is not None and system_arguments is not None:
+            raise ValueError(
+                "Pass either `system` (raw string for input.system) or "
+                "`system_arguments` (dict for template variables), not both."
+            )
         mcp_tools = await tool_provider.list_tools()
         t0_tools = convert_tools(mcp_tools)
         messages: list[Message] = list(prior_messages) if prior_messages else []
@@ -128,6 +139,7 @@ class StreamingAgentLoop:
                 tags=tags,
                 namespace=namespace,
                 system_arguments=system_arguments,
+                system=system,
             )
             if err is not None:
                 if self._is_recoverable(err):
@@ -264,10 +276,13 @@ class StreamingAgentLoop:
         tags: dict[str, str] | None,
         namespace: str | None,
         system_arguments: dict[str, Any] | None,
+        system: str | None,
     ) -> tuple[AsyncIterator[InferenceChunk] | None, TensorZeroError | None]:
         """Issue ``t0.inference(stream=True)`` — return the iterator or the error."""
         input_dict: dict[str, Any] = {"messages": messages}
-        if system_arguments is not None:
+        if system is not None:
+            input_dict["system"] = system
+        elif system_arguments is not None:
             input_dict["system"] = system_arguments
         try:
             raw = await t0.inference(

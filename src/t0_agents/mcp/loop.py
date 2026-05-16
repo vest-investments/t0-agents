@@ -216,6 +216,7 @@ async def run_agent(
     tags: dict[str, str] | None = None,
     namespace: str | None = None,
     system_arguments: dict[str, Any] | None = None,
+    system: str | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
     prior_messages: list[Message] | None = None,
 ) -> AgentResult:
@@ -273,6 +274,18 @@ async def run_agent(
             to pass ``memory_context`` to system-template variants.
             ``None`` (the default) omits the ``system`` key from the
             input dict entirely, preserving existing behaviour.
+        system: Raw system prompt forwarded to TensorZero as
+            ``input.system`` (string form).  Only valid when the
+            TensorZero function does **not** declare a
+            ``schemas.system.path`` — passing a string to a templated
+            function returns HTTP 400 from the gateway.  Mutually
+            exclusive with ``system_arguments``: a ``ValueError`` is
+            raised when both are set.  Use this for prompt-as-a-service
+            style flows where the prompt body is itself runtime data;
+            prefer ``system_arguments`` (with a configured template) for
+            every other case so the dataset captured in ClickHouse stays
+            structured.  ``None`` (the default) preserves existing
+            behaviour.
         on_inference: Optional async callback invoked with every
             ``ChatInferenceResponse`` after it is received and cast,
             BEFORE the turn's tool calls are dispatched. Used by the
@@ -299,7 +312,14 @@ async def run_agent(
     Raises:
         MaxTurnsExceededError: If the loop runs ``max_turns`` times without the
             LLM producing a tool-call-free response.
+        ValueError: If both ``system`` and ``system_arguments`` are set.
     """
+    if system is not None and system_arguments is not None:
+        raise ValueError(
+            "Pass either `system` (raw string for input.system) or "
+            "`system_arguments` (dict for template variables), not both."
+        )
+
     mcp_tools = await mcp_client.list_tools()
     t0_tools = convert_tools(mcp_tools)
     messages: list[Message] = list(prior_messages) if prior_messages else []
@@ -318,7 +338,9 @@ async def run_agent(
         # the LLM can retry on the next turn.
         try:
             input_dict: dict[str, Any] = {"messages": messages}
-            if system_arguments is not None:
+            if system is not None:
+                input_dict["system"] = system
+            elif system_arguments is not None:
                 input_dict["system"] = system_arguments
             raw = await t0.inference(
                 function_name=function_name,

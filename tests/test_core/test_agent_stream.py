@@ -366,3 +366,46 @@ async def test_agent_stream_system_arguments_forwarded() -> None:
     # input.system IS the schema-described arguments dict directly —
     # no `arguments` wrapper. Mirrors test_run_system_arguments_forwarded.
     assert fake_t0.calls[0]["input"]["system"] == {"max_turns": 5}
+
+
+async def test_agent_stream_system_string_forwarded() -> None:
+    """``system="..."`` reaches the streaming gateway as a raw string."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(name="a", function_name="agent"),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    events: list[AgentEvent] = []
+    async for ev in agent.stream("hi", system="Reply only in haiku."):
+        events.append(ev)
+
+    assert isinstance(events[-1], DoneEvent)
+    assert fake_t0.calls[0]["input"]["system"] == "Reply only in haiku."
+
+
+async def test_agent_stream_system_with_system_template_strategy_rejected() -> None:
+    """Streaming surface enforces the same memory_strategy guard as ``run()``."""
+    fake_t0 = FakeT0(responses=[])
+    client = FakeMCPClient(tools=[])
+    agent = Agent(
+        AgentConfig(
+            name="a",
+            function_name="agent",
+            memory_strategy="system_template",
+        ),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=client,
+    )
+    with pytest.raises(ValueError, match="memory_strategy='system_template'"):
+        async for _ in agent.stream("hi", system="raw"):
+            pass
+    assert fake_t0.calls == []
