@@ -31,8 +31,23 @@ from t0_agents.core.middleware import (
     RunContext,
     SubAgentMiddleware,
 )
+from t0_agents.core.output import (
+    Attempt,
+    InferenceRequest,
+    OutputDiagnostics,
+    OutputMode,
+    ParseFailure,
+    Recovery,
+)
+from t0_agents.core.outputs import (
+    ChatOutput,
+    JsonOutput,
+    StreamingOutput,
+    StructuredOutput,
+    ToolCallOutput,
+)
 from t0_agents.core.run import Run, RunInput, RunState
-from t0_agents.core.structured import StructuredOutput, permissive_parse
+from t0_agents.core.structured import StructuredInferenceResult, permissive_parse
 from t0_agents.core.types import (
     AgentResult,
     Guardrail,
@@ -63,6 +78,8 @@ __all__ = [
     "AgentConfig",
     "AgentEvent",
     "AgentResult",
+    "Attempt",
+    "ChatOutput",
     "ConfigurationError",
     "CostTrackingMiddleware",
     "DoneEvent",
@@ -73,12 +90,18 @@ __all__ = [
     "GuardrailBlockedError",
     "GuardrailLogEntry",
     "GuardrailsMiddleware",
+    "InferenceRequest",
+    "JsonOutput",
     "JsonRetryMiddleware",
     "MaxTurnsExceededError",
     "MemoryMiddleware",
     "MemoryProvider",
     "Middleware",
     "ObservabilityMiddleware",
+    "OutputDiagnostics",
+    "OutputMode",
+    "ParseFailure",
+    "Recovery",
     "Run",
     "RunCancelledError",
     "RunContext",
@@ -87,6 +110,8 @@ __all__ = [
     "RunState",
     "RunUsage",
     "StreamingAgentLoop",
+    "StreamingOutput",
+    "StructuredInferenceResult",
     "StructuredOutput",
     "SubAgentError",
     "SubAgentMiddleware",
@@ -98,6 +123,7 @@ __all__ = [
     "ThoughtEvent",
     "ToolCallDeltaEvent",
     "ToolCallEvent",
+    "ToolCallOutput",
     "ToolChoice",
     "ToolProvider",
     "ToolResultEvent",
