@@ -38,7 +38,9 @@ from typing import Any, cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents import Agent, AgentConfig, AgentResult
+from typing import Any as _AnyAlias
+
+from t0_agents import Agent, AgentConfig, AgentResult, JsonOutput
 
 SAMPLE_TEXT = (
     "Ada Lovelace and Charles Babbage met at the University of London in 1843 "
@@ -96,7 +98,7 @@ def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
     )
 
 
-def _print_scenario(label: str, text: str, result: AgentResult) -> None:
+def _print_scenario(label: str, text: str, result: AgentResult[_AnyAlias]) -> None:
     print(f"\n=== {label} ===")
     print(f"input:           {text[:80] + ('...' if len(text) > 80 else '')}")
     print(f"function_kind:   {result.function_kind}")
@@ -111,26 +113,31 @@ async def main() -> None:
     config = AgentConfig(
         name="entity-extractor",
         function_name="extract_entities",
-        function_kind="json",
-        json_mode="strict",
+        output=JsonOutput(json_mode="strict"),
     )
 
     async with await _gateway_factory() as t0:
         agent = Agent(config, t0=t0)
 
         # 1. Default config-level strict mode, four-category schema.
-        result_1 = await agent.run(SAMPLE_TEXT)
+        result_1 = await agent.invoke(SAMPLE_TEXT).result()
         _print_scenario(
             "Scenario 1: default config (strict, four categories)",
             SAMPLE_TEXT,
             result_1,
         )
 
-        # 2. Per-call dynamic schema override: five categories.
-        result_2 = await agent.run(
+        # 2. Per-call dynamic schema override: five categories.  In v1.0
+        #    the override goes through a per-call ``output=`` kwarg —
+        #    JsonOutput(schema=...) replaces the v0.12
+        #    ``output_schema=`` kwarg.
+        result_2 = await agent.invoke(
             SAMPLE_TEXT_WITH_PRODUCT,
-            output_schema=FIVE_CATEGORY_SCHEMA,
-        )
+            output=JsonOutput(
+                schema=FIVE_CATEGORY_SCHEMA,
+                json_mode="strict",
+            ),
+        ).result()
         _print_scenario(
             "Scenario 2: per-call schema override (five categories)",
             SAMPLE_TEXT_WITH_PRODUCT,
@@ -142,7 +149,10 @@ async def main() -> None:
             )
 
         # 3. Per-call json_mode swap to "tool" (legal: no MCP tools).
-        result_3 = await agent.run(SAMPLE_TEXT, json_mode="tool")
+        result_3 = await agent.invoke(
+            SAMPLE_TEXT,
+            output=JsonOutput(json_mode="tool"),
+        ).result()
         _print_scenario(
             "Scenario 3: per-call json_mode='tool' swap",
             SAMPLE_TEXT,
@@ -151,7 +161,10 @@ async def main() -> None:
 
         # 4. Recovery demo: json_mode='off' so the provider can wrap
         #    JSON in prose; the permissive layer should kick in.
-        result_4 = await agent.run(WEAK_PROMPT_TEXT, json_mode="off")
+        result_4 = await agent.invoke(
+            WEAK_PROMPT_TEXT,
+            output=JsonOutput(json_mode="off"),
+        ).result()
         _print_scenario(
             "Scenario 4: json_mode='off' + permissive recovery",
             WEAK_PROMPT_TEXT,

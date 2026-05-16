@@ -13,13 +13,15 @@ Prerequisites:
     3. Run:
          uv run python examples/17_structured/structured_agent.py
 
-The agent declares ``function_kind="json"`` and ``json_mode="strict"``
-in its :class:`AgentConfig`.  ``Agent.run(...)`` then routes through
-``run_structured_inference`` automatically and returns an
-:class:`AgentResult` with ``function_kind == "json"``, ``parsed``
-populated, and ``response`` set to the raw JSON string.
+The agent declares ``output=JsonOutput(json_mode="strict")`` in its
+:class:`AgentConfig` (v1.0 canonical surface — replaces the v0.12
+``function_kind="json", json_mode="strict"`` pair).
+``agent.invoke(...)`` then routes through the single-shot terminal and
+returns an :class:`AgentResult` with ``parsed`` populated (and the
+v0.12 read-side properties ``function_kind``, ``response``, etc. still
+available).
 
-JSON-mode agents do not dispatch MCP tools, so ``Agent`` accepts no
+Single-shot agents do not dispatch MCP tools, so ``Agent`` accepts no
 ``tool_provider`` here — the constructor takes just the configuration
 and the TensorZero gateway.
 """
@@ -32,8 +34,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.agent import Agent
-from t0_agents.core.config import AgentConfig
+from t0_agents import Agent, AgentConfig, JsonOutput
 
 
 def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
@@ -47,8 +48,7 @@ async def main() -> None:
     config = AgentConfig(
         name="customer-extractor",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",
+        output=JsonOutput(json_mode="strict"),
     )
 
     messages = [
@@ -59,7 +59,7 @@ async def main() -> None:
     async with await _gateway_factory() as t0:
         agent = Agent(config, t0=t0)
         for idx, message in enumerate(messages, start=1):
-            result = await agent.run(message)
+            result = await agent.invoke(message).result()
             print(f"--- run {idx} ---")
             print(f"function_kind: {result.function_kind}")
             print(f"parsed:        {result.parsed}")
@@ -68,15 +68,15 @@ async def main() -> None:
             print(f"inference_ids: {result.inference_ids}")
             print(f"turns:         {result.turns}")
 
-    # Per-call schema/mode override (commented out: the demo TOML only
-    # defines the ``strict`` variant, so flipping ``json_mode`` at
-    # call time would error against this config — uncomment once you
-    # add a ``tool``-mode variant).
+    # Per-call output= override is also supported.  Uncomment to flip
+    # to a different JSON mode for a single invocation (the demo TOML
+    # only defines the ``strict`` variant, so a ``tool`` override
+    # against this config would surface a gateway error):
     #
-    # result = await agent.run(
+    # result = await agent.invoke(
     #     "...",
-    #     json_mode="tool",
-    # )
+    #     output=JsonOutput(json_mode="tool"),
+    # ).result()
 
 
 if __name__ == "__main__":
