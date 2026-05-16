@@ -377,28 +377,31 @@ class Agent:
         ):
             # Translate v0.12 per-call JSON overrides into a per-call
             # JsonOutput so the canonical surface stays clean.  Inherit
-            # any non-overridden fields from the config-level mode when
-            # it is itself a JsonOutput, so e.g. config-level
-            # ``permissive=False`` survives a per-call ``json_mode=``
-            # override.
+            # any non-overridden fields from the config-level mode via
+            # ``getattr`` so the inheritance is single-shot-mode-agnostic:
+            # ``JsonOutput``, ``StructuredOutput`` (and any third-party
+            # single-shot mode that shares the same field names) all
+            # contribute their config-level settings when the caller
+            # didn't override them per-call.
             base = self._config.output
-            permissive: bool = (
-                base.permissive if isinstance(base, JsonOutput) else True
-            )
+            permissive: bool = getattr(base, "permissive", True)
             retries: int = (
                 max_json_retries
                 if max_json_retries is not None
-                else (base.max_retries if isinstance(base, JsonOutput) else 2)
+                else getattr(base, "max_retries", 2)
             )
-            mode = (
+            mode: Literal["off", "on", "strict", "tool"] = (
                 json_mode
                 if json_mode is not None
-                else (base.json_mode if isinstance(base, JsonOutput) else "strict")
+                else cast(
+                    Literal["off", "on", "strict", "tool"],
+                    getattr(base, "json_mode", "strict"),
+                )
             )
             schema: Mapping[str, Any] | None = (
                 output_schema
                 if output_schema is not None
-                else (base.schema if isinstance(base, JsonOutput) else None)
+                else getattr(base, "schema", None)
             )
             per_call_output = JsonOutput(
                 schema=schema,
