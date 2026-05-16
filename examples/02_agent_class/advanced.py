@@ -40,7 +40,7 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents import Agent, AgentConfig
 from t0_agents.core.types import ToolProvider
 
-# The directory name starts with a digit (18_...) so it can't be a normal
+# The directory name starts with a digit (02_...) so it can't be a normal
 # Python import.  Add the example dir to sys.path so ``server`` is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from server import mcp  # type: ignore[import-not-found]
@@ -72,7 +72,7 @@ async def main() -> None:
         name="paas-demo",
         function_name="agent",
         max_turns=3,
-        tags={"example": "18_raw_system_prompt"},
+        tags={"example": "02_agent_class", "tier": "advanced"},
     )
 
     gateway = cast(

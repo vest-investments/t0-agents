@@ -34,7 +34,7 @@ async def main() -> None:
         name="weather-assistant",
         function_name="agent",
         max_turns=10,
-        tags={"example": "08_agent_class"},
+        tags={"example": "02_agent_class", "tier": "basic"},
     )
 
     # 2. Build the collaborators (caller owns their lifecycle).
