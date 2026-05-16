@@ -21,7 +21,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 
 ### Added
 
-#### `Run[T]` — first-class invocation handle (M1)
+#### `Run[T]` — first-class invocation handle
 
 - **`Agent.invoke(user_message, *, ...) -> Run[T]`** is the canonical
   entry point.  Returns a `Run` you can `await` for the final
@@ -48,7 +48,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   exception (`MaxTurnsExceededError`, `GuardrailBlockedError`, ...)
   directly.
 
-#### `Middleware` — composable cross-cutting concerns (M2)
+#### `Middleware` — composable cross-cutting concerns
 
 - **`Middleware` Protocol** — `name: str` + `async __call__(ctx, next_) -> AgentResult`.
 - **`RunContext`** — mutable per-Run state threaded through the
@@ -74,7 +74,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`RunUsage`** — frozen dataclass with `input_tokens`,
   `output_tokens`, `cost` aggregates.  Returned by `Run.usage()`.
 
-#### `OutputMode[T]` — output polymorphism (M3)
+#### `OutputMode[T]` — output polymorphism
 
 - **`OutputMode[T]` protocol** — `expects_tool_loop` /
   `supports_streaming` capability flags; `shape_inference(req)`
@@ -104,7 +104,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`[pydantic]` extra** — `pip install 't0-agents[pydantic]'` pulls
   `pydantic>=2.0` for `StructuredOutput`.
 
-#### `Composer` — topology primitive (M4)
+#### `Composer` — topology primitive
 
 - **`Composable[Input, T]` Protocol** — `@runtime_checkable`; an
   object whose `.invoke(input)` returns a `Run[T]`.  Both `Agent`
@@ -195,11 +195,11 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   per-call `output: OutputMode[T]` is supplied, `Run[T]` is narrowed
   by mypy via overload pair.  Default (no per-call override) returns
   `Run[Any]`.
-- **`JsonRetryMiddleware` activated** at M3 — consults
-  `ctx.output.recover(failure, attempts)` between attempts; mutates
-  `ctx.user_message` and `ctx.prior_messages` to thread the
-  corrective hint into the next inference.  `allow_retry = True`
-  class attribute signals `build_pipeline` to skip the `_NextGuard`.
+- **`JsonRetryMiddleware`** — consults `ctx.output.recover(failure,
+  attempts)` between attempts; mutates `ctx.user_message` and
+  `ctx.prior_messages` to thread the corrective hint into the next
+  inference.  `allow_retry = True` class attribute signals
+  `build_pipeline` to skip the `_NextGuard`.
 - **`Agent.run` (Tier 1 shim)** — when called with the v0.12
   per-call JSON kwargs (`output_schema`, `json_mode`,
   `max_json_retries`), translates them into a synthesised per-call
@@ -285,12 +285,12 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 
 ### Notes
 
-- **Industrial middlewares deferred** — the original M5 scope
-  included `BulkheadMiddleware`, `CircuitBreakerMiddleware`,
-  `TenantIsolationMiddleware`, `PiiRedactorMiddleware`,
-  `RedisRateLimitMiddleware`, and an `OTelTracerAdapter`.  Dropped
-  during M5 close after a scope review (no concrete consumer asks
-  for them today).
+- **Industrial middlewares deferred** — `BulkheadMiddleware`,
+  `CircuitBreakerMiddleware`, `TenantIsolationMiddleware`,
+  `PiiRedactorMiddleware`, `RedisRateLimitMiddleware`, and an
+  `OTelTracerAdapter` were considered for the v1.0 release and
+  dropped after a scope review (no concrete consumer asks for them
+  today).
 
 ## [0.13.0] — Unreleased
 
@@ -673,7 +673,7 @@ is bit-for-bit untouched.
   submodule.
 - **Agent testing framework** (`from t0_agents.testing import MockGateway,
   MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
-  Milestone M8: Testable Agents.  Ships from the base distribution — no
+  Ships from the base distribution — no
   new extra, no new dependency.  Two complementary paths:
   - **`MockGateway`** — duck-typed `AsyncTensorZeroGateway` with three
     construction modes.  `script(turns)` pops a pre-scripted content
@@ -739,12 +739,12 @@ is bit-for-bit untouched.
 
 ### Changed
 
-- Phase H does not modify `core/`, `mcp/`, `stream/`, `serve/`,
-  `memory/`, `guardrails/`, `compose/`, or `cli/`.  `run_agent`,
-  `AgentResult`, `Agent`, and every pre-existing public symbol are
-  byte-identical to 0.8.0 (contract §2.1, §6.1–§6.3).  All 399 prior
-  offline tests remain green alongside the 56 new `tests/test_testing/`
-  tests — 455 total passing in `-m "not integration and not embedded"`.
+- The testing release does not modify `core/`, `mcp/`, `stream/`,
+  `serve/`, `memory/`, `guardrails/`, `compose/`, or `cli/`.
+  `run_agent`, `AgentResult`, `Agent`, and every pre-existing public
+  symbol are byte-identical to 0.8.0.  All 399 prior offline tests
+  remain green alongside the 56 new `tests/test_testing/` tests —
+  455 total passing in `-m "not integration and not embedded"`.
 
 ## [0.8.0] — Unreleased
 
@@ -752,16 +752,16 @@ is bit-for-bit untouched.
 
 - **Multi-agent composition** (`from t0_agents import agent_as_tool,
   SubAgentError`; `from t0_agents.compose import install_sub_agents,
-  assert_unique_names, default_tool_name`).  Milestone M7: Composed
-  Agents.  No new dependencies — built on top of the existing
-  `core/` + `mcp/` surfaces and FastMCP's public runtime-registration
-  APIs (`Tool.from_function(...)` + `server.add_tool(tool)`).
+  assert_unique_names, default_tool_name`).  No new dependencies —
+  built on top of the existing `core/` + `mcp/` surfaces and
+  FastMCP's public runtime-registration APIs
+  (`Tool.from_function(...)` + `server.add_tool(tool)`).
 - **`AgentConfig.sub_agents: list[Agent]`** — declarative
   delegation.  When non-empty, `Agent.__init__` registers each entry
   as a `{sub_agent.config.name}_ask` tool on the orchestrator's
   in-process FastMCP server via
   `t0_agents.compose.install_sub_agents`.  Empty (the default)
-  preserves Phase A byte-identity.  Requires a `fastmcp.Client`
+  preserves single-agent byte-identity.  Requires a `fastmcp.Client`
   backed by an in-process `FastMCPTransport`; remote MCP transports
   raise `ConfigurationError` at construction time, as do duplicate
   sub-agent names and collisions with pre-existing tools.
@@ -802,8 +802,8 @@ is bit-for-bit untouched.
 
 - **CLI** (`from t0_agents.cli import TUIRenderer, rich_elicitation_handler,
   make_rich_elicitation_handler, load_agent_factory`) — Typer + Rich
-  terminal UI. Milestone M6: TUI Agent. Ships behind the new `[cli]`
-  extra (`pip install 't0-agents[cli]'`), which pulls `typer>=0.12.0`,
+  terminal UI. Ships behind the new `[cli]` extra
+  (`pip install 't0-agents[cli]'`), which pulls `typer>=0.12.0`,
   `rich>=13.7.0`, plus the streaming + serving deps (`fastapi`,
   `uvicorn[standard]`, `pydantic`, `sse-starlette`).
 - **`t0-agents` entry-point script** wired to `t0_agents.cli.app:main`.
@@ -813,7 +813,7 @@ is bit-for-bit untouched.
     prompts. `--verbose` surfaces reasoning content.
   - `t0-agents serve <module:attr>` — wraps
     `t0_agents.serve.create_app(..., share_client=True)` in uvicorn.
-    Phase D non-streaming routes by default (`POST /chat`, `/feedback`,
+    Non-streaming routes by default (`POST /chat`, `/feedback`,
     `/health`, `/info`); opt in to SSE + WS with `--streaming`. WS
     elicitation is incompatible with shared-Client mode (FastMCP Q3),
     so `--streaming` is only useful for tools that never call
@@ -857,11 +857,10 @@ is bit-for-bit untouched.
 
 ### Changed
 
-- Phase F does not modify `core/`, `mcp/`, `stream/`, `serve/`,
+- This release does not modify `core/`, `mcp/`, `stream/`, `serve/`,
   `memory/`, or `guardrails/`. `run_agent`, `AgentResult`, `Agent`,
-  and every existing public symbol are byte-identical to 0.6.0
-  (contract §2.1, §6.1–§6.3). Pre-existing offline tests remain
-  green (363 passed across Phase A–F).
+  and every existing public symbol are byte-identical to 0.6.0.
+  Pre-existing offline tests remain green (363 passed total).
 
 ## [0.6.0] — Unreleased
 
@@ -871,13 +870,13 @@ is bit-for-bit untouched.
   TextDeltaEvent, TextEndEvent, ToolCallDeltaEvent, ToolCallEvent,
   ToolResultEvent, ThoughtDeltaEvent, ThoughtEvent, TurnEndEvent,
   ErrorEvent, StreamingAgentLoop, TurnStreamAssembler`) — typed event
-  union emitted by `Agent.stream()`.  Milestone M5: Live Agent.  Ships
-  from the base distribution (no extra needed).
+  union emitted by `Agent.stream()`.  Ships from the base distribution
+  (no extra needed).
 - **`Agent.stream(message, *, episode_id=None) -> AsyncIterator[AgentEvent]`**
   — streaming analogue of `Agent.run`.  Same memory / guardrail
   scaffolding; the terminal event is always `DoneEvent(result=...)`
   carrying a full `AgentResult`.  Non-streaming `Agent.run` is
-  byte-identical to Phase D.
+  byte-identical to the previous release.
 - **`TurnStreamAssembler`** — folds `AsyncIterator[ChatChunk]` from
   `AsyncTensorZeroGateway.inference(stream=True)` into an
   `AsyncIterator[AgentEvent]` with stable correlation ids per T0 Q1.
@@ -886,11 +885,11 @@ is bit-for-bit untouched.
   recoverable-retry contract from `mcp/`.  `run_agent` and the `mcp/`
   submodule are untouched (contract §2.1, §6.1).
 - **`ElicitationForwarder` full completion** (`from t0_agents import
-  ElicitationForwarder`) — Phase D skeleton grows `on_request` +
+  ElicitationForwarder`) — the bridge grows `on_request` +
   `default_timeout` constructor kwargs, a Future-based `handler`, and
   public `resolve(elicitation_id, payload)` / `cancel_all(action=...)`
-  methods.  Empty-constructor behaviour (always decline) is preserved
-  for Phase D compatibility.
+  methods.  The empty-constructor "always decline" behaviour is
+  preserved for backward compatibility.
 - **`SessionProvider` Protocol + `CallableSessionProvider` adapter**
   (`from t0_agents.serve import SessionProvider,
   CallableSessionProvider`) — advanced extension point for per-session
@@ -904,7 +903,7 @@ is bit-for-bit untouched.
   (bidirectional).  `session_provider` is the advanced WS wiring slot.
   `elicitation_client_factory: Callable[[ElicitationHandler],
   Client[Any]]` is the simple WS wiring slot — pair it with the existing
-  `client_factory`.  Phase D callers that set only `client_factory` or
+  `client_factory`.  Existing callers that set only `client_factory` or
   `share_client=True` keep working unchanged.
 - **WS wire protocol** (`from t0_agents.serve.ws_protocol import
   WSUserMessage, WSElicitationResponse, WSErrorFrame,
@@ -923,7 +922,7 @@ is bit-for-bit untouched.
 
 - `SessionFactory` now accepts `session_provider=...` alongside
   `client_factory=...` and `shared_tool_provider=...` (three-way XOR).
-  Phase D XOR validation error wording is preserved when exactly
+  The original XOR validation error wording is preserved when exactly
   `client_factory` + `share_client` are both set (test compat).  The
   existing `session(extra_tags=...)` context manager gains an optional
   `elicitation_handler=...` kwarg that threads through to the
@@ -959,7 +958,7 @@ is bit-for-bit untouched.
 
 - **HTTP serving layer** (`from t0_agents.serve import create_app,
   mount_agent, SessionFactory`) — declarative FastAPI wrap of an
-  `Agent`. Milestone M4: Hosted Agent. Requires the new `[serve]`
+  `Agent`. Requires the new `[serve]`
   extra (`pip install 't0-agents[serve]'`), which pulls
   `fastapi>=0.115.0`, `uvicorn[standard]>=0.32.0`, and `pydantic>=2.0`.
 - **`create_app(agent, *, client_factory=..., share_client=False,
@@ -976,15 +975,14 @@ is bit-for-bit untouched.
 - **`SessionFactory`** — advanced: per-session `(Client, Agent)`
   builder that `create_app` uses internally. Exposes
   `session(extra_tags=...)` async context manager whose lifetime is
-  the caller's `async with` block (one HTTP request in Phase D; Phase
-  E's SSE / WS streams will reuse the same primitive unchanged).
-  Enforces the FastMCP Q3 / contract §3.5 per-session-Client mandate
-  by default.
+  the caller's `async with` block (one HTTP request initially; SSE /
+  WS streams in the next release reuse the same primitive unchanged).
+  Enforces the per-session-Client mandate by default.
 - **`ElicitationForwarder`, `ElicitationRequest`**
   (`from t0_agents import ElicitationForwarder, ElicitationRequest`)
-   — future-based elicitation bridge. Phase D ships the skeleton with
+   — future-based elicitation bridge. The skeleton ships here with
   a default `handler` that declines everything (HTTP has no return
-  channel). Phase E will complete `forward()` / `resolve()` /
+  channel). A later release completes `forward()` / `resolve()` /
   `wait_for()` for SSE + WS piping.
 - **`Agent.warmup()`** — async readiness hook. Default no-op;
   override in a subclass to front-load readiness probes. Called by
@@ -995,14 +993,14 @@ is bit-for-bit untouched.
   `share_client=True` trade-off.
 - Public documentation at `docs/serving.md` — quickstart, per-surface
   deployment recipe, concurrency model, `share_client` trade-off,
-  GKE / cloud-LB deployment notes (sticky sessions planned for
-  Phase E).
+  GKE / cloud-LB deployment notes (sticky sessions arrive with the
+  streaming release).
 
 ### Changed
 
-- Phase D does not modify `AgentConfig`; the serving layer wraps an
-  existing `Agent` instance. `run_agent` and the `mcp/` submodule are
-  untouched (contract §2.1, §6.1).
+- This release does not modify `AgentConfig`; the serving layer
+  wraps an existing `Agent` instance. `run_agent` and the `mcp/`
+  submodule are untouched.
 
 ## [0.4.0] — Unreleased
 
@@ -1010,7 +1008,7 @@ is bit-for-bit untouched.
 
 - **Guardrail subsystem** (`from t0_agents.guardrails import require_approval,
   max_cost, max_tool_calls, block_tools`) — declarative policy layer on top
-  of `Agent`. Milestone M3: Trusted Agent.
+  of `Agent`.
 - **`require_approval(tools=..., handler=...)`** — interactive approval gate
   riding FastMCP's `elicitation_handler` signature. Developers can reuse
   the exact handler they already pass to `Client(elicitation_handler=...)`.
@@ -1053,7 +1051,7 @@ is bit-for-bit untouched.
 
 - `AgentConfig` gained a `guardrails: list[Guardrail]` field (default
   empty). When empty, `Agent.run()` forwards the raw `tool_provider` and
-  passes `on_inference=None` — byte-identical to Phase B.
+  passes `on_inference=None` — byte-identical to 0.2.0.
 
 ## [0.3.0] — Unreleased
 
@@ -1062,7 +1060,7 @@ is bit-for-bit untouched.
 - **Memory subsystem** (`from t0_agents.memory import InMemoryMemory, SqliteMemory,
   MemoryProvider`) — repository-pattern memory for `Agent`. Configure
   `AgentConfig(memory=SqliteMemory("./db"))` to persist state across
-  `.run()` calls. Milestone M2: Stateful Agent.
+  `.run()` calls.
 - **`InMemoryMemory`** — ephemeral, dict-backed backend for tests and
   single-process apps.
 - **`SqliteMemory`** — persistent backend behind the `[memory-sqlite]`
@@ -1083,7 +1081,7 @@ is bit-for-bit untouched.
 
 - **Agent class** (`from t0_agents import Agent, AgentConfig`) — declarative
   wrapper around `run_agent`. Configure once with `AgentConfig`, then call
-  `agent.run(message)` with no boilerplate. Milestone M1: Declarative Agent.
+  `agent.run(message)` with no boilerplate.
 - **ToolProvider Protocol** — structural type matching `fastmcp.Client`'s
   `list_tools()` + `call_tool()` interface for testing and extensibility.
 - **T0AgentsError** base exception — all library exceptions now inherit from
