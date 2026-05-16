@@ -473,6 +473,85 @@ print(result.response_source)  # "text"
 
 ---
 
+## `Run` *(v1.0)*
+
+First-class invocation handle returned by `Agent.invoke(...)`.  A `Run`
+represents one live or completed agent invocation.  It supports two
+consumption channels — `await run.result()` for the final
+`AgentResult`, and `async for ev in run.events()` for the streaming
+event sequence — that work concurrently for chat agents.
+
+```python
+from t0_agents import Agent, AgentConfig, Run
+
+agent = Agent(AgentConfig(name="assistant", function_name="agent"), t0=t0, tool_provider=mcp)
+run: Run = agent.invoke("hello")
+result = await run             # equivalent to await run.result()
+async for ev in run.events():  # chat-only; raises on JSON agents
+    print(ev)
+```
+
+### Public surface (M1)
+
+| Member | Purpose |
+|--------|---------|
+| `await run` / `await run.result()` | Final `AgentResult` (v0.12-identical shape) |
+| `async for ev in run.events(replay=False)` | Stream `AgentEvent`s; `replay=True` re-yields buffered history |
+| `async for s in run.stream_text()` | Text-delta-only convenience iterator |
+| `await run.cancel()` | Cancel the drive; subsequent `result()` raises `RunCancelledError` |
+| `await run.feedback(name, value, *, target="episode"\|"inference", inference_id=None)` | Forward outcome feedback to TensorZero |
+| `await run.replay(*, agent=None, variant=None, tags=None, episode_id=None)` | Re-run with the same input; new episode by default |
+| `await run.fork(extra_message, *, agent=None)` | Continue from this Run's transcript with an extra user turn |
+| `run.transcript()` | TZ-shaped `{role, content}` list (M1: boundary pair) |
+| `run.state` | `"pending" \| "running" \| "succeeded" \| "failed" \| "cancelled"` |
+| `run.input` | Frozen `RunInput` snapshot of the call |
+| `run.episode_id`, `run.inference_ids` | Captured mid-run |
+
+`Run` holds a `weakref.ref` to its `Agent`; if the `Agent` is garbage-
+collected before `replay()` or `fork()` runs, those methods raise
+`RuntimeError`.  Pass `agent=` to retarget the replay/fork explicitly.
+
+### `RunInput`
+
+Immutable snapshot of one `Agent.invoke(...)` call.
+
+```python
+@dataclass(frozen=True, slots=True)
+class RunInput:
+    user_message: str
+    function_name: str
+    function_kind: Literal["chat", "json"]
+    episode_id: str | None
+    tags: Mapping[str, str] | None
+    system: str | None
+    system_arguments: Mapping[str, Any] | None
+    output_schema: Mapping[str, Any] | None        # M1-only; removed in M3
+    json_mode: Literal["off", "on", "strict", "tool"] | None  # M1-only
+    max_json_retries: int | None                   # M1-only
+    prior_messages: tuple[Mapping[str, Any], ...] = ()
+```
+
+### `RunState`
+
+Type alias for the lifecycle states:
+
+```python
+RunState = Literal["pending", "running", "succeeded", "failed", "cancelled"]
+```
+
+### `RunCancelledError`
+
+Raised by `await run.result()` after `await run.cancel()`.
+
+### `RunFailedError`
+
+Raised by `await run.result()` when the underlying drive failed.  The
+original cause is preserved on `.cause`.  The deprecated `agent.run()`
+shim unwraps this so v0.12 callers continue to see the original
+exception type (e.g. `MaxTurnsExceededError`, `GuardrailBlockedError`).
+
+---
+
 ## `MaxTurnsExceededError`
 
 Exception raised when the agent loop reaches `max_turns` without the LLM

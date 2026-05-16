@@ -48,3 +48,28 @@ class SubAgentError(T0AgentsError):
     guardrail) propagate unchanged so the orchestrator still honours
     hard-block contracts end-to-end.
     """
+
+
+class RunCancelledError(T0AgentsError):
+    """Raised by ``await run.result()`` after ``await run.cancel()``.
+
+    Surfaced through the awaitable consumption channel so callers can
+    distinguish a user-initiated cancellation from a genuine failure.
+    ``run.events()`` consumers see the events emitted up to the
+    cancellation point followed by an end-of-stream — the iterator
+    does not raise.
+    """
+
+
+class RunFailedError(T0AgentsError):
+    """Raised by ``await run.result()`` when the underlying drive failed.
+
+    Wraps the original exception on the ``cause`` attribute so callers
+    can introspect or re-raise the root exception.  ``run.cancel()``
+    transitions to :class:`RunCancelledError` instead; only non-cancel
+    failures produce :class:`RunFailedError`.
+    """
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(f"Run failed: {cause!r}")
+        self.cause = cause

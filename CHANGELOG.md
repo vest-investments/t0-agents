@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0-M1] — Unreleased
+
+First milestone of the v1.0 four-abstraction refactor (Run · Middleware
+· OutputMode · Composer).  Introduces `Run[T]` as the first-class
+invocation handle and `Agent.invoke(...)` as the canonical entry
+point.  `Agent.run()` and `Agent.stream()` keep working as deprecated
+shims that emit `DeprecationWarning` once per call site and are
+removed in v1.1.  Chat-mode stdout output is byte-identical to v0.12;
+the only stderr change is the warning.
+
+### Added
+
+- **`Agent.invoke(user_message, *, ...) -> Run[T]`** — canonical
+  v1.0 entry point.  Returns a `Run` you can `await` for the final
+  `AgentResult`, iterate via `events()` for the streaming
+  `AgentEvent` sequence, cancel, replay, fork, or attach feedback to.
+  Accepts every kwarg `Agent.run()` accepted in v0.12 plus
+  `prior_messages` (used by `Run.fork`), `middleware` (M2 placeholder),
+  `output` (M3 placeholder), `eager`, and `context`.
+- **`Run[T]`** (in `t0_agents.core.run`) — first-class invocation
+  handle.  Public methods: `result()`, `events(replay=False)`,
+  `stream_text()`, `__await__`, `cancel()`, `feedback()`, `replay()`,
+  `fork()`, `transcript()`, `cost()`, `usage()`.  Eager by default;
+  `eager=False` opt-in for queueing.  Holds a `weakref` to its Agent
+  so a discarded Run does not extend gateway lifetime.
+- **`RunInput`** — frozen, slotted dataclass capturing the immutable
+  snapshot of one `invoke()` call.
+- **`RunState`** — `Literal["pending", "running", "succeeded",
+  "failed", "cancelled"]` lifecycle alias.
+- **`RunCancelledError`** — raised by `await run.result()` after
+  `await run.cancel()`.
+- **`RunFailedError(cause)`** — raised by `await run.result()` when
+  the underlying drive failed; preserves the original exception on
+  `.cause`.  The deprecated `agent.run()` shim unwraps this so
+  v0.12 callers continue to see the original exception type
+  (`MaxTurnsExceededError`, `GuardrailBlockedError`, ...).
+- **`core/_runtime.EventBuffer`** — bounded (`MAX_EVENTS = 10_000`)
+  replayable buffer with WARN-on-overflow + `truncated` flag, used
+  internally by `Run.events()`.
+
+### Deprecated
+
+- **`Agent.run(...)`** — emits `DeprecationWarning` once per source
+  line.  Use `await agent.invoke(msg, ...)` (a `Run` is awaitable and
+  returns the same `AgentResult`).  Removed in **v1.1**.
+- **`Agent.stream(...)`** — emits `DeprecationWarning` once per source
+  line.  Use `async for ev in agent.invoke(msg, ...).events()`.
+  Removed in **v1.1**.
+
+### Validated
+
+- Chat-path stdout byte-identical to v0.12 for the 17 chat-mode
+  examples (`examples/00..16, 18`); stderr now includes the
+  `DeprecationWarning` from the shims.  The JSON example
+  (`examples/17_structured/`) is unchanged at M1 because it imports
+  `run_structured_inference` directly rather than `Agent`; M3 migrates
+  it to the new `output=JsonOutput(...)` surface.
+- 696 unit tests pass (49 new under `tests/test_run/`); `mypy --strict`
+  and `ruff` clean.  `git diff src/t0_agents/mcp/` empty — the `mcp/`
+  submodule remains untouched (invariant §2.1).
+
 ## [0.13.0] — Unreleased
 
 Expose TensorZero's raw-string `input.system` form on every public
