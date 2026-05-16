@@ -502,6 +502,11 @@ print(result.response_source)  # "text"
 
 ## `Run` *(v1.0)*
 
+> See [docs/run.md](run.md) for the canonical narrative — lifecycle,
+> two-channel consumption, replay/fork semantics, error model,
+> `Run(agent=None)` mode for third-party Composer authors.  This
+> section is the API-reference summary.
+
 First-class invocation handle returned by `Agent.invoke(...)`.  A `Run`
 represents one live or completed agent invocation.  It supports two
 consumption channels — `await run.result()` for the final
@@ -662,6 +667,88 @@ at least one inference.
 for callers that only need the dollar figure.  Both default to `0.0`
 / `None` when no inference has fired (or when `middleware=[]`
 disabled `CostTrackingMiddleware`).
+
+---
+
+## Output modes *(v1.0)*
+
+> See [`docs/output-modes.md`](output-modes.md) for the canonical
+> narrative — the protocol, the 5 built-ins with construction
+> examples, the recovery handshake, custom mode authoring.  This
+> section is the API-reference summary.
+
+`OutputMode[T]` is the polymorphic protocol that replaces v0.12's
+`function_kind` / `json_mode` / `output_schema` cluster.  Every
+single-shot or chat output goes through an `OutputMode` instance;
+the `JsonRetryMiddleware` drives recovery for single-shot modes.
+
+```python
+from t0_agents import (
+    OutputMode, ChatOutput, JsonOutput, StructuredOutput,
+    ToolCallOutput, StreamingOutput,
+    OutputDiagnostics, Recovery, ParseFailure, Attempt, InferenceRequest,
+)
+```
+
+### Public protocol
+
+```python
+@runtime_checkable
+class OutputMode(Protocol[T_co]):
+    name: str
+    expects_tool_loop: bool
+    supports_streaming: bool
+
+    def shape_inference(self, req: InferenceRequest) -> InferenceRequest: ...
+    async def materialize(self, response, attempts) -> AgentResult[T_co]: ...
+    async def recover(self, failure, attempts) -> Recovery: ...
+```
+
+### Built-in modes
+
+| Class | `T` | `expects_tool_loop` | `supports_streaming` | Use when |
+|---|---|---|---|---|
+| `ChatOutput()` | `str` | `True` | `True` | Default — full tool-call loop. |
+| `JsonOutput(schema=, json_mode=, permissive=, max_retries=)` | `dict[str, Any]` | `False` | `False` | Single-shot JSON with retry. |
+| `StructuredOutput[M](model)` | `M` (Pydantic) | `False` | `False` | Pydantic-validated extraction; `pip install 't0-agents[pydantic]'`. |
+| `ToolCallOutput(tool_choice=)` | `list[ToolCall]` | `False` | `False` | Router pattern — extract tool calls without executing. |
+| `StreamingOutput(base=ChatOutput())` | delegates | delegates | `True` | Documentation wrapper; `base=JsonOutput(...)` deferred to v1.1. |
+
+### Helper types
+
+| Type | Purpose |
+|---|---|
+| `InferenceRequest` | Mutable request descriptor threaded through `shape_inference`. |
+| `OutputDiagnostics(parse_strategy, attempts, raw_text, failure_detail)` | Attached to `AgentResult.diagnostics`; backs the v0.12 read-side properties. |
+| `Attempt(inference_id, raw_text, parsed, usage)` | One entry in the retry history; accumulated on `ctx.extras["_output_attempts"]`. |
+| `ParseFailure(raw_text, inference_id, reason, detail)` | Passed to `OutputMode.recover` on parse failure. |
+| `Recovery.retry(hint) \| Recovery.accept(value) \| Recovery.fail()` | The three recovery actions. |
+
+### Per-call narrowing
+
+`Agent.invoke(output=...)` is overloaded so mypy narrows `Run[T]`
+when a concrete `OutputMode[T]` is supplied:
+
+```python
+run: Run[Customer] = agent.invoke(msg, output=StructuredOutput(Customer))
+result: AgentResult[Customer] = await run.result()
+print(result.value)   # Customer instance, statically typed
+```
+
+Without `output=`, `agent.invoke(...)` returns `Run[Any]` — explicit
+and predictable.
+
+### `[pydantic]` extra
+
+`StructuredOutput` lazily imports pydantic at construction.  Install
+the extra for the canonical path:
+
+```bash
+pip install 't0-agents[pydantic]'
+```
+
+`ConfigurationError` surfaces at construction time with an install
+hint if pydantic isn't available.
 
 ---
 

@@ -242,60 +242,17 @@ class Agent:
     ) -> Run[Any]:
         """v1.0 canonical entry point — returns a :class:`Run` handle.
 
-        The single entry point for both chat and single-shot agents;
-        the :class:`Run` dispatches the drive mode on first consumer
-        (``result()`` selects the non-streaming chat path or the
-        single-shot path; ``events()`` selects the streaming chat path
-        or raises :class:`ConfigurationError` for non-streaming output
-        modes).
+        Awaitable: ``result = await agent.invoke(msg)`` is the shortest
+        path from query to answer.  Use :meth:`Run.events` for
+        streaming, :meth:`Run.replay` / :meth:`Run.fork` for
+        re-invocation, :meth:`Run.cancel` for in-flight cancellation.
 
-        Args:
-            user_message: The user's query as a plain string.
-            output: Optional per-call :class:`OutputMode` override.  When
-                ``None`` (the default) the Run uses
-                :attr:`AgentConfig.output`.  Per-call values win over
-                the config-level default.  This is the v1.0 surface for
-                request-shape / parse-strategy / recovery customisation;
-                v0.12 ``function_kind=``/``json_mode=``/``output_schema=``
-                / ``permissive_json_parsing=``/``max_json_retries=`` are
-                removed (Tier 2 — contract §2.4).
-            episode_id: Existing TensorZero episode id, or ``None`` to
-                let the gateway mint a fresh one.
-            tags: Per-call tags shallow-merged on top of ``config.tags``.
-            system_arguments: Template arguments forwarded as
-                ``input.system``.
-            system: Raw system prompt forwarded as ``input.system``
-                (string form).  Mutually exclusive with
-                ``system_arguments`` and with
-                ``memory_strategy="system_template"``.
-            prior_messages: TensorZero-shape ``{role, content}`` history
-                to seed the inference loop; used by :meth:`Run.fork` to
-                continue from a recorded transcript.  Overrides any
-                ``prior_messages`` the memory strategy would supply.
-            middleware: Explicit middleware chain that overrides
-                ``config.middleware`` for this Run only.  ``None`` (the
-                default) uses the config-materialised chain.
-            eager: When ``True`` (default), the Run's drive task is
-                scheduled immediately.  ``eager=False`` defers task
-                start to the first consumer of ``result()`` /
-                ``events()`` so callers can queue Runs without firing
-                inference.
-            context: User-supplied metadata dict copied onto the Run.
+        Per-call kwargs override their :class:`AgentConfig` analogues.
+        ``output=`` narrows ``Run[T]`` via overload.  ``middleware=[]``
+        is an explicit "no middleware" override (drops cost tracking
+        too — see :doc:`run`).
 
-        Returns:
-            A :class:`Run` whose ``T`` is inferred from ``output``:
-            ``Run[Customer]`` for ``output=StructuredOutput(Customer)``,
-            ``Run[dict[str, Any]]`` for ``output=JsonOutput(...)``,
-            ``Run[str]`` for the default chat path.  Awaiting the Run
-            is equivalent to ``await run.result()``.
-
-        Raises:
-            ValueError: When ``system`` is set alongside
-                ``system_arguments`` or alongside
-                ``memory_strategy='system_template'``.
-            ConfigurationError: When the per-call ``output`` mode is
-                incompatible with the run shape (e.g. a single-shot
-                mode with ``memory_strategy='messages'``).
+        See :doc:`run` for the full surface, lifecycle, and recipes.
         """
         effective_output: OutputMode[Any] = (
             output if output is not None else self._config.output

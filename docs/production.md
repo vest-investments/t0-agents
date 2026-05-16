@@ -176,6 +176,21 @@ async def agent_endpoint(query: str) -> dict:
     return {"response": result.response, "turns": result.turns}
 ```
 
+## Rate limits and quotas
+
+t0-agents intentionally does **not** auto-retry on `HTTP 429` from the
+TensorZero gateway.  Rate-limit policy is a gateway concern
+(`tensorzero.toml` `rate_limiting.rules.*`, Valkey/Postgres-backed,
+scoped by api_key / tags); the agent loop propagates the
+`TensorZeroError(status_code=429)` to the caller, who decides whether
+to back off, fail the request, or queue.
+
+For per-invocation budgets (cost cap, tool-call cap), use the t0-agents
+`max_cost` / `max_tool_calls` guardrails — they raise
+`GuardrailBlockedError` mid-run.  See
+[Guardrails vs. TensorZero rate limits](guardrails.md#guardrails-vs-tensorzero-rate-limits)
+for the layered model.
+
 ## Monitoring checklist
 
 - Enable Python logging at INFO level in production (`t0_agents.mcp.loop` logger)

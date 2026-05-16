@@ -2,8 +2,6 @@
 
 Minimal end-to-end example of `run_agent` -- the full agent loop that sends a user query through TensorZero, lets the LLM call MCP tools, and returns a final response.
 
-> This directory is currently named `01_basic_agent` and will be renamed to `02_basic_agent` in a future cleanup.
-
 ## What it demonstrates
 
 1. Connecting to TensorZero via `AsyncTensorZeroGateway`.
@@ -19,19 +17,19 @@ Minimal end-to-end example of `run_agent` -- the full agent loop that sends a us
 ## Start the gateway
 
 ```bash
-docker compose -f examples/01_basic_agent/docker-compose.yml up -d
+docker compose -f examples/02_basic_agent/docker-compose.yml up -d
 ```
 
 ## Run
 
 ```bash
-uv run python examples/01_basic_agent/main.py
+uv run python examples/02_basic_agent/main.py
 ```
 
 ## Stop the gateway
 
 ```bash
-docker compose -f examples/01_basic_agent/docker-compose.yml down
+docker compose -f examples/02_basic_agent/docker-compose.yml down
 ```
 
 ## What to observe

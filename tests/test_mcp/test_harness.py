@@ -462,6 +462,31 @@ class TestRecoverableInferenceError:
 
         assert exc_info.value.status_code == 500
 
+    async def test_429_rate_limit_re_raised(self) -> None:
+        """429 Too Many Requests propagates unchanged — never auto-retried.
+
+        TensorZero's gateway-layer rate limiter returns 429 on breach.
+        That's a gateway concern (Valkey/Postgres-backed, cross-request,
+        scoped by api_key/tags) — not something the t0-agents loop
+        should swallow.  Regression for the rate-limit follow-up
+        (project memory entry "post-Phase-C rate-limiting follow-up"):
+        the loop must NOT add 429 to RECOVERABLE_INFERENCE_STATUS_CODES.
+        """
+        error = TensorZeroError(status_code=429, text="rate limit exceeded")
+        t0 = FakeT0([error])
+        mcp = FakeMCPClient()
+
+        with pytest.raises(TensorZeroError) as exc_info:
+            await run_agent(
+                cast(AsyncTensorZeroGateway, t0),
+                cast(Client[Any], mcp),
+                "test",
+                "agent",
+            )
+
+        assert exc_info.value.status_code == 429
+        assert "rate limit exceeded" in (exc_info.value.text or "")
+
     async def test_503_with_matching_text_re_raised(self) -> None:
         """503 Service Unavailable is NOT recoverable even with matching text."""
         error = TensorZeroError(

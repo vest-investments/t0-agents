@@ -46,7 +46,7 @@
 
 ## Q4 — `BulkheadMiddleware` base or extra
 
-**Status:** open.
+**Status:** deferred (M5, 2026-05-16).
 
 **Context.** Bulkhead = `asyncio.Semaphore` limiting concurrency.  No third-party dep needed.  Industrial pattern that every prod deployment wants.
 
@@ -56,13 +56,13 @@
 
 **Recommendation.** Base, since it's pure-stdlib and ubiquitous.  Group with `CircuitBreaker` (also stdlib).
 
-**Resolution target:** M5 dev-log §3.
+**Resolution.** **Deferred.**  During M5 close (`logs/milestone-5-dev-log.md` §3), the user reviewed the industrial-middleware scope (`BulkheadMiddleware`, `CircuitBreakerMiddleware`, `TenantIsolationMiddleware`, `PiiRedactorMiddleware`, `RedisRateLimitMiddleware`, `OTelTracerAdapter`) and decided to drop the whole bundle from v1.0: no concrete consumer asks for them today, and shipping them would saturate the framework surface without value.  M5 ships only housekeeping (CHANGELOG consolidation, version bump, pre-public polish, `docs/run.md`).  This question — and Q5 / Q6, which are also industrial-scoped — stays on the books as `deferred`: if a future minor adds industrial middleware, the recommendation here (base install, grouped with CircuitBreaker) is still the starting point.
 
 ---
 
 ## Q5 — `RedisRateLimitMiddleware` extra name
 
-**Status:** open.
+**Status:** deferred (M5, 2026-05-16).
 
 **Context.** Requires `redis` (or `redis.asyncio`).  Other middleware that may follow: `MemcachedRateLimit`, `EtcdLeader`.
 
@@ -73,13 +73,13 @@
 
 **Recommendation.** `[ratelimit]` (pulls `redis` for now; future backends add to same extra).
 
-**Resolution target:** M5 dev-log §3.
+**Resolution.** **Deferred.**  See Q4 resolution above for the M5 scope-reduction rationale.  When industrial middleware ships in a future minor, the recommendation here (`[ratelimit]` extra name, capability-based naming) remains the starting point.
 
 ---
 
 ## Q6 — `ObservabilityMiddleware` packaging
 
-**Status:** open.
+**Status:** deferred (M5, 2026-05-16).
 
 **Context.** OTel is the de-facto standard.  Datadog has its own SDK.  Some users want both.
 
@@ -89,7 +89,7 @@
 
 **Recommendation.** Standalone Protocol-based middleware that accepts a tracer.  Optional `[otel]` extra provides `OTelTracerAdapter` for OpenTelemetry users.
 
-**Resolution target:** M5 dev-log §3.
+**Resolution.** **Partially resolved + deferred.**  The Protocol-based shape is already in place at M2: `ObservabilityMiddleware` (`core/middleware/builtins.py`) accepts any tracer that exposes `start_as_current_span(name)` — OpenTelemetry tracers expose this natively, so the existing middleware works against OTel today without any adapter.  The `[otel]` extra + `OTelTracerAdapter` helper class was the M5 scope that's deferred (see Q4 resolution).  When industrial middleware ships in a future minor, the recommendation here remains the starting point.
 
 ---
 

@@ -4,230 +4,237 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.0.0-M4] — Unreleased
+## [1.0.0] — Unreleased
 
-Fourth milestone of the v1.0 four-abstraction refactor.  Introduces
-`Composer` as the topology primitive: a uniform way to orchestrate
-`Run`s into industrial / military patterns.  Ships nine built-in
-topologies and the `Composable[Input, T]` protocol so Agents and
-Composers nest at arbitrary depth (`sequential(race(a, b),
-conditional(routes={...}))` type-checks at every layer).
-Cancellation cascades to every sub-Run under a configurable timeout
-(`DEFAULT_CANCEL_TIMEOUT = 30.0`).  The pre-v1.0 declarative path
-(`AgentConfig.sub_agents=[...]` → `SubAgentMiddleware`) is unchanged.
-
-### Added
-
-- **`Composable[Input, T]` Protocol** — `@runtime_checkable`; an object
-  whose `.invoke(input)` returns a `Run[T]`.  Both `Agent` and
-  `Composer` satisfy it.
-- **`Composer` base class** — declarative dataclass-based topologies;
-  each concrete subclass exposes its parameters plus `name: str` and
-  the narrow `invoke(input, *, eager, context, cancel_timeout)`
-  surface (Composer.invoke does NOT accept Agent-level kwargs — sub-Runs
-  use their own `AgentConfig`).
-- **`ComposerError(node, cause)`** — `T0AgentsError` subclass; raised
-  when a sub-Run inside a Composer fails with topology context.
-  `retry_chain` is the documented exception: it re-raises the
-  underlying original exception un-wrapped so upstream
-  `except SpecificError` blocks keep working.
-- **`CompositeRun(Run[Any])`** — the `Run` subclass produced by every
-  Composer.  Public `Run` surface (`.state`, `.episode_id`,
-  `.inference_ids`, `.result()`, `.events()`, `.cancel()`) works
-  uniformly; `.feedback()`, `.replay()`, `.fork()` raise
-  `NotImplementedError` in v1.0 (Agent-runs-only semantics; revisit
-  in a future minor).
-- **`DEFAULT_CANCEL_TIMEOUT = 30.0`** — module-level constant exported
-  from `t0_agents.compose.topology`.  Every topology factory accepts
-  `cancel_timeout=` to override per-instance; per-call override via
-  `composer.invoke(input, cancel_timeout=...)` wins for that Run.
-- **Nine topology builders** (`from t0_agents import ...`):
-  - `sequential(*nodes, chain=None)` — pipeline; each node's result
-    feeds the next via `chain(prev_result, original_input)`.  Default
-    chain JSON-encodes non-string values.
-  - `parallel(*nodes, reducer=None, error_policy="fail_fast")` —
-    fan-out + reducer; `error_policy="continue"` widens the reducer
-    signature to `list[AgentResult[T] | BaseException]`.
-  - `race(*nodes, cancel_others=True)` — first-completed wins; losers
-    receive `.cancel()` under the configured timeout when
-    `cancel_others=True`.
-  - `consensus(*nodes, merge)` — N propose; `merge(list[T])` decides.
-    Any sub-Run failure surfaces as `ComposerError`.
-  - `map_reduce(node, *, reducer, concurrency=None)` — scatter over
-    an iterable input; `concurrency=N` bounds active calls via
-    `asyncio.Semaphore`; reducer aggregates `list[AgentResult]`.
-  - `conditional(*, router, routes, default=None)` — synchronous
-    `router(input) -> key` triages to a sub-Composable.  Unknown key
-    + no default → `ComposerError(ValueError)`.
-  - `saga(*steps)` — sequential pipeline with reverse-order
-    compensation on failure.  Each step is `(action, compensate)`;
-    compensations receive the same input their action received and
-    must be idempotent (user responsibility).
-  - `retry_chain(*nodes, on_error=None)` — try each node in order;
-    `on_error(exc) -> bool` filters whether to fall through.  All-fail
-    re-raises the original last exception un-wrapped.
-  - `circuit_breaker(node, *, threshold=5, reset_timeout=30.0)` —
-    state-machine breaker around a single child.  State is
-    per-Composer-instance.
-- **Cancellation cascade** — `await root_run.cancel()` propagates to
-  every sub-Run via `CompositeRun._sub_runs`.  Cascade is bounded by
-  `cancel_timeout`; overshoot logs a WARN on
-  `t0_agents.compose.topology` and lets remaining children dangle
-  best-effort.  Nested composers cascade naturally.
-- **`parent_episode_id` audit** — every Composer driver threads
-  `parent_episode_id` correlation through to children using the M2
-  `bind_parent_episode_id` ContextVar (for Composer children, which
-  don't accept `tags=`) and the TZ-native ``tags={"t0_agents.parent_
-  episode_id": ...}`` kwarg (for Agent children).
-- **`tests/test_compose/v1/`** — 67 new tests across 12 files covering
-  every topology, three-level nesting, cancellation cascade, and the
-  legacy `AgentConfig.sub_agents=` compatibility smoke.
-
-### Changed
-
-- **`Run.__init__`** widens `agent: Agent` to `agent: Agent | None`
-  (one-line type widening + weakref guard).  Required so
-  `CompositeRun` can satisfy the `Run` nominal type without a
-  synthetic Agent stub or 30 lines of duplicated state init.  Every
-  pre-existing call site passes a non-None Agent; the change is
-  strictly forward-compatible.  Recorded as D-1 in the M4 dev-log.
-
-### Deprecated
-
-- (none)
-
-### Removed
-
-- (none)
-
-### Fixed
-
-- (none)
-
-### Open questions resolved (`02-open-questions.md`)
-
-- **Q3** — cancel timeout: 30s default + per-topology `cancel_timeout=`
-  kwarg + per-call override.
-- **Q8** — `parallel` reducer signature: `list[AgentResult[T]]` for
-  `fail_fast`; widens to `list[AgentResult[T] | BaseException]` for
-  `continue`.
-- **Q9** — `conditional` router signature: sync
-  `Callable[[Input], str]`.
-- **Q10** — saga compensation idempotency: user responsibility,
-  documented in the `saga` docstring and (M5) `docs/composition.md`.
-
----
-
-## [1.0.0-M3] — Unreleased
-
-Third milestone of the v1.0 four-abstraction refactor.  Collapses the
-v0.12 chat/JSON dichotomy into a single polymorphic protocol:
-`OutputMode[T]` owns request shaping, response materialisation, and
-parse-failure recovery.  The five v0.12 JSON-only `AgentConfig` fields
-(`function_kind`, `json_mode`, `output_schema`, `permissive_json_parsing`,
-`max_json_retries`) are **removed in v1.0** (Tier 2 — contract §2.4);
-the canonical replacement is `AgentConfig(output=JsonOutput(...))` (or
-`StructuredOutput(Model)`, `ToolCallOutput()`).  Third parties can plug
-in custom modes (YAML extraction, Instructor-style retry, SQLAlchemy
-row materialisation) without forking.
+The v1.0 four-abstraction refactor lands as one cumulative release.
+Four new abstractions — `Run[T]`, `Middleware`, `OutputMode[T]`,
+`Composer` — give power users a first-class surface for invocation
+handles, cross-cutting concerns, output polymorphism, and topology
+orchestration without forking `core/agent.py`.  The migration story
+is **two-tier**: `Agent.run()` / `Agent.stream()` keep working as
+deprecated shims (removed in v1.1); five v0.12 JSON-only `AgentConfig`
+kwargs are removed directly (one-line migration to
+`output=JsonOutput(...)`).  Chat-mode stdout stays byte-identical to
+v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
+`examples/17_structured/` is migrated to the new `output=...` shape.
+`mcp/` is untouched across the entire refactor (invariant §2.1).
 
 ### Added
 
-- **`OutputMode[T]` protocol** — `expects_tool_loop` / `supports_streaming`
-  capability flags; `shape_inference(req)` mutates the request;
-  `materialize(response, attempts) -> AgentResult[T]`;
-  `recover(failure, attempts) -> Recovery` drives retry/accept/fail.
+#### `Run[T]` — first-class invocation handle (M1)
+
+- **`Agent.invoke(user_message, *, ...) -> Run[T]`** is the canonical
+  entry point.  Returns a `Run` you can `await` for the final
+  `AgentResult`, iterate via `events()` for the streaming
+  `AgentEvent` sequence, cancel, replay, fork, or attach feedback to.
+  Accepts `prior_messages` (used by `Run.fork`), `middleware`,
+  `output`, `eager`, and `context` in addition to every kwarg the
+  v0.12 `Agent.run()` accepted.
+- **`Run[T]`** (in `t0_agents.core.run`) — public methods: `result()`,
+  `events(replay=False)`, `stream_text()`, `__await__`, `cancel()`,
+  `feedback()`, `replay()`, `fork()`, `transcript()`, `cost()`,
+  `usage()`.  Eager by default; `eager=False` opt-in for queueing.
+  Holds a `weakref` to its Agent so a discarded Run does not extend
+  gateway lifetime.
+- **`RunInput`** — frozen, slotted dataclass capturing the immutable
+  snapshot of one `invoke()` call.
+- **`RunState`** — `Literal["pending", "running", "succeeded",
+  "failed", "cancelled"]` lifecycle alias.
+- **`RunCancelledError`** — raised by `await run.result()` after
+  `await run.cancel()`.
+- **`RunFailedError(cause)`** — defensive fallback raised by
+  `await run.result()` when the drive failed without a captured
+  exception; the normal failure path re-raises the original
+  exception (`MaxTurnsExceededError`, `GuardrailBlockedError`, ...)
+  directly.
+
+#### `Middleware` — composable cross-cutting concerns (M2)
+
+- **`Middleware` Protocol** — `name: str` + `async __call__(ctx, next_) -> AgentResult`.
+- **`RunContext`** — mutable per-Run state threaded through the
+  chain.  Methods: `chain_on_inference(cb)` (compose multiple
+  inference observers), `replace_tool_provider(tp)` (records prior
+  providers on `ctx.extras["_tool_provider_stack"]` for audit).
+- **`build_pipeline(middleware, terminal) -> Next`** — right-fold
+  composition with `_NextGuard` double-call detection
+  (`allow_retry = True` opt-in skips the guard).
+- **Six built-in middlewares:** `MemoryMiddleware`,
+  `GuardrailsMiddleware`, `CostTrackingMiddleware`,
+  `SubAgentMiddleware`, `JsonRetryMiddleware`,
+  `ObservabilityMiddleware` (opt-in; accepts any tracer exposing
+  `start_as_current_span`).
+- **`AgentConfig.middleware: list[Middleware] | None`** — `None`
+  (default) auto-materialises the v0.12-compat chain
+  (`Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal`);
+  `[]` is the explicit "no middleware" override; an explicit list
+  replaces the default.
+- **`AgentConfig.default_middleware_for(...)`** static method — single
+  source of truth for the default chain shape, usable in
+  power-user-composed chains that sandwich the default.
+- **`RunUsage`** — frozen dataclass with `input_tokens`,
+  `output_tokens`, `cost` aggregates.  Returned by `Run.usage()`.
+
+#### `OutputMode[T]` — output polymorphism (M3)
+
+- **`OutputMode[T]` protocol** — `expects_tool_loop` /
+  `supports_streaming` capability flags; `shape_inference(req)`
+  mutates the request; `materialize(response, attempts) ->
+  AgentResult[T]`; `recover(failure, attempts) -> Recovery` drives
+  retry/accept/fail.
 - **Five built-in output modes** (`from t0_agents import ChatOutput,
   JsonOutput, StructuredOutput, ToolCallOutput, StreamingOutput`):
-  - `ChatOutput` (T=str, default) — the MCP tool loop.
-  - `JsonOutput(schema, json_mode, permissive, max_retries)` — single-shot
-    JSON with permissive parsing + bounded retry-with-hint; class-level
-    `JsonOutput.RETRY_HINT_BASE` is the stable base sentence (tests
-    pattern-match against it).
-  - `StructuredOutput[M](model)` — Pydantic-validated single-shot
-    inference; `result.value` is statically typed as `M` (mypy-verified
-    via the per-call overload on `Agent.invoke`).
-  - `ToolCallOutput(tool_choice)` — router pattern: extracts tool calls
-    from a chat response without executing them.
-  - `StreamingOutput(base)` — placeholder that delegates to `base`.
-    Only `base=ChatOutput()` works in v1.0; `base=JsonOutput(...)`
-    raises `ConfigurationError` (Q11 deferred to post-v1.0).
+  `ChatOutput` (T=str, default — MCP tool loop),
+  `JsonOutput(schema, json_mode, permissive, max_retries)` (single-shot
+  JSON with permissive parsing + bounded retry-with-hint),
+  `StructuredOutput[M](model)` (Pydantic-validated single-shot;
+  `result.value` is statically typed as `M`),
+  `ToolCallOutput(tool_choice)` (router pattern),
+  `StreamingOutput(base=ChatOutput())` (placeholder for v1.1 streaming
+  JSON; `base=JsonOutput(...)` raises `ConfigurationError`).
 - **`AgentResult[T]` generic** with `value: T` as the canonical field.
-  The v0.12 read-side properties (`response`, `parsed`, `parse_strategy`,
+  v0.12 read-side properties (`response`, `parsed`, `parse_strategy`,
   `json_parse_attempts`, `function_kind`) remain available as
-  `@property` aliases (Tier 0 byte-identity).  `response=` is accepted
-  as a constructor alias for `value=` because `mcp/loop.py` (invariant
-  §2.1) constructs the chat result with that kwarg.
-- **`OutputDiagnostics`** — per-result observability payload attached
-  to `AgentResult.diagnostics` (`parse_strategy`, `attempts`,
-  `raw_text`, `failure_detail`).
-- **`InferenceRequest`** — mutable request descriptor threaded through
-  `OutputMode.shape_inference`.
-- **`Recovery`, `ParseFailure`, `Attempt`** — the retry handshake the
-  middleware uses to drive `OutputMode.recover`.
+  `@property` aliases (Tier 0 byte-identity).
+- **`OutputDiagnostics`, `InferenceRequest`, `Recovery`,
+  `ParseFailure`, `Attempt`** — the retry handshake the
+  `JsonRetryMiddleware` uses to drive `OutputMode.recover`.
 - **`AgentConfig.output: OutputMode = ChatOutput()`** — canonical
-  config-level field.  Per-call override via `Agent.invoke(...,
-  output=...)` (per-call overloads narrow `Run[T]`).
-- **`[pydantic]` extra** in `pyproject.toml` — `pip install
-  't0-agents[pydantic]'` pulls `pydantic>=2.0` for `StructuredOutput`.
-  Lazy-imported at construction time; `ImportError` surfaces as
-  `ConfigurationError` with an install hint.
-- **`examples/17_structured/structured_pydantic.py`** — runnable demo
-  of `StructuredOutput[Customer]` (Pydantic-validated extraction).
-- **`tests/test_output/`** — 8 new test files covering the protocol,
-  the 5 built-in modes, the `AgentResult[T]` properties, the
-  `TypeError`-on-legacy-kwargs contract, and the streaming gate.
-  69 tests under this package.
+  config-level field.  Per-call override via
+  `Agent.invoke(..., output=...)` (overloads narrow `Run[T]`).
+- **`[pydantic]` extra** — `pip install 't0-agents[pydantic]'` pulls
+  `pydantic>=2.0` for `StructuredOutput`.
+
+#### `Composer` — topology primitive (M4)
+
+- **`Composable[Input, T]` Protocol** — `@runtime_checkable`; an
+  object whose `.invoke(input)` returns a `Run[T]`.  Both `Agent`
+  and `Composer` satisfy it.
+- **`Composer` base class** — declarative dataclass-based
+  topologies; each concrete subclass exposes its parameters plus
+  `name: str` and the narrow `invoke(input, *, eager, context,
+  cancel_timeout)` surface (Composer.invoke does NOT accept
+  Agent-level kwargs — sub-Runs use their own `AgentConfig`).
+- **`ComposerError(node, cause)`** — `T0AgentsError` subclass;
+  raised when a sub-Run inside a Composer fails with topology
+  context.  `retry_chain` is the documented exception: it
+  re-raises the underlying original exception un-wrapped.
+- **`CompositeRun(Run[Any])`** — the `Run` subclass produced by
+  every Composer.  Public `Run` surface works uniformly;
+  `.feedback()`, `.replay()`, `.fork()` raise `NotImplementedError`
+  (Agent-runs-only semantics).
+- **`DEFAULT_CANCEL_TIMEOUT = 30.0`** module-level constant; every
+  topology factory accepts `cancel_timeout=`; per-call override via
+  `composer.invoke(input, cancel_timeout=...)` wins.
+- **Nine topology builders** (`from t0_agents import ...`):
+  `sequential`, `parallel`, `race`, `consensus`, `map_reduce`,
+  `conditional`, `saga`, `retry_chain`, `circuit_breaker`.
+- **Cancellation cascade** — `await root_run.cancel()` propagates to
+  every sub-Run; overshoot logs WARN on `t0_agents.compose.topology`.
+- **`parent_episode_id` audit** — every Composer driver threads
+  `parent_episode_id` correlation through to children for
+  ClickHouse reconstruction of nested runs.
+
+#### Documentation
+
+- **`docs/run.md`** — canonical user-facing guide for the `Run`
+  surface: lifecycle, two-channel consumption, replay / fork
+  semantics, error model, `Run(agent=None)` mode for third-party
+  Composer authors, runnable snippets.
+- **`docs/middleware.md`** — canonical guide for the Middleware
+  chain: protocol, `RunContext` mutability, default chain ordering,
+  the 6 built-ins, `middleware=[]` opt-out trade-off, custom
+  authoring walkthrough, `allow_retry = True` opt-in.
+- **`docs/output-modes.md`** — canonical guide for `OutputMode[T]`:
+  protocol, the 5 built-ins, per-call narrowing via
+  `Agent.invoke(output=...)` overloads, retry-and-recovery handshake,
+  `OutputDiagnostics.failure_detail`, third-party `YamlOutput`
+  walkthrough, the `[pydantic]` extra.
+- **`docs/composition.md`** — canonical guide for `Composer`: the 9
+  topology builders with runnable examples, narrow `Composer.invoke`
+  surface, cancellation cascade, `parent_episode_id` audit, saga
+  compensation contract, `retry_chain` exception asymmetry,
+  declarative-vs-explicit two-paths comparison, deferred
+  `CompositeRun` APIs.
+- **`docs/migration-v0.12-to-v1.0.md`** — two-tier migration
+  walkthrough (Tier 1 `Agent.run` / `.stream` deprecation, Tier 2 5
+  JSON config kwargs removal) with side-by-side snippets and
+  PaaS-specific notes.
+- **`docs/api-reference.md`** — new "Run", "Middleware", "RunUsage",
+  "Output modes", and "Composers" sections; cross-links to the
+  canonical narrative pages.
+- **`docs/guardrails.md`** — new section "Guardrails vs. TensorZero
+  rate limits" distinguishing per-invocation guardrails from
+  gateway-layer `rate_limiting.rules`.
+- **`docs/production.md`** — new section "Rate limits and quotas"
+  with a cross-link to the guardrails section.
+- **`docs/agent.md`** preamble rewritten pointing at the four
+  canonical doc pages.
+- **`docs/index.md`** reading path extended with Run / Middleware /
+  Output Modes / Composition between Agent and Concepts.
+- **`docs/structured-outputs.md`** header cross-links to the new
+  `docs/output-modes.md` canonical narrative.
+- **`docs/multi-agent.md`** preview rewritten to a stable
+  cross-link at `docs/composition.md` (the orthogonal code-driven
+  path).
 
 ### Changed
 
+- **`Agent` internals** refactored to a middleware pipeline.
+  `core/agent.py` shrinks from ~1670 LoC (v0.12) to ~870 LoC.
+  `_execute_chat_legacy`, `_execute_chat_streaming_legacy`, and
+  `_execute_json_legacy` (≈1100 LoC inline orchestration) are
+  replaced by `_drive(ctx, is_streaming, middleware)` + three slim
+  terminals.  `Agent.invoke` docstring slimmed from ~140 LoC to
+  ~11 LoC (full surface moves to `docs/run.md`).
+- **`AgentResult` becomes `AgentResult[T]` generic** with
+  `value: T` as the canonical field.  Read-side properties
+  preserved.  `response=` is accepted as a constructor alias for
+  `value=` because `mcp/loop.py` (invariant §2.1) constructs the
+  chat result with that kwarg.
 - **`Agent.invoke(..., output=...)` per-call overload** — when a
   per-call `output: OutputMode[T]` is supplied, `Run[T]` is narrowed
   by mypy via overload pair.  Default (no per-call override) returns
-  `Run[Any]`.  The `output: T_co` field on `Run` is now real (M1's
-  phantom typing activates).
-- **`Agent._json_terminal` → `Agent._single_shot_terminal`** —
-  reduced to a flat ~50-LoC body: build `InferenceRequest`, apply
-  `ctx.output.shape_inference`, call `t0.inference`, fire
-  `on_inference`, return `ctx.output.materialize(response, attempts)`.
-  The retry loop moved to `JsonRetryMiddleware.__call__` (~80 LoC).
-- **`JsonRetryMiddleware` activated** — consults
+  `Run[Any]`.
+- **`JsonRetryMiddleware` activated** at M3 — consults
   `ctx.output.recover(failure, attempts)` between attempts; mutates
-  `ctx.user_message` and `ctx.prior_messages` to thread the corrective
-  hint into the next inference.  `allow_retry = True` class attribute
-  signals `build_pipeline` to skip the `_NextGuard` for this layer so
-  re-invocation does not raise.
-- **`Agent.run` (Tier 1 shim)** — when called with the v0.12 per-call
-  JSON kwargs (`output_schema`, `json_mode`, `max_json_retries`),
-  translates them into a synthesised per-call `JsonOutput(...)` and
-  forwards via the canonical `output=` channel.  Preserves Tier 1
-  byte-identity for callers like
-  `examples/17_structured/ner_dynamic_schema.py` that used per-call
-  overrides on JSON agents.
-- **`RunContext.output` typed `OutputMode[Any] | None`** — was `Any`.
-- **`AgentConfig.__post_init__`** validates `output`:
-  single-shot modes (`output.expects_tool_loop is False`) are
-  incompatible with `sub_agents` (tools unreachable) and with
-  `memory_strategy="messages"` (no multi-turn history).  ~80 LoC of
-  v0.12 cross-field validation collapses to ~10 LoC.
-- **`Agent` docstring + `Agent.__init__` check** now key off
-  `config.output.expects_tool_loop` instead of `config.function_kind`.
-- **`docs/structured-outputs.md`** updated for the v1.0 surface;
-  v0.12 migration shown explicitly.
-- **`docs/agent.md`** notes that `output=` is canonical.
-- **`docs/api-reference.md`** — new "Output modes" section listing
-  `OutputMode`, the 5 built-ins, and the helper types
-  (`InferenceRequest`, `Attempt`, `ParseFailure`, `Recovery`,
-  `OutputDiagnostics`).
-- **`examples/17_structured/{structured_agent,recovery_demo,
-  recovery_real_provider,ner_dynamic_schema}.py`** migrated to the
-  `output=JsonOutput(...)` shape and to `agent.invoke(...).result()`.
-  `main.py` is unchanged (calls `run_structured_inference` directly
-  — Tier 0).
-- **HTTP / WS serialization of DoneEvent** explicitly projects through
-  the v0.12 read-side keys (`response`, `parsed`, `parse_strategy`,
-  `json_parse_attempts`, `function_kind`) so downstream clients keep
-  working byte-identical.
+  `ctx.user_message` and `ctx.prior_messages` to thread the
+  corrective hint into the next inference.  `allow_retry = True`
+  class attribute signals `build_pipeline` to skip the `_NextGuard`.
+- **`Agent.run` (Tier 1 shim)** — when called with the v0.12
+  per-call JSON kwargs (`output_schema`, `json_mode`,
+  `max_json_retries`), translates them into a synthesised per-call
+  `JsonOutput(...)` and forwards via the canonical `output=`
+  channel.  Preserves Tier 1 byte-identity for callers that used
+  per-call overrides on JSON agents.
+- **`Run.cost()` / `Run.usage()`** populated by
+  `CostTrackingMiddleware` on every inference.  v0.12 only tracked
+  cost when guardrails were configured; v1.0 makes it always-on
+  unless the caller overrides with `middleware=[]`.
+- **`Run.__init__`** widens `agent: Agent` to `agent: Agent | None`
+  (one-line widening + weakref guard).  Required so `CompositeRun`
+  can satisfy the `Run` nominal type without a synthetic Agent
+  stub.
+- **Internal call-sites** (`compose/delegation.py`,
+  `compose/orchestrator.py`, `serve/routes.py`,
+  `serve/streaming_routes.py`) migrated from `agent.run(...)` /
+  `agent.stream(...)` shims to `agent.invoke(...).result()` /
+  `agent.invoke(...).events()`.  Eliminates ~4 internal
+  `DeprecationWarning` emissions per process.
+- **HTTP / WS serialization of `DoneEvent`** explicitly projects
+  through the v0.12 read-side keys (`response`, `parsed`,
+  `parse_strategy`, `json_parse_attempts`, `function_kind`) so
+  downstream clients keep working byte-identical.
+- **`docs/structured-outputs.md`** updated for the v1.0 surface
+  with explicit v0.12 → v1.0 migration block.
+
+### Deprecated
+
+- **`Agent.run(...)`** — emits `DeprecationWarning` once per source
+  line.  Use `await agent.invoke(msg, ...)` (a `Run` is awaitable
+  and returns the same `AgentResult`).  Removed in **v1.1**.
+- **`Agent.stream(...)`** — emits `DeprecationWarning` once per
+  source line.  Use `async for ev in agent.invoke(msg, ...).events()`.
+  Removed in **v1.1**.
 
 ### Removed
 
@@ -236,196 +243,57 @@ row materialisation) without forking.
 - **`AgentConfig.json_mode`** — replaced by
   `JsonOutput(json_mode=...)`.  Passing it raises `TypeError`.
 - **`AgentConfig.output_schema`** — replaced by
-  `JsonOutput(schema=...)` (callers load the JSON themselves and pass
-  a `dict`).  Passing it raises `TypeError`.
+  `JsonOutput(schema=...)` (callers load the JSON themselves and
+  pass a `dict`).  Passing it raises `TypeError`.
 - **`AgentConfig.permissive_json_parsing`** — replaced by
   `JsonOutput(permissive=...)`.  Passing it raises `TypeError`.
 - **`AgentConfig.max_json_retries`** — replaced by
   `JsonOutput(max_retries=...)`.  Passing it raises `TypeError`.
+
+  Migration: `AgentConfig(function_kind="json", json_mode="strict",
+  output_schema=S, permissive_json_parsing=True, max_json_retries=2)`
+  → `AgentConfig(output=JsonOutput(schema=S, json_mode="strict",
+  permissive=True, max_retries=2))`.
 - **`Agent.invoke(..., output_schema=, json_mode=, max_json_retries=)`**
   M1-deprecated per-call kwargs — removed in lockstep with the
-  config-level fields.  The `Agent.run` shim continues to accept them
-  for Tier 1 byte-identity and translates internally.
+  config-level fields.  The `Agent.run` shim continues to accept
+  them for Tier 1 byte-identity and translates internally.
 - **`RunInput.function_kind/output_schema/json_mode/max_json_retries`**
-  — dropped; dispatch routes via `Run.output.expects_tool_loop`.
-- **`Agent._RETRY_HINT_BASE` + `Agent._build_retry_hint`** — moved into
-  `JsonOutput` as a class attribute + instance method.
-- **`StructuredOutput` (dataclass result of
-  `run_structured_inference`)** — renamed to
-  `StructuredInferenceResult` to free the canonical name for the new
-  Pydantic-driven `OutputMode`.  Direct callers of
-  `run_structured_inference` that imported the dataclass name should
-  switch to `StructuredInferenceResult`.
+  — dispatch routes via `Run.output.expects_tool_loop`.
+- **`Agent._RETRY_HINT_BASE` + `Agent._build_retry_hint`** — moved
+  into `JsonOutput` as a class attribute + instance method.
+- **`StructuredOutput`** (the dataclass result of
+  `run_structured_inference`) — **renamed to
+  `StructuredInferenceResult`** to free the canonical name for the
+  new Pydantic-driven `OutputMode`.  Direct callers of
+  `run_structured_inference` that imported the dataclass name
+  should switch to `StructuredInferenceResult`.
 
-### Validated
+### Fixed
 
-- 811 non-integration tests pass (+62 over the M2 baseline of 749 —
-  69 new under `tests/test_output/`, modulo migrated counterparts).
-- mypy strict pass on 67 source files.  The `mcp/` module gets a
-  `disallow_any_generics = false` override so the invariant
-  `git diff src/t0_agents/mcp/` stays empty despite `AgentResult`
-  becoming generic.
-- ruff clean.
-- `git diff src/t0_agents/mcp/` — empty.
-- 17 chat-mode examples (`examples/00..16, 18`) run byte-identical to
-  v0.12 (stderr may include `DeprecationWarning` from M1 shims).
-- `examples/17_structured/recovery_demo.py` runs end-to-end against
-  the in-process fake gateway with all four `parse_strategy` outcomes
-  (`strict`, `permissive`, `retry`, `none`).
-- `AgentConfig(function_kind="json", ...)` raises `TypeError` (Tier 2
-  removal — contract §2.4).
+- **7 broken ClickHouse image tags** —
+  `examples/{02,03,04,05,06,07,18}/docker-compose.yml` pinned the
+  non-existent `clickhouse/clickhouse-server:lts`; replaced with
+  the canonical `clickhouse:lts`.
+- **`examples/02_basic_agent/README.md` directory drift** — README
+  still referenced the directory by its old name `01_basic_agent`;
+  replaced and stale forward-reference removed.
+- **429 regression test** — `tests/test_mcp/test_harness.py::
+  TestRecoverableInferenceError::test_429_rate_limit_re_raised`
+  locks in the "propagate, never auto-retry" contract.  Closes the
+  parked rate-limit follow-up.
 
-### Open questions resolved
+### Notes
 
-- **Q11** (`StreamingOutput` activation) — deferred officially.
-  Placeholder ships; `StreamingOutput(base=JsonOutput(...))` raises
-  `ConfigurationError`.  Re-open when TZ supports streaming JSON.
-- **Q12** (`AgentResult[T]` type narrowing helpers) — decided.  Per-call
-  overloads on `Agent.invoke(output=)` give `result.value: T`
-  narrowing; no separate `is_json` / `is_chat` `TypeGuard` helpers
-  ship in v1.0.
-- **Q13** (`JsonRetryMiddleware` placement) — already resolved at M2;
-  M3 activates it.
-
-## [1.0.0-M2] — Unreleased
-
-Second milestone of the v1.0 four-abstraction refactor.  Replaces the
-hand-coded cross-cutting concerns in `core/agent.py` (memory hydration,
-guardrails, cost tracking, sub-agent orchestration, JSON retry) with a
-composable Starlette-style middleware chain.  Power users gain a
-first-class extension surface for rate-limiters, PII redactors,
-observability hooks, and custom recovery policies — impossible in
-v0.12 without forking `core/agent.py`.
-
-Default chain materialised by `AgentConfig.__post_init__` is
-`Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal`
-(`Memory` / `SubAgents` / `Guardrails` only included when their
-corresponding kwarg is set; `CostTracking` and `JsonRetry` always
-present).  Existing `AgentConfig(memory=, guardrails=, sub_agents=)`
-callers keep working byte-identical — the chain is just a different
-implementation of the same behaviour.
-
-### Added
-
-- **`Middleware` Protocol** — `name: str` + `async __call__(ctx, next_) -> AgentResult`.
-- **`RunContext`** — mutable per-Run state threaded through the chain.
-  Methods: `chain_on_inference(cb)` (compose multiple inference
-  observers), `replace_tool_provider(tp)` (records prior providers on
-  `ctx.extras["_tool_provider_stack"]` for audit).
-- **`build_pipeline(middleware, terminal) -> Next`** — right-fold
-  composition with `_NextGuard` double-call detection.
-- **Six built-in middlewares:** `MemoryMiddleware`,
-  `GuardrailsMiddleware`, `CostTrackingMiddleware`,
-  `SubAgentMiddleware`, `JsonRetryMiddleware` (M2 no-op placeholder;
-  M3 activates), `ObservabilityMiddleware` (opt-in; accepts any tracer
-  exposing `start_as_current_span`).
-- **`AgentConfig.middleware: list[Middleware] | None`** field — power
-  users can override the default chain entirely.  `None` (default)
-  auto-materialises the v0.12-compat chain; `[]` is the explicit
-  "no middleware" override; an explicit list replaces the default.
-- **`AgentConfig.default_middleware_for(...)`** static method — single
-  source of truth for the default chain shape, usable in
-  power-user-composed chains that sandwich the default.
-- **`RunUsage`** — frozen dataclass with `input_tokens`,
-  `output_tokens`, `cost` aggregates.  Returned by `Run.usage()`.
-
-### Changed
-
-- **`Run.cost()` / `Run.usage()`** populated by
-  `CostTrackingMiddleware` on every inference.  v0.12 only tracked
-  cost when guardrails were configured (the closure on
-  `GuardrailContext`); v1.0 makes it always-on — a strict superset.
-- **`core/agent.py`** shrinks from ~1670 LoC to ~900 LoC.  Most of the
-  reduction comes from deleting `_execute_chat_legacy`,
-  `_execute_chat_streaming_legacy`, and `_execute_json_legacy`
-  (≈1100 LoC inline orchestration).  The JSON retry loop remains
-  inline in `_json_terminal` (~85 LoC) — M3 moves it into
-  `JsonRetryMiddleware` and shrinks the file further.
-- **Internal call-sites** (`compose/delegation.py:69`,
-  `compose/orchestrator.py:294`, `serve/routes.py:62`,
-  `serve/streaming_routes.py` SSE + WS handlers) migrate from
-  `agent.run(...)` / `agent.stream(...)` shims to
-  `agent.invoke(...).result()` / `agent.invoke(...).events()`.  No
-  observable behavioural change; eliminates ~4 internal
-  `DeprecationWarning` emissions per process.
-
-### Validated
-
-- 749 non-integration tests pass (+52 over the M1 baseline of 697).
-- mypy strict pass on 60 source files.
-- ruff clean on every M2-touched file.
-- `git diff src/t0_agents/mcp/` empty — invariant §2.1 holds.
-- All Tier 1 deprecation shims (`agent.run`, `agent.stream`) keep
-  working byte-identical with the existing v0.12 test suite.
-
-### Open questions resolved
-
-- **Q13** (placement of `JsonRetryMiddleware` in default chain) —
-  resolved as **innermost** (right before terminal).  Memory and
-  guardrails see only the final successful inference; audit of
-  retries surfaces via TensorZero tags and the M3
-  `result.diagnostics.attempts` field.
-
-## [1.0.0-M1] — Unreleased
-
-First milestone of the v1.0 four-abstraction refactor (Run · Middleware
-· OutputMode · Composer).  Introduces `Run[T]` as the first-class
-invocation handle and `Agent.invoke(...)` as the canonical entry
-point.  `Agent.run()` and `Agent.stream()` keep working as deprecated
-shims that emit `DeprecationWarning` once per call site and are
-removed in v1.1.  Chat-mode stdout output is byte-identical to v0.12;
-the only stderr change is the warning.
-
-### Added
-
-- **`Agent.invoke(user_message, *, ...) -> Run[T]`** — canonical
-  v1.0 entry point.  Returns a `Run` you can `await` for the final
-  `AgentResult`, iterate via `events()` for the streaming
-  `AgentEvent` sequence, cancel, replay, fork, or attach feedback to.
-  Accepts every kwarg `Agent.run()` accepted in v0.12 plus
-  `prior_messages` (used by `Run.fork`), `middleware` (M2 placeholder),
-  `output` (M3 placeholder), `eager`, and `context`.
-- **`Run[T]`** (in `t0_agents.core.run`) — first-class invocation
-  handle.  Public methods: `result()`, `events(replay=False)`,
-  `stream_text()`, `__await__`, `cancel()`, `feedback()`, `replay()`,
-  `fork()`, `transcript()`, `cost()`, `usage()`.  Eager by default;
-  `eager=False` opt-in for queueing.  Holds a `weakref` to its Agent
-  so a discarded Run does not extend gateway lifetime.
-- **`RunInput`** — frozen, slotted dataclass capturing the immutable
-  snapshot of one `invoke()` call.
-- **`RunState`** — `Literal["pending", "running", "succeeded",
-  "failed", "cancelled"]` lifecycle alias.
-- **`RunCancelledError`** — raised by `await run.result()` after
-  `await run.cancel()`.
-- **`RunFailedError(cause)`** — raised by `await run.result()` when
-  the underlying drive failed; preserves the original exception on
-  `.cause`.  The deprecated `agent.run()` shim unwraps this so
-  v0.12 callers continue to see the original exception type
-  (`MaxTurnsExceededError`, `GuardrailBlockedError`, ...).
-- **`core/_runtime.EventBuffer`** — bounded (`MAX_EVENTS = 10_000`)
-  replayable buffer with WARN-on-overflow + `truncated` flag, used
-  internally by `Run.events()`.
-
-### Deprecated
-
-- **`Agent.run(...)`** — emits `DeprecationWarning` once per source
-  line.  Use `await agent.invoke(msg, ...)` (a `Run` is awaitable and
-  returns the same `AgentResult`).  Removed in **v1.1**.
-- **`Agent.stream(...)`** — emits `DeprecationWarning` once per source
-  line.  Use `async for ev in agent.invoke(msg, ...).events()`.
-  Removed in **v1.1**.
-
-### Validated
-
-- Chat-path stdout byte-identical to v0.12 for the 17 chat-mode
-  examples (`examples/00..16, 18`); stderr now includes the
-  `DeprecationWarning` from the shims.  The JSON example
-  (`examples/17_structured/`) is unchanged at M1 because it imports
-  `run_structured_inference` directly rather than `Agent`; M3 migrates
-  it to the new `output=JsonOutput(...)` surface.
-- 696 unit tests pass (49 new under `tests/test_run/`); `mypy --strict`
-  and `ruff` clean.  `git diff src/t0_agents/mcp/` empty — the `mcp/`
-  submodule remains untouched (invariant §2.1).
+- **Industrial middlewares deferred** — the original M5 scope
+  included `BulkheadMiddleware`, `CircuitBreakerMiddleware`,
+  `TenantIsolationMiddleware`, `PiiRedactorMiddleware`,
+  `RedisRateLimitMiddleware`, and an `OTelTracerAdapter`.  Dropped
+  during M5 close after a scope review (no concrete consumer asks
+  for them today).  See
+  `docs/internal/v1-refactor/logs/milestone-5-dev-log.md` §2; the
+  related open questions Q4/Q5/Q6 are marked
+  `Status: deferred` in `02-open-questions.md`.
 
 ## [0.13.0] — Unreleased
 
