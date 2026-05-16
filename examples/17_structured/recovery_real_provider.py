@@ -29,14 +29,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import cast
 
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.types import ToolProvider
 
 
 def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
@@ -55,20 +53,14 @@ async def main() -> None:
         permissive_json_parsing=True,
         max_json_retries=2,
     )
-    noop_server: FastMCP[Any] = FastMCP("noop")
-    mcp_client: Client[Any] = Client(noop_server)
 
     prompt = (
         "Tell me about Sarah Johnson (sarah.j@example.com). "
         "Feel free to wrap your reply in a brief explanation."
     )
 
-    async with await _gateway_factory() as t0, mcp_client:
-        agent = Agent(
-            config,
-            t0=t0,
-            tool_provider=cast(ToolProvider, mcp_client),
-        )
+    async with await _gateway_factory() as t0:
+        agent = Agent(config, t0=t0)
         # ``json_mode="off"`` lets the model decide on output formatting,
         # which is exactly what the recovery layers are built to absorb.
         result = await agent.run(prompt, json_mode="off")

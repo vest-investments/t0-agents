@@ -36,11 +36,9 @@ import json
 from collections.abc import Awaitable
 from typing import Any, cast
 
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig, AgentResult
-from t0_agents.core.types import ToolProvider
 
 SAMPLE_TEXT = (
     "Ada Lovelace and Charles Babbage met at the University of London in 1843 "
@@ -116,17 +114,9 @@ async def main() -> None:
         function_kind="json",
         json_mode="strict",
     )
-    # JSON functions never call tools; the in-process FastMCP server is
-    # empty but required by Agent's constructor.
-    noop_server: FastMCP[Any] = FastMCP("noop")
-    mcp_client: Client[Any] = Client(noop_server)
 
-    async with await _gateway_factory() as t0, mcp_client:
-        agent = Agent(
-            config,
-            t0=t0,
-            tool_provider=cast(ToolProvider, mcp_client),
-        )
+    async with await _gateway_factory() as t0:
+        agent = Agent(config, t0=t0)
 
         # 1. Default config-level strict mode, four-category schema.
         result_1 = await agent.run(SAMPLE_TEXT)

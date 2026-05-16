@@ -215,6 +215,7 @@ Build a FastAPI app around `agent`. The session mode is selected by
 | `client_factory` + `share_client` | `ConfigurationError` ("mutually exclusive") |
 | none / two+ of the three | `ConfigurationError` ("requires exactly one of …") |
 | `elicitation_client_factory` without `client_factory` | `ConfigurationError` ("additive to `client_factory`") |
+| `share_client=True` on an agent built without a `tool_provider` (typically `function_kind="json"`) | `ConfigurationError` (nothing to share) — pick `client_factory=...` or `session_provider=...`, or construct the agent with an explicit `tool_provider` |
 
 The rest of the knobs:
 

@@ -175,6 +175,15 @@ def _build_session_factory(
             agent_class=type(agent),
         )
     if share_client:
+        if agent._tool_provider is None:
+            raise ConfigurationError(
+                "create_app: share_client=True requires the agent to have a "
+                "tool_provider, but this Agent was constructed without one "
+                "(typically because function_kind='json' does not need MCP "
+                "tools). Either pass an explicit tool_provider when "
+                "constructing the Agent, or serve with "
+                "'client_factory=...' / 'session_provider=...' instead."
+            )
         return SessionFactory(
             base_config=base_config,
             t0=agent._t0,

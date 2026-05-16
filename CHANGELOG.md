@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] — 2026-05-15
+
+Relax the `Agent` constructor contract so JSON-mode agents
+(`function_kind="json"`) can be built without a `tool_provider`.  JSON
+functions are single-shot and never dispatch MCP tools, so requiring an
+empty `fastmcp.Client` at construction time was friction with no
+upside.  Chat-mode agents still require a `tool_provider`; the
+constructor now rejects that case eagerly with a friendly message.
+Backwards compatible: every existing call signature (chat or JSON
+passing an explicit provider) continues to work byte-identically.
+
+### Changed
+
+- **`Agent.__init__` accepts `tool_provider: ToolProvider | None = None`.**
+  Constructing a JSON-mode agent (`AgentConfig(function_kind="json", …)`)
+  no longer requires passing a provider — `Agent(config, t0=t0)` is now
+  enough.  Chat-mode agents (`function_kind="chat"`, the default) raise
+  `ConfigurationError` if no provider is supplied, with a message
+  pointing at the two valid options (pass a provider, or set
+  `function_kind="json"`).
+- **`Agent._run_json` safety check tolerates a missing provider.**  The
+  defensive `list_tools()` round-trip that runs when `json_mode="tool"`
+  (TZ guide §11.1 — tool-mode forbids advertised tools) is now a vacuous
+  pass when `self._tool_provider is None`: no provider means no
+  advertised tools, so the invariant holds without an MCP call.
+- **`serve.create_app(..., share_client=True)` rejects provider-less
+  agents.**  When the agent was built without a `tool_provider`, there
+  is nothing to share — `create_app` now raises `ConfigurationError`
+  early instead of letting `SessionFactory`'s XOR fail with a less
+  helpful message.  Use `client_factory=...` / `session_provider=...`
+  instead, or construct the agent with an explicit `tool_provider`.
+
+### Examples and docs
+
+- `examples/17_structured/structured_agent.py`,
+  `ner_dynamic_schema.py`, `recovery_real_provider.py`, and
+  `recovery_demo.py` no longer build a placeholder `FastMCP("noop")`
+  server just to satisfy the constructor; they pass only the gateway.
+  Imports of `fastmcp.Client` / `fastmcp.FastMCP` drop out of every
+  JSON-mode example.
+- `docs/structured-outputs.md` — the canonical JSON snippet builds the
+  agent with just `Agent(config, t0=t0)`; the prose now explains that a
+  `tool_provider` is optional for JSON-mode and required for chat-mode.
+- `docs/agent.md` — composition table and signature reflect the
+  optional kwarg; a short JSON-mode snippet sits alongside the chat
+  lifecycle example.
+- `docs/serving.md` — the `create_app` modes table calls out the
+  provider-less guard explicitly.
+
 ## [0.11.0] — 2026-05-14
 
 First-class support for TensorZero **JSON functions** in t0-agents,

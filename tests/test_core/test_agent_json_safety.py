@@ -194,6 +194,33 @@ class TestToolModeCheck:
         assert result.parsed == {"a": 1}
         assert client.list_tools_calls == 0
 
+    async def test_tool_mode_with_no_provider_works(self) -> None:
+        """``json_mode='tool'`` + no provider → vacuous pass, run succeeds.
+
+        Regression for v0.12.0: when the agent is built without a
+        provider, the tool-mode invariant "advertise no tools" holds
+        trivially (there is nothing to advertise) — the safety check
+        must short-circuit without trying to call ``list_tools()`` on
+        ``None``.
+        """
+        t0 = MockGateway.script_json([_OK_ENTRY])
+        agent = Agent(
+            AgentConfig(
+                name="extractor",
+                function_name="extract_customer_info",
+                function_kind="json",
+                json_mode="tool",
+            ),
+            t0=cast(AsyncTensorZeroGateway, t0),
+        )
+
+        result = await agent.run("go")
+
+        assert result.parsed == {"a": 1}
+        assert result.function_kind == "json"
+        # Latch is set vacuously — no list_tools() round-trip happened.
+        assert agent._tool_provider_verified_empty is True
+
 
 # ---------------------------------------------------------------------------
 # Streaming guard

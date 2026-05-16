@@ -31,7 +31,6 @@ from tensorzero import (
 from tensorzero.types import JsonInferenceOutput
 
 from t0_agents import Agent, AgentConfig
-from t0_agents.core.types import ToolProvider
 
 
 def _fake_json_response(
@@ -71,25 +70,6 @@ class ScriptedGateway:
         return self._queue.pop(0)
 
 
-class NoOpToolProvider:
-    """JSON-only agents never call tools — return an empty toolset."""
-
-    async def list_tools(self) -> list[Any]:
-        return []
-
-    async def call_tool(
-        self,
-        name: str,
-        arguments: dict[str, Any],
-        *,
-        timeout: float | None = None,
-    ) -> Any:  # pragma: no cover - JSON path never reaches here
-        raise AssertionError(
-            "NoOpToolProvider.call_tool should not be invoked from "
-            "a JSON-function agent"
-        )
-
-
 def _make_agent(t0: ScriptedGateway) -> Agent:
     config = AgentConfig(
         name="recovery-demo",
@@ -99,11 +79,7 @@ def _make_agent(t0: ScriptedGateway) -> Agent:
         permissive_json_parsing=True,
         max_json_retries=2,
     )
-    return Agent(
-        config,
-        t0=cast(AsyncTensorZeroGateway, t0),
-        tool_provider=cast(ToolProvider, NoOpToolProvider()),
-    )
+    return Agent(config, t0=cast(AsyncTensorZeroGateway, t0))
 
 
 SCENARIOS: list[tuple[str, list[tuple[str | None, dict[str, Any] | None]]]] = [
