@@ -68,7 +68,7 @@ class TestAgentWithoutMemory:
 
     async def test_no_memory_returns_result(self) -> None:
         agent = _make_agent()
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
         assert result.response == "ok"
         assert result.episode_id == str(_EPISODE)
 
@@ -76,7 +76,7 @@ class TestAgentWithoutMemory:
         """Ensure no memory operations happen when memory is None."""
         t0 = FakeT0([_text_response()])
         agent = _make_agent(t0=t0)
-        await agent.run("hello")
+        await agent.invoke("hello")
         # If memory were set, we'd see a save. With None, it's a no-op.
         assert agent.config.memory is None
 
@@ -87,7 +87,7 @@ class TestMemoryHydrationAndPersistence:
         t0 = FakeT0([_text_response("I remember")])
         agent = _make_agent(t0=t0, memory=mem)
 
-        result = await agent.run("Remember this")
+        result = await agent.invoke("Remember this")
         records = await mem.load(str(_EPISODE))
         assert len(records) == 1
         assert records[0].user_message == "Remember this"
@@ -105,11 +105,11 @@ class TestMemoryHydrationAndPersistence:
         agent = _make_agent(t0=t0, memory=mem)
 
         # First run — no episode, creates one
-        r1 = await agent.run("Remember: my name is Alice")
+        r1 = await agent.invoke("Remember: my name is Alice")
         assert r1.episode_id == ep
 
         # Second run — pass episode_id so memory loads
-        r2 = await agent.run("What is my name?", episode_id=ep)
+        r2 = await agent.invoke("What is my name?", episode_id=ep)
 
         # The second inference call should have the memory prefix
         second_call = t0.calls[1]
@@ -122,7 +122,7 @@ class TestMemoryHydrationAndPersistence:
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem)
 
-        result = await agent.run("hello")  # no episode_id
+        result = await agent.invoke("hello")  # no episode_id
         records = await mem.load(result.episode_id or "")
         assert len(records) == 1
 
@@ -143,7 +143,7 @@ class TestMemoryHydrationAndPersistence:
         t0 = FakeT0([_text_response("answer")])
         agent = _make_agent(t0=t0, memory=mem)
 
-        await agent.run("follow-up", episode_id=ep)
+        await agent.invoke("follow-up", episode_id=ep)
         records = await mem.load(ep)
         # Second record should have original user message
         assert records[1].user_message == "follow-up"
@@ -162,7 +162,7 @@ class TestMemoryStrategy:
 
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem, memory_strategy="auto")
-        await agent.run("new question", episode_id=ep)
+        await agent.invoke("new question", episode_id=ep)
 
         # Should prepend memory to user message (not system_arguments)
         call = t0.calls[0]
@@ -182,7 +182,7 @@ class TestMemoryStrategy:
 
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem, memory_strategy="prepended_message")
-        await agent.run("what was X?", episode_id=ep)
+        await agent.invoke("what was X?", episode_id=ep)
 
         call = t0.calls[0]
         user_msg = call["input"]["messages"][0]["content"]
@@ -202,7 +202,7 @@ class TestMemoryStrategy:
 
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem, memory_strategy="system_template")
-        await agent.run("question", episode_id=ep)
+        await agent.invoke("question", episode_id=ep)
 
         call = t0.calls[0]
         # User message should be original (unmodified)
@@ -219,7 +219,7 @@ class TestMemoryStrategy:
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem)
 
-        await agent.run("hello", episode_id="empty-episode")
+        await agent.invoke("hello", episode_id="empty-episode")
         call = t0.calls[0]
         assert call["input"]["messages"][0]["content"] == "hello"
 
@@ -236,7 +236,7 @@ class TestMemoryStrategy:
 
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem, memory_strategy="system_template")
-        await agent.run(
+        await agent.invoke(
             "question",
             episode_id=ep,
             system_arguments={"max_turns": 5},
@@ -260,7 +260,7 @@ class TestMemoryStrategy:
 
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=mem, memory_strategy="system_template")
-        await agent.run(
+        await agent.invoke(
             "question",
             episode_id=ep,
             system_arguments={"memory_context": "OVERRIDE"},
@@ -289,7 +289,7 @@ class TestMemoryErrorGracefulDegradation:
         mem = FailingMemory()
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=cast(InMemoryMemory, mem))
-        result = await agent.run("hello", episode_id="ep-1")
+        result = await agent.invoke("hello", episode_id="ep-1")
         assert result.response == "ok"
 
     async def test_save_failure_does_not_abort(self) -> None:
@@ -310,7 +310,7 @@ class TestMemoryErrorGracefulDegradation:
         mem = SaveFailingMemory()
         t0 = FakeT0([_text_response("ok")])
         agent = _make_agent(t0=t0, memory=cast(InMemoryMemory, mem))
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
         assert result.response == "ok"
 
 
@@ -416,7 +416,7 @@ class TestMessagesStrategyInjection:
             memory_strategy="messages",
         )
 
-        await agent.run("now", episode_id=ep)
+        await agent.invoke("now", episode_id=ep)
 
         # load() must NOT be called when strategy is "messages".
         assert mem.load_calls == 0
@@ -461,7 +461,7 @@ class TestMessagesStrategyInjection:
             memory_strategy="messages",
         )
 
-        await agent.run("hello")  # no episode_id
+        await agent.invoke("hello")  # no episode_id
 
         assert mem.history_calls == 0
         first_messages = t0.calls[0]["input"]["messages"]
@@ -492,7 +492,7 @@ class TestMessagesStrategyInjection:
             memory=cast(InMemoryMemory, mem),
             memory_strategy="messages",
         )
-        await agent.run("hello", episode_id=str(_EPISODE))
+        await agent.invoke("hello", episode_id=str(_EPISODE))
         first_messages = t0.calls[0]["input"]["messages"]
         assert first_messages == [{"role": "user", "content": "hello"}]
 
@@ -521,7 +521,7 @@ class TestMessagesStrategyInjection:
             memory=cast(InMemoryMemory, mem),
             memory_strategy="messages",
         )
-        result = await agent.run("hello", episode_id=str(_EPISODE))
+        result = await agent.invoke("hello", episode_id=str(_EPISODE))
         assert result.response == "ok"
         first_messages = t0.calls[0]["input"]["messages"]
         # Falls through to the no-history path: single user message.
@@ -560,7 +560,7 @@ class TestMessagesStrategyInjection:
             memory_strategy="messages",
         )
 
-        await agent.run(
+        await agent.invoke(
             "now",
             episode_id=ep,
             system_arguments={"max_turns": 5},
@@ -621,7 +621,7 @@ class TestMessagesStrategyStreamParity:
             memory_strategy="messages",
         )
         events: list[Any] = []
-        async for event in agent.stream("now", episode_id=ep):
+        async for event in agent.invoke("now", episode_id=ep).events():
             events.append(event)
 
         assert mem.history_calls == 1

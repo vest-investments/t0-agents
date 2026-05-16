@@ -1,9 +1,9 @@
 # Migrating from v0.12 to v1.0
 
 t0-agents 1.0 is the first stable release.  Most v0.12 code keeps
-working unchanged; a small surface — JSON-mode configuration — was
-re-cut around the new `OutputMode[T]` abstraction; the synchronous
-entry points (`agent.run`, `agent.stream`) are deprecated.
+working unchanged; two surfaces — `Agent.run` / `Agent.stream` and the
+JSON-mode `AgentConfig` cluster — were removed in favour of the v1.0
+canonical entry points `Agent.invoke` and `OutputMode`.
 
 This guide walks every change in order of how invasive it is to your
 code.  If you only have time for one section, read
@@ -20,42 +20,38 @@ code.  If you only have time for one section, read
 
 The v0.12 surface splits into three migration tiers:
 
-| Tier | What | When you migrate | What happens if you don't |
+| Tier | What | Action | What happens if you don't |
 |---|---|---|---|
-| **Tier 0** | `run_agent`, `run_structured_inference`, `permissive_parse`, `AgentConfig(memory=, guardrails=, sub_agents=, ...)`, every `AgentResult` read-side property, `Guardrail` / `MemoryProvider` / `ToolProvider` protocols, `agent_as_tool` | Never — these are stable forever | Nothing.  v0.12 code keeps working. |
-| **Tier 1** | `agent.run(...)`, `agent.stream(...)` | Before v1.1 (one minor) | `DeprecationWarning` once per call site in v1.0; **removed** in v1.1.  Stdout stays byte-identical until the removal. |
-| **Tier 2** | `AgentConfig(function_kind=, json_mode=, output_schema=, permissive_json_parsing=, max_json_retries=)` (5 kwargs) | **Now** — they're already gone | `TypeError` at `AgentConfig(...)` construction. |
+| **Tier 0** | `run_agent`, `run_structured_inference`, `permissive_parse`, `AgentConfig(memory=, guardrails=, sub_agents=, ...)`, every `AgentResult` read-side property, `Guardrail` / `MemoryProvider` / `ToolProvider` protocols, `agent_as_tool` | Nothing — stable forever | v0.12 code keeps working. |
+| **Tier 1** | `agent.run(...)`, `agent.stream(...)` | One-line migration per call site | `AttributeError: 'Agent' object has no attribute 'run'` (resp. `'stream'`). |
+| **Tier 2** | `AgentConfig(function_kind=, json_mode=, output_schema=, permissive_json_parsing=, max_json_retries=)` (5 kwargs) | One-line migration per `AgentConfig` | `TypeError` at `AgentConfig(...)` construction. |
 
 Concretely:
 
 - If your codebase only uses chat-mode agents (`agent.run(msg)` + a
-  tool provider) and doesn't pass any of the 5 JSON-mode kwargs to
-  `AgentConfig`, **nothing breaks at all**.  You get a
-  `DeprecationWarning` once per source line; everything else is
-  byte-identical.
+  tool provider) you have a **one-line migration per call site** —
+  see [Migrating Agent.run → agent.invoke](#migrating-agentrun--await-agentinvoke).
 - If your codebase uses JSON-mode (`AgentConfig(function_kind="json", ...)`),
-  you have a **one-line migration per agent config**.  See
+  you have a **one-line migration per agent config** — see
   [Migrating JSON config kwargs](#migrating-json-config-kwargs--outputjsonoutput).
 - If your codebase uses streaming (`agent.stream(...)`), you have a
-  **one-line migration per call site**.  See
+  **one-line migration per call site** — see
   [Migrating Agent.stream → agent.invoke().events()](#migrating-agentstream--agentinvokeevents).
 
 ---
 
 ## Migrating `Agent.run()` → `await agent.invoke()`
 
-`Agent.run(msg, **kw)` keeps working in v1.0 — it emits a
-`DeprecationWarning` once per source line (Python deduplicates by
-`stacklevel + filename + lineno`) and delegates internally to
-`agent.invoke(msg, **kw).result()`.  Migrating is a one-liner per
-call site.
+`Agent.run(msg, **kw)` is removed in v1.0.  The canonical entry
+point is `agent.invoke(msg, **kw)`, which returns a `Run[T]` handle.
+Migrating is a one-liner per call site:
 
 ```python
 # v0.12
 result = await agent.run("What is 2 + 3?")
 print(result.response)
 
-# v1.0 canonical
+# v1.0
 result = await agent.invoke("What is 2 + 3?")
 print(result.response)
 ```
@@ -67,11 +63,11 @@ cancel, events, feedback, transcript).
 
 ### What about exceptions?
 
-The Tier 1 shim and the canonical surface raise the **same exception
-types**:
+`Agent.invoke(...)` raises the **same exception types** v0.12's
+`Agent.run(...)` did:
 
 ```python
-# v0.12 — works in v1.0 unchanged.
+# v0.12
 try:
     result = await agent.run(msg)
 except MaxTurnsExceededError:
@@ -79,7 +75,7 @@ except MaxTurnsExceededError:
 except GuardrailBlockedError:
     ...
 
-# v1.0 canonical — same.
+# v1.0
 try:
     result = await agent.invoke(msg)
 except MaxTurnsExceededError:
@@ -95,37 +91,44 @@ shouldn't happen in well-formed agents).  In every normal failure
 path, `result()` re-raises the original exception directly so your
 existing `except` blocks keep working without modification.
 
-### Why migrate now if it still works?
+### What you gain
 
-The shim is removed in v1.1.  Migrating early gets you:
+Migration is not just a rename — `Run[T]` opens four capabilities
+that were not reachable from the v0.12 `Agent.run` surface:
 
-- Access to the live `Run` handle — replay, fork, cancel, two-channel
-  consumption, feedback at the right inference id.
-- `Run.cost()` / `Run.usage()` for aggregated token + spend totals
-  populated by `CostTrackingMiddleware` (always-on in v1.0; was
-  guardrail-gated in v0.12).
-- One less `DeprecationWarning` in your test logs.
+- **Live event stream.**  `async for ev in run.events()` yields
+  `AgentEvent`s as the loop runs.  Two-channel consumption is supported
+  — see [Migrating Agent.stream → agent.invoke().events()](#migrating-agentstream--agentinvokeevents).
+- **Cooperative cancellation.**  `await run.cancel()` aborts the
+  drive; a subsequent `await run.result()` raises `RunCancelledError`.
+- **Replay / fork.**  `await run.replay(...)` re-runs with the same
+  input; `await run.fork("follow-up")` continues from the Run's
+  transcript with an extra user turn.
+- **Cost and usage.**  `run.cost()` / `run.usage()` return aggregated
+  totals populated by the always-on `CostTrackingMiddleware`.
+
+See [`docs/run.md`](run.md) for the full reference.
 
 ---
 
 ## Migrating `Agent.stream()` → `agent.invoke().events()`
 
-Same pattern.  The shim emits `DeprecationWarning` once per source
-line and delegates to `agent.invoke(msg).events()`.
+Same pattern.  `Agent.stream` is removed; the v1.0 equivalent is
+`run.events()` on the `Run` returned by `agent.invoke(...)`:
 
 ```python
 # v0.12
 async for event in agent.stream("Tell me a story"):
     print(event)
 
-# v1.0 canonical
+# v1.0
 async for event in agent.invoke("Tell me a story").events():
     print(event)
 ```
 
-Two-channel consumption is new in v1.0 — the event buffer is
-replayable and multi-subscriber, so you can iterate events on one
-task while another task awaits the final result:
+Two-channel consumption is new — the event buffer is replayable and
+multi-subscriber, so you can iterate events on one task while another
+task awaits the final result:
 
 ```python
 run = agent.invoke("Tell me a story")
@@ -147,9 +150,9 @@ See [`docs/run.md` — Two-channel consumption](run.md#two-channel-consumption).
 
 ## Migrating JSON config kwargs → `output=JsonOutput(...)`
 
-This is the only **breaking** part of v1.0: the five JSON-mode
-`AgentConfig` kwargs are removed.  Passing any raises `TypeError` at
-construction time.  Migration is one line per `AgentConfig` build:
+The five JSON-mode `AgentConfig` kwargs are removed.  Passing any
+raises `TypeError` at construction time.  Migration is one line per
+`AgentConfig` build:
 
 ```python
 # v0.12
@@ -213,15 +216,22 @@ print(result.parsed)  # {'name': 'Sarah', 'email': 'sarah@example.com'} — v0.1
 install the extra with `pip install 't0-agents[pydantic]'` if you
 don't already depend on pydantic transitively.
 
-### Per-call JSON overrides on `agent.run`
+### Per-call JSON overrides
 
-`Agent.run(msg, output_schema=..., json_mode=..., max_json_retries=...)`
-still accepts the v0.12 per-call kwargs and translates them internally
-into a synthesised `JsonOutput` so existing
-`agent.run("...", output_schema=other_schema)` call sites keep
-working byte-identical until the v1.1 shim removal.  On the
-canonical `agent.invoke(...)` surface those kwargs **do not exist** —
-use `agent.invoke(msg, output=JsonOutput(schema=...))` instead.
+In v0.12, `agent.run("msg", output_schema=..., json_mode=..., max_json_retries=...)`
+accepted per-call JSON kwargs.  Those kwargs are removed.  On v1.0,
+pass a per-call `output=` instead:
+
+```python
+# v0.12
+await agent.run("msg", output_schema=other_schema, json_mode="tool")
+
+# v1.0
+await agent.invoke(
+    "msg",
+    output=JsonOutput(schema=other_schema, json_mode="tool"),
+)
+```
 
 ### `StructuredOutput` rename — direct dataclass importers
 
@@ -328,71 +338,17 @@ threads through to ClickHouse for hierarchy reconstruction.  See
 
 ---
 
-## Deprecation timeline
-
-```
-v1.0 (this release)
-├── Tier 0 (run_agent, run_structured_inference, AgentResult read-side,
-│           protocols, agent_as_tool, all AgentConfig kwargs not in Tier 2)
-│   └── unchanged forever
-│
-├── Tier 1 (agent.run, agent.stream)
-│   ├── works in v1.0 — emits DeprecationWarning once per call site
-│   └── REMOVED in v1.1 (next minor)
-│
-└── Tier 2 (5 JSON config kwargs on AgentConfig)
-    └── removed already — TypeError at construction
-
-v1.1 (upcoming minor)
-└── Tier 1 removed: agent.run / agent.stream no longer exist.
-    Direct callers must have migrated to agent.invoke(...) by then.
-```
-
-There is **no v1.0.x** breaking change.  Patch releases (1.0.1, 1.0.2,
-...) ship only bug fixes and additive surface.  The next breaking
-change is v1.1 with the Tier 1 shim removal.
-
----
-
-## PaaS-specific notes
-
-The Prompt-as-a-Service plan in
-`~/Descargas/prompt-as-a-service-mvp-plan-with-t0-agents.md` already
-uses the canonical `agent.invoke(...).result()` path throughout
-(execution API, structured inference, etc.).  Concretely:
-
-- **Execution API handler** — no migration needed; already uses
-  `Agent(config, ...).invoke(...).result()`.
-- **AgentConfig construction** — if the plan uses
-  `function_kind="json"` for any single-shot extraction, swap to
-  `output=JsonOutput(schema=S, json_mode="strict", permissive=True,
-  max_retries=2)`.
-- **SSE streaming endpoints** — if the plan exposes a `/stream`
-  endpoint that delegates to `agent.stream(...)`, swap that one line
-  to `agent.invoke(...).events()`.
-- **No Composer required for the MVP** — the plan currently runs one
-  agent per request.  Post-MVP agentic features can adopt
-  `Composer` topologies (sequential pipelines for triage, etc.)
-  without re-architecting.
-- **Rate limiting** — the plan keeps rate limiting at the application
-  layer (Redis token bucket); t0-agents does not ship a
-  RedisRateLimitMiddleware in v1.0.  See
-  [`docs/guardrails.md` § Guardrails vs. TensorZero rate limits](guardrails.md#guardrails-vs-tensorzero-rate-limits)
-  for the layered model (app-level / guardrails / gateway).
-
----
-
 ## Checklist
 
 A pragmatic order to migrate one codebase from v0.12 to v1.0:
 
-1. **Run `pytest` against v1.0**.  If green, you have no Tier 2
-   migrations to make.  If `TypeError` at `AgentConfig(...)`
-   construction, you have JSON config kwargs to migrate — see
+1. **Run `pytest` against v1.0**.  If green, you have no migrations
+   to make.  If `TypeError` at `AgentConfig(...)` construction, you
+   have JSON config kwargs to migrate — see
    [Migrating JSON config kwargs](#migrating-json-config-kwargs--outputjsonoutput).
-2. **Run again with `-W error::DeprecationWarning`**.  Every warning
-   pointed at `agent.run` / `agent.stream` is a Tier 1 migration —
-   replace with `agent.invoke(...)` / `agent.invoke(...).events()`.
+2. **Run again**.  Every `AttributeError: 'Agent' object has no
+   attribute 'run'` (resp. `'stream'`) is a Tier 1 migration — replace
+   with `agent.invoke(...)` / `agent.invoke(...).events()`.
 3. **Audit imports of `StructuredOutput`** from
    `t0_agents.core.structured`.  Rename to `StructuredInferenceResult`.
    Imports from `t0_agents` (the top-level package) that used
@@ -402,5 +358,4 @@ A pragmatic order to migrate one codebase from v0.12 to v1.0:
    `Composer`, `Run.replay/.fork`, `output=StructuredOutput(Model)`.
    None are required to ship 1.0.
 
-When the warning count is zero and your tests pass, your codebase is
-v1.1-ready ahead of time.
+When your tests pass, you're on v1.0.

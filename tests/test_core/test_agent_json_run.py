@@ -90,7 +90,7 @@ class TestJsonDispatch:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0)
 
-        result = await agent.run("Hi, I'm Sarah at sarah@example.com")
+        result = await agent.invoke("Hi, I'm Sarah at sarah@example.com")
 
         assert result.function_kind == "json"
         assert result.parsed == {
@@ -118,7 +118,7 @@ class TestJsonDispatch:
             t0=cast(AsyncTensorZeroGateway, t0),
         )
 
-        result = await agent.run("Hi, I'm Sarah at sarah@example.com")
+        result = await agent.invoke("Hi, I'm Sarah at sarah@example.com")
 
         assert result.function_kind == "json"
         assert result.parsed == {
@@ -136,7 +136,7 @@ class TestJsonDispatch:
         )
         agent = _chat_agent(t0=t0)
 
-        result = await agent.run("hi")
+        result = await agent.invoke("hi")
 
         assert result.function_kind == "chat"
         assert result.parsed is None
@@ -149,7 +149,7 @@ class TestJsonDispatch:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0)
 
-        await agent.run("hi", system="Extract structured fields from prose.")
+        await agent.invoke("hi", system="Extract structured fields from prose.")
 
         kwargs = t0.calls[0]
         assert kwargs["input"]["system"] == (
@@ -163,7 +163,7 @@ class TestJsonDispatch:
         agent = _json_agent(t0=t0)
 
         with pytest.raises(ValueError, match="Pass either `system`"):
-            await agent.run(
+            await agent.invoke(
                 "hi",
                 system="raw",
                 system_arguments={"who": "world"},
@@ -192,7 +192,10 @@ class TestPerCallOverrides:
             "type": "object",
             "properties": {"y": {"type": "string"}},
         }
-        await agent.run("hello", output_schema=per_call_schema)
+        await agent.invoke(
+            "hello",
+            output=JsonOutput(schema=per_call_schema, json_mode="strict"),
+        )
 
         assert len(t0.calls) == 1
         kwargs = t0.calls[0]
@@ -212,7 +215,7 @@ class TestPerCallOverrides:
             client=FakeMCPClient(tools=[]),
         )
 
-        await agent.run("hello", json_mode="tool")
+        await agent.invoke("hello", output=JsonOutput(json_mode="tool"))
 
         kwargs = t0.calls[0]
         assert kwargs["params"] == {"chat_completion": {"json_mode": "tool"}}
@@ -228,7 +231,7 @@ class TestPerCallOverrides:
             output=JsonOutput(schema=config_schema, json_mode="strict"),
         )
 
-        await agent.run("hello")
+        await agent.invoke("hello")
 
         kwargs = t0.calls[0]
         assert kwargs["output_schema"] == config_schema
@@ -279,7 +282,7 @@ class TestGuardrails:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0, guardrails=[cast(Any, spy)])
 
-        result = await agent.run("hi")
+        result = await agent.invoke("hi")
 
         assert spy.before_run_calls == 1
         assert spy.after_run_calls == 1
@@ -320,7 +323,7 @@ class TestGuardrails:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0, client=client, guardrails=[cast(Any, spy)])
 
-        await agent.run("hi")
+        await agent.invoke("hi")
 
         assert spy.before_tool_calls == 0
         assert spy.after_tool_calls == 0
@@ -341,7 +344,7 @@ class TestMemory:
         )
         agent = _json_agent(t0=t0, memory=memory)
 
-        result = await agent.run("hi", episode_id=str(episode))
+        result = await agent.invoke("hi", episode_id=str(episode))
 
         records = await memory.load(str(episode))
         assert len(records) == 1
@@ -360,7 +363,7 @@ class TestEpisodePropagation:
         )
         agent = _json_agent(t0=t0)
 
-        result = await agent.run("hi", episode_id=str(episode))
+        result = await agent.invoke("hi", episode_id=str(episode))
 
         # The gateway received the episode_id we passed in.
         assert t0.calls[0]["episode_id"] == str(episode)

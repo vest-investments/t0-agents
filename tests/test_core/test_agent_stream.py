@@ -37,7 +37,7 @@ async def _drain_stream(
     episode_id: str | None = None,
 ) -> list[AgentEvent]:
     events: list[AgentEvent] = []
-    async for ev in agent.stream(message, episode_id=episode_id):
+    async for ev in agent.invoke(message, episode_id=episode_id).events():
         events.append(ev)
     return events
 
@@ -227,7 +227,7 @@ async def test_agent_stream_fatal_guardrail_propagates() -> None:
         tool_provider=client,
     )
     with pytest.raises(GuardrailBlockedError):
-        async for _ in agent.stream("nope"):
+        async for _ in agent.invoke("nope").events():
             pass
 
 
@@ -250,7 +250,7 @@ async def test_agent_stream_tags_override_merges_with_config() -> None:
         t0=cast(AsyncTensorZeroGateway, fake_t0),
         tool_provider=client,
     )
-    async for _ in agent.stream("hi", tags={"request_id": "r-9"}):
+    async for _ in agent.invoke("hi", tags={"request_id": "r-9"}).events():
         pass
 
     assert fake_t0.calls[0]["tags"] == {
@@ -275,7 +275,7 @@ async def test_agent_stream_tags_override_wins_on_collision() -> None:
         t0=cast(AsyncTensorZeroGateway, fake_t0),
         tool_provider=client,
     )
-    async for _ in agent.stream("hi", tags={"env": "staging"}):
+    async for _ in agent.invoke("hi", tags={"env": "staging"}).events():
         pass
 
     assert fake_t0.calls[0]["tags"] == {"env": "staging"}
@@ -297,7 +297,7 @@ async def test_agent_stream_tags_none_preserves_config_only() -> None:
         t0=cast(AsyncTensorZeroGateway, fake_t0),
         tool_provider=client,
     )
-    async for _ in agent.stream("hi"):
+    async for _ in agent.invoke("hi").events():
         pass
 
     assert fake_t0.calls[0]["tags"] == {"env": "prod"}
@@ -319,7 +319,7 @@ async def test_agent_run_preserves_non_streaming_path() -> None:
         t0=cast(AsyncTensorZeroGateway, fake_t0),
         tool_provider=client,
     )
-    result = await agent.run("non-streaming?")
+    result = await agent.invoke("non-streaming?")
     assert result.response == "non-streaming-ok"
     assert result.turns == 1
     assert result.response_source == "text"
@@ -359,7 +359,7 @@ async def test_agent_stream_system_arguments_forwarded() -> None:
         tool_provider=client,
     )
     events: list[AgentEvent] = []
-    async for ev in agent.stream("hi", system_arguments={"max_turns": 5}):
+    async for ev in agent.invoke("hi", system_arguments={"max_turns": 5}).events():
         events.append(ev)
 
     assert isinstance(events[-1], DoneEvent)
@@ -385,7 +385,7 @@ async def test_agent_stream_system_string_forwarded() -> None:
         tool_provider=client,
     )
     events: list[AgentEvent] = []
-    async for ev in agent.stream("hi", system="Reply only in haiku."):
+    async for ev in agent.invoke("hi", system="Reply only in haiku.").events():
         events.append(ev)
 
     assert isinstance(events[-1], DoneEvent)
@@ -406,6 +406,6 @@ async def test_agent_stream_system_with_system_template_strategy_rejected() -> N
         tool_provider=client,
     )
     with pytest.raises(ValueError, match="memory_strategy='system_template'"):
-        async for _ in agent.stream("hi", system="raw"):
+        async for _ in agent.invoke("hi", system="raw").events():
             pass
     assert fake_t0.calls == []

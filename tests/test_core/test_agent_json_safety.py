@@ -3,8 +3,8 @@
 Covers four concerns:
 
 - The runtime check for ``json_mode="tool"`` against a tool provider
-  that advertises tools (raised lazily on the first ``Agent.run``).
-- The ``Agent.stream`` guard for JSON functions (raised at first
+  that advertises tools (raised lazily on the first ``Agent.invoke``).
+- The ``Run.events()`` guard for JSON functions (raised at first
   ``__anext__`` before any event is yielded).
 - The once-per-instance Anthropic extended-thinking compatibility
   warning (TZ guide §11.4).
@@ -102,7 +102,7 @@ class TestToolModeCheck:
         )
 
         with pytest.raises(ConfigurationError, match=r"§11\.1"):
-            await agent.run("go")
+            await agent.invoke("go")
 
     async def test_tool_mode_with_empty_tools_works(self) -> None:
         """``json_mode='tool'`` + empty tool provider → run succeeds."""
@@ -114,7 +114,7 @@ class TestToolModeCheck:
             json_mode="tool",
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
         assert result.parsed == {"a": 1}
         assert result.function_kind == "json"
 
@@ -133,8 +133,8 @@ class TestToolModeCheck:
             json_mode="tool",
         )
 
-        await agent.run("first")
-        await agent.run("second")
+        await agent.invoke("first")
+        await agent.invoke("second")
 
         assert client.list_tools_calls == 1
 
@@ -163,7 +163,9 @@ class TestToolModeCheck:
         )
 
         with pytest.raises(ConfigurationError, match=r"§11\.1"):
-            await agent.run("go", json_mode="tool")  # per-call overrides to tool
+            await agent.invoke(
+                "go", output=JsonOutput(json_mode="tool")
+            )  # per-call overrides to tool
 
     async def test_per_call_strict_skips_check_when_config_is_tool(self) -> None:
         """Per-call ``json_mode='strict'`` skips the check even if config is 'tool'.
@@ -190,7 +192,9 @@ class TestToolModeCheck:
             json_mode="tool",  # config says tool
         )
 
-        result = await agent.run("go", json_mode="strict")  # per-call overrides
+        result = await agent.invoke(
+            "go", output=JsonOutput(json_mode="strict")
+        )  # per-call overrides
 
         assert result.parsed == {"a": 1}
         assert client.list_tools_calls == 0
@@ -214,7 +218,7 @@ class TestToolModeCheck:
             t0=cast(AsyncTensorZeroGateway, t0),
         )
 
-        result = await agent.run("go")
+        result = await agent.invoke("go")
 
         assert result.parsed == {"a": 1}
         assert result.function_kind == "json"
@@ -232,7 +236,7 @@ class TestStreamGuard:
         """``Agent.stream`` on a JSON agent raises at first __anext__."""
         t0 = MockGateway.script_json([_OK_ENTRY])
         agent = _json_agent(t0=t0)
-        gen = agent.stream("go")
+        gen = agent.invoke("go").events()
 
         with pytest.raises(ConfigurationError, match=r"does not.*support streaming"):
             await gen.__anext__()
@@ -254,7 +258,7 @@ class TestStreamGuard:
             tool_provider=cast(ToolProvider, client),
         )
 
-        events = [ev async for ev in agent.stream("hi")]
+        events = [ev async for ev in agent.invoke("hi").events()]
 
         assert isinstance(events[-1], DoneEvent)
         assert events[-1].result.response == "hello"
@@ -279,8 +283,8 @@ class TestAnthropicWarning:
         agent = _json_agent(t0=t0, json_mode="on")
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
-            await agent.run("first")
-            await agent.run("second")
+            await agent.invoke("first")
+            await agent.invoke("second")
 
         warnings = [
             rec
@@ -306,8 +310,8 @@ class TestAnthropicWarning:
         )
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
-            await agent.run("first")
-            await agent.run("second")
+            await agent.invoke("first")
+            await agent.invoke("second")
 
         warnings = [
             rec
@@ -324,7 +328,7 @@ class TestAnthropicWarning:
         agent = _json_agent(t0=t0, json_mode="strict")
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
-            await agent.run("go")
+            await agent.invoke("go")
 
         warnings = [
             rec
@@ -345,7 +349,9 @@ class TestAnthropicWarning:
         agent = _json_agent(t0=t0, json_mode="strict")  # config says strict
 
         with caplog.at_level(logging.WARNING, logger="t0_agents.core.agent"):
-            await agent.run("go", json_mode="on")  # per-call override
+            await agent.invoke(
+                "go", output=JsonOutput(json_mode="on")
+            )  # per-call override
 
         warnings = [
             rec
@@ -397,7 +403,7 @@ class TestAfterRunFatalPropagation:
         )
 
         with pytest.raises(GuardrailBlockedError, match="after_run hard abort"):
-            await agent.run("go")
+            await agent.invoke("go")
 
     async def test_propagates_on_json_run(self) -> None:
         """``after_run`` raising ``GuardrailBlockedError`` aborts a JSON run."""
@@ -408,4 +414,4 @@ class TestAfterRunFatalPropagation:
         )
 
         with pytest.raises(GuardrailBlockedError, match="after_run hard abort"):
-            await agent.run("go")
+            await agent.invoke("go")

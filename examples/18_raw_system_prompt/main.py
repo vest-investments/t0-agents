@@ -1,4 +1,4 @@
-"""Raw system prompt: PaaS-style ``system=`` kwarg on ``Agent.run``.
+"""Raw system prompt: PaaS-style ``system=`` kwarg on ``Agent.invoke``.
 
 Demonstrates the escape hatch added in 0.13.0: instead of putting the
 system prompt in ``tensorzero.toml`` (the recommended pattern shown by
@@ -88,7 +88,7 @@ async def main() -> None:
             tool_provider=cast(ToolProvider, mcp_client),
         )
         for personality, question in QUESTIONS:
-            result = await agent.run(
+            result = await agent.invoke(
                 question,
                 system=PERSONALITIES[personality],
             )

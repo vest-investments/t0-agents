@@ -125,7 +125,7 @@ async def _execute_single_tool_call(
     except T0AgentsFatalError:
         # Guardrail-level hard block (or any future fatal marker) must
         # propagate past the belt-and-braces ``except Exception`` below,
-        # so ``Agent.run()`` surfaces the policy violation verbatim
+        # so ``Agent.invoke()`` surfaces the policy violation verbatim
         # rather than stringifying it into a ToolResult.
         raise
     except ToolError as e:

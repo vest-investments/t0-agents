@@ -45,12 +45,12 @@ async def test_agent_remembers_across_runs(mcp_client: Client[Any]) -> None:
                 t0=t0,
                 tool_provider=cast(ToolProvider, mcp_client),
             )
-            r1 = await agent.run(
+            r1 = await agent.invoke(
                 "Please remember: my favourite colour is blue."
             )
             assert r1.episode_id is not None
 
-            r2 = await agent.run(
+            r2 = await agent.invoke(
                 "What is my favourite colour?",
                 episode_id=r1.episode_id,
             )

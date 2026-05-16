@@ -48,6 +48,6 @@ async def test_stream_guard_against_real_gateway(
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        gen = agent.stream("Hi, I'm Sarah at sarah@example.com")
+        gen = agent.invoke("Hi, I'm Sarah at sarah@example.com").events()
         with pytest.raises(ConfigurationError, match=r"streaming"):
             await gen.__anext__()

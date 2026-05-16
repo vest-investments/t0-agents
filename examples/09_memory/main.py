@@ -48,11 +48,11 @@ async def main() -> None:
             tool_provider=client,
         )
 
-        r1 = await agent.run("My name is Alice. Please remember that.")
+        r1 = await agent.invoke("My name is Alice. Please remember that.")
         print(f"Turn 1: {r1.response}")
         print(f"  episode_id: {r1.episode_id}")
 
-        r2 = await agent.run(
+        r2 = await agent.invoke(
             "What is my name?",
             episode_id=r1.episode_id,
         )
@@ -76,7 +76,7 @@ async def main() -> None:
                 tool_provider=client,
             )
 
-            r3 = await agent2.run("Remember: the project deadline is Friday.")
+            r3 = await agent2.invoke("Remember: the project deadline is Friday.")
             print(f"Turn 1: {r3.response}")
             print(f"  episode_id: {r3.episode_id}")
 
@@ -92,7 +92,7 @@ async def main() -> None:
                 tool_provider=client,
             )
 
-            r4 = await agent3.run(
+            r4 = await agent3.invoke(
                 "When is the project deadline?",
                 episode_id=r3.episode_id,
             )

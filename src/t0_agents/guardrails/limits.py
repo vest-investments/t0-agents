@@ -5,7 +5,7 @@ from ``before_tool`` when a limit is crossed.  ``_execute_single_tool_call``
 re-raises ``T0AgentsFatalError`` past its broad ``except Exception`` belt-
 and-braces trap so the run aborts cleanly.
 
-Cost tracking is populated by :meth:`Agent.run`'s ``on_inference`` callback,
+Cost tracking is populated by :meth:`Agent.invoke`'s ``on_inference`` callback,
 which reads ``response.usage.cost`` after every ``t0.inference()`` response
 and mutates :attr:`GuardrailContext.cost_so_far` BEFORE any tool call is
 dispatched.  That ordering lets the ``before_tool`` check abort a run the
@@ -37,7 +37,7 @@ def max_cost(*, per_episode: float, currency: str = "USD") -> Guardrail:
 
     Args:
         per_episode: Cumulative cost ceiling, in *currency*, for a single
-            ``Agent.run()`` invocation.
+            ``Agent.invoke()`` invocation.
         currency: Label used in the error message.  Purely cosmetic — no
             FX conversion is performed.
     """
@@ -76,7 +76,7 @@ def max_cost(*, per_episode: float, currency: str = "USD") -> Guardrail:
 
 
 def max_tool_calls(*, per_run: int) -> Guardrail:
-    """Cap total tool calls per ``Agent.run()``.
+    """Cap total tool calls per ``Agent.invoke()``.
 
     Increments :attr:`GuardrailContext.tool_calls_made` at dispatch time
     (inside ``before_tool``), not after completion.  This makes the counter

@@ -1,7 +1,7 @@
 # Example 08: Agent Class
 
 Runnable one-liner demo of the `Agent` class: configure once with
-`AgentConfig`, then call `agent.run(message)` instead of passing every
+`AgentConfig`, then call `agent.invoke(message)` instead of passing every
 knob to `run_agent` on every call. See
 [`docs/agent.md`](../../docs/agent.md) for the full reference.
 
@@ -22,9 +22,9 @@ uv run python examples/08_agent_class/main.py
 
 | Use `Agent` when | Use `run_agent` when |
 |---|---|
-| You want a clean one-liner (`agent.run(msg)`) | You need full control over the inference call |
+| You want a clean one-liner (`agent.invoke(msg)`) | You need full control over the inference call |
 | Configuration is static across calls | Configuration varies per call |
 | You want to add memory, guardrails, or streaming on the same object | You only need the low-level MCP bridge |
 
-Both paths produce the same `AgentResult`. `Agent.run()` delegates to
+Both paths produce the same `AgentResult`. `Agent.invoke()` delegates to
 `run_agent` internally, so there is no performance difference.

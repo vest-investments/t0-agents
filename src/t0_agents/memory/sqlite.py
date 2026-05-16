@@ -35,8 +35,9 @@ ON memory_records(episode_id)"""
 class SqliteMemory:
     """Persistent, SQLite-backed memory backend.
 
-    Each method opens its own connection so concurrent ``Agent.run()``
-    calls do not contend on a shared connection object.
+    Each method opens its own connection so concurrent
+    ``Agent.invoke()`` calls do not contend on a shared connection
+    object.
     """
 
     def __init__(self, db_path: str) -> None:

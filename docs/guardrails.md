@@ -93,7 +93,7 @@ async def main() -> None:
     async with gateway as t0, client:
         agent = Agent(config, t0=t0, tool_provider=client)
         try:
-            result = await agent.run("Draft a reply to Alice and send it.")
+            result = await agent.invoke("Draft a reply to Alice and send it.")
         except GuardrailBlockedError as exc:
             print(f"Aborted by guardrail: {exc}")
             return
@@ -136,7 +136,7 @@ class Guardrail(Protocol):
     async def after_run(self, ctx, result: AgentResult | None) -> None: ...
 ```
 
-`ctx` is a `GuardrailContext` constructed fresh for every `Agent.run()`
+`ctx` is a `GuardrailContext` constructed fresh for every `Agent.invoke()`
 call. `tool_call` carries `name` (`str`) and `arguments` (`dict[str, Any]`).
 `result_str` is the already-serialised tool result — identical to the
 string the LLM will read next turn.
@@ -149,7 +149,7 @@ string the LLM will read next turn.
 |---|---|
 | `None` | Pass through; the inner `call_tool` runs. |
 | `str` | **Soft-block**. The string becomes the tool's error result. A single `"ERROR: "` prefix is added by the adapter — do not double it. The run continues; the LLM may try another tool. |
-| Raises `GuardrailBlockedError` | **Hard abort**. The exception propagates past the agent loop and out of `Agent.run()`. Use for budget caps and policy violations that must stop execution. |
+| Raises `GuardrailBlockedError` | **Hard abort**. The exception propagates past the agent loop and out of `Agent.invoke()`. Use for budget caps and policy violations that must stop execution. |
 
 The other three hooks are observational (`before_run`, `after_tool`,
 `after_run`) — they return `None` and any exception they raise is treated
@@ -159,12 +159,12 @@ non-fatal trap.
 
 ### Lifecycle
 
-`Agent.run()` wraps the caller's `tool_provider` in a
+`Agent.invoke()` wraps the caller's `tool_provider` in a
 `GuardedToolProvider` when `AgentConfig.guardrails` is non-empty. The
 wrapper threads a shared `GuardrailContext` through every hook:
 
 ```
-Agent.run(message)
+Agent.invoke(message)
     │
     ├─ construct GuardrailContext(agent_name, function_name, user_message)
     ├─ for g in guardrails: await g.before_run(ctx)
@@ -258,7 +258,7 @@ guard = require_approval(
 
 ### `max_cost`
 
-Cumulative cost ceiling for a single `Agent.run()`. The framework reads
+Cumulative cost ceiling for a single `Agent.invoke()`. The framework reads
 `response.usage.cost` from each `ChatInferenceResponse` via an
 `on_inference` hook that fires *before* tools dispatch, so the cap can
 abort on the very next tool call after a budget-breaking inference.
@@ -382,7 +382,7 @@ AgentConfig(
   does not synthesise a second exception on top of an existing one.
 - The guardrail's `after_run` raises a `T0AgentsFatalError` subclass; per
   the [Return semantics](#return-semantics) section, the fatal trap
-  propagates out of `Agent.run(...)` and `Agent.stream(...)`'s lifecycle.
+  propagates out of `Agent.invoke(...)` and `Run.events(...)`'s lifecycle.
 - See [`docs/structured-outputs.md`](structured-outputs.md#opt-in-hard-failure-require_parsed)
   for the structured-outputs angle (recovery layers, when to opt in vs out).
 
@@ -454,7 +454,7 @@ Structural alias for FastMCP's `ElicitationHandler`. Returns either an
 ### Advanced surfaces
 
 `GuardedToolProvider` (`from t0_agents.guardrails`) — the runtime wrapper
-`Agent.run()` installs around the caller's `tool_provider` when guardrails
+`Agent.invoke()` installs around the caller's `tool_provider` when guardrails
 are configured. Exposed for advanced composition (e.g. wrapping one
 guarded provider with another); normal users never instantiate it. The
 constructor is:
@@ -620,7 +620,7 @@ Group entries by `kind` to produce a concise audit output:
 ```python
 from collections import Counter
 
-result = await agent.run("...")
+result = await agent.invoke("...")
 by_kind = Counter(entry.kind for entry in result.guardrail_log)
 print(f"passes={by_kind['pass']} rejections={by_kind['rejection']}")
 
@@ -646,7 +646,7 @@ Shapes worth knowing:
 ## Concurrency
 
 `GuardrailContext` is **per run**, not per agent. Two sequential
-`Agent.run()` calls on the same `Agent` instance each get a fresh
+`Agent.invoke()` calls on the same `Agent` instance each get a fresh
 context — counters start at zero, `cost_so_far` starts at zero, and
 `extra` starts empty.
 
@@ -691,7 +691,7 @@ def _make_guard() -> Guardrail:
   Built by `max_cost`, `max_tool_calls`, or any user guardrail that
   raises. The loop's `_execute_single_tool_call` re-raises
   `T0AgentsFatalError` past its belt-and-braces `except Exception` trap,
-  so the exception surfaces verbatim to the caller of `Agent.run()`.
+  so the exception surfaces verbatim to the caller of `Agent.invoke()`.
 - **Soft-block strings** (`before_tool` returns `str`) — not an exception.
   The string becomes the tool's error result (single `"ERROR: "` prefix
   added by the adapter serializer). The run continues.
@@ -757,7 +757,7 @@ result = await run_agent(
 )
 ```
 
-`Agent.run()` installs its own `on_inference` internally when guardrails
+`Agent.invoke()` installs its own `on_inference` internally when guardrails
 are configured, so this knob is primarily for direct `run_agent` callers
 (or for advanced `Agent` subclasses). `None` (the default) preserves
 byte-identical behaviour with the pre-guardrail loop.
@@ -779,7 +779,7 @@ optimize = "max"
 ```
 
 ```python
-result = await agent.run("Send the email.")
+result = await agent.invoke("Send the email.")
 
 if any(entry.kind == "rejection" for entry in result.guardrail_log):
     await t0.feedback(
@@ -801,7 +801,7 @@ replay and episode tagging.
 ### Transport and `require_approval`
 
 `require_approval` invokes its `handler` in the same process that runs
-`Agent.run()`. For CLI and single-process deployments that is exactly
+`Agent.invoke()`. For CLI and single-process deployments that is exactly
 the same handler the developer passes to `Client(elicitation_handler=...)`
 — share the callable and the UX stays consistent.
 
@@ -947,7 +947,7 @@ You can use both together.  A common pattern:
 
 ---
 
-Guardrails decide synchronously, on the same turn, before the tool dispatches. But the caller still sees nothing until the whole run finishes. When you need live visibility — token-by-token text, tool-call intent before execution, elicitation prompts as they happen, or a final-answer delta that renders progressively — switch from `Agent.run()` to `Agent.stream()`. That is the subject of the next chapter: [Streaming](streaming.md).
+Guardrails decide synchronously, on the same turn, before the tool dispatches. But the caller still sees nothing until the whole run finishes. When you need live visibility — token-by-token text, tool-call intent before execution, elicitation prompts as they happen, or a final-answer delta that renders progressively — switch from `Agent.invoke()` to `Run.events()`. That is the subject of the next chapter: [Streaming](streaming.md).
 
 ---
 

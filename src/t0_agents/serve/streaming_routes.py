@@ -1,4 +1,4 @@
-"""SSE + WebSocket routes for :meth:`Agent.stream`.
+"""SSE + WebSocket routes for :meth:`Run.events`.
 
 Two endpoints:
 
@@ -177,8 +177,6 @@ async def _sse_event_stream(
         return
     try:
         async with session_factory.session() as agent:
-            # v1.0: invoke().events() bypasses the agent.stream
-            # DeprecationWarning from this internal call-site.
             async for event in agent.invoke(
                 message, episode_id=episode_id, tags=parsed_tags,
             ).events():

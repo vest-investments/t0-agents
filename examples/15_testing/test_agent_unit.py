@@ -61,7 +61,7 @@ async def test_agent_uses_search_and_summarises() -> None:
         cast(AsyncTensorZeroGateway, gateway),
         cast(ToolProvider, tools),
     )
-    result = await agent.run("Find notes about groceries")
+    result = await agent.invoke("Find notes about groceries")
 
     assert_tool_called("search_notes", tool_provider=tools)
     assert_tool_args_equal(
@@ -84,7 +84,7 @@ async def test_agent_recovers_from_failing_tool() -> None:
         cast(AsyncTensorZeroGateway, gateway),
         cast(ToolProvider, tools),
     )
-    result = await agent.run("Save 'shopping' = 'milk eggs'")
+    result = await agent.invoke("Save 'shopping' = 'milk eggs'")
 
     assert_tool_called("save_note", tool_provider=tools)
     assert_response_contains(result, "couldn't")
@@ -103,7 +103,7 @@ async def test_agent_never_calls_read_note_when_not_asked() -> None:
         cast(AsyncTensorZeroGateway, gateway),
         cast(ToolProvider, tools),
     )
-    await agent.run("What's the weather?")
+    await agent.invoke("What's the weather?")
 
     assert_tool_not_called("read_note", tool_provider=tools)
     assert_tool_not_called("save_note", tool_provider=tools)
@@ -120,7 +120,7 @@ async def test_agent_aborts_when_max_turns_reached() -> None:
     )
 
     with pytest.raises(MaxTurnsExceededError):
-        await agent.run("Keep looking forever")
+        await agent.invoke("Keep looking forever")
 
 
 async def test_agent_surfaces_structured_tool_error() -> None:
@@ -168,7 +168,7 @@ async def test_agent_surfaces_structured_tool_error() -> None:
         cast(AsyncTensorZeroGateway, gateway),
         cast(ToolProvider, tools),
     )
-    result = await agent.run("Please save 'x' = 'y'")
+    result = await agent.invoke("Please save 'x' = 'y'")
 
     assert_tool_called("save_note", tool_provider=tools)
     assert_response_contains(result, "disk is full")
@@ -212,7 +212,7 @@ async def test_recording_then_replay_is_deterministic() -> None:
         cast(AsyncTensorZeroGateway, recorder),
         cast(ToolProvider, tools),
     )
-    original = await agent.run("Find notes about groceries")
+    original = await agent.invoke("Find notes about groceries")
 
     # Two turns captured — same as the script.
     assert len(recorder.captured) == 2
@@ -225,7 +225,7 @@ async def test_recording_then_replay_is_deterministic() -> None:
         cast(AsyncTensorZeroGateway, replay),
         cast(ToolProvider, tools_replay),
     )
-    replayed = await agent_replay.run("Find notes about groceries")
+    replayed = await agent_replay.invoke("Find notes about groceries")
 
     # The replayed run produces the same observable response and tool usage
     # without touching the stand-in gateway again.

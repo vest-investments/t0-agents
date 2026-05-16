@@ -72,7 +72,7 @@ writer_ask(message: str) -> str
 ```
 
 The orchestrator LLM decides when to call each one, and the return
-value is whatever the sub-agent produced via `sub_agent.run(message)`.
+value is whatever the sub-agent produced via `sub_agent.invoke(message)`.
 
 ## Layout
 

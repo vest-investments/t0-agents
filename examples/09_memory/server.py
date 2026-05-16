@@ -2,7 +2,7 @@
 
 These tools are *agent-visible* (the LLM calls them); they are separate
 from the framework-managed ``MemoryProvider`` that persists state
-between ``Agent.run()`` calls transparently.
+between ``Agent.invoke()`` calls transparently.
 """
 
 from __future__ import annotations

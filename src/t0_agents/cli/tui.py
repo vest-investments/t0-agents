@@ -1,7 +1,7 @@
 """Rich renderer for :class:`~t0_agents.stream.events.AgentEvent` streams.
 
 :class:`TUIRenderer` consumes an :class:`~typing.AsyncIterator` of
-``AgentEvent`` (usually produced by :meth:`Agent.stream`) and keeps a
+``AgentEvent`` (usually produced by :meth:`Run.events`) and keeps a
 live Rich :class:`~rich.panel.Panel` up to date as deltas arrive.  The
 panel is wrapped in a :class:`~rich.live.Live` region with a
 configurable refresh rate.

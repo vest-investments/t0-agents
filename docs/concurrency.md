@@ -29,12 +29,12 @@ agent = Agent(
     t0=t0,
     tool_provider=mcp_client,
 )
-result = await agent.run("Fetch the abstracts of arXiv 2401.0001, 2401.0002, 2401.0003")
+result = await agent.invoke("Fetch the abstracts of arXiv 2401.0001, 2401.0002, 2401.0003")
 ```
 
 With `parallel_tools=False` (the default) the three abstract fetches run one after the other and the run takes ~3 × the per-call latency. With `parallel_tools=True` they overlap and the run takes ~1 × the per-call latency. Result order is preserved regardless of completion order — `asyncio.gather` returns in argument order, not completion order.
 
-The same flag is accepted by the low-level [`run_agent`](api-reference.md#run_agent) entry point, the [`Agent`](agent.md) class, and the [`Agent.stream`](streaming.md) variant.
+The same flag is accepted by the low-level [`run_agent`](api-reference.md#run_agent) entry point, the [`Agent`](agent.md) class, and the [`Run.events`](streaming.md) variant.
 
 ### When to leave it `False`
 
@@ -109,7 +109,7 @@ gateway = MockGateway.script(
     ]
 )
 agent = Agent(config, t0=cast(AsyncTensorZeroGateway, gateway), tool_provider=...)
-result = await agent.run("...")
+result = await agent.invoke("...")
 ```
 
 `examples/16_parallel/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
@@ -160,7 +160,7 @@ research, draft = await asyncio.gather(
 final = await editor.run(f"Combine:\n\n{research.response}\n\n{draft.response}")
 ```
 
-This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other frameworks. `Agent.run` is an `async def` returning `AgentResult`; that is the only contract you need.
+This is the t0-agents-blessed equivalent of a `chain`/`parallel` block in other frameworks. `Agent.invoke` is an `async def` returning `AgentResult`; that is the only contract you need.
 
 ## Anti-patterns that t0-agents deliberately omits
 

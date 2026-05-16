@@ -52,7 +52,7 @@ class UnauthorizedRecipientError(T0AgentsFatalError):
     Inherits :class:`T0AgentsFatalError` so the agent loop's
     ``_execute_single_tool_call`` re-raises it past its broad
     ``except Exception`` trap — the exception surfaces verbatim to the
-    caller of ``Agent.run()`` instead of being stringified into a tool
+    caller of ``Agent.invoke()`` instead of being stringified into a tool
     error.
     """
 
@@ -150,7 +150,7 @@ async def main() -> None:
         agent = Agent(config, t0=t0, tool_provider=client)
 
         try:
-            result = await agent.run(
+            result = await agent.invoke(
                 "Send a brief marketing email to eve@evil.io announcing "
                 "our product launch. Subject: 'Big news'. Body: one sentence."
             )

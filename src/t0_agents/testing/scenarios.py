@@ -13,7 +13,7 @@ Example::
     gateway = scenarios.single_tool_happy("lookup", final_text="done")
     tools = MockToolProvider({"lookup": lambda args: "42"})
     agent = Agent(..., t0=gateway, tool_provider=tools)
-    result = await agent.run("What's the answer?")
+    result = await agent.invoke("What's the answer?")
 """
 
 from __future__ import annotations

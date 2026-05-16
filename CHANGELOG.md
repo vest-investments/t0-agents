@@ -10,14 +10,13 @@ The v1.0 four-abstraction refactor lands as one cumulative release.
 Four new abstractions — `Run[T]`, `Middleware`, `OutputMode[T]`,
 `Composer` — give power users a first-class surface for invocation
 handles, cross-cutting concerns, output polymorphism, and topology
-orchestration without forking `core/agent.py`.  The migration story
-is **two-tier**: `Agent.run()` / `Agent.stream()` keep working as
-deprecated shims (removed in v1.1); five v0.12 JSON-only `AgentConfig`
-kwargs are removed directly (one-line migration to
-`output=JsonOutput(...)`).  Chat-mode stdout stays byte-identical to
-v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
-`examples/17_structured/` is migrated to the new `output=...` shape.
-`mcp/` is untouched across the entire refactor (invariant §2.1).
+orchestration without forking `core/agent.py`.  Two v0.12 surfaces are
+removed: `Agent.run()` / `Agent.stream()` (replaced by
+`Agent.invoke(...) -> Run[T]` and `run.events()`) and the five
+JSON-only `AgentConfig` kwargs (replaced by `output=JsonOutput(...)`).
+Both are one-line migrations per call site; the migration walkthrough
+is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
+`mcp/` is untouched across the entire refactor.
 
 ### Added
 
@@ -155,10 +154,10 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   compensation contract, `retry_chain` exception asymmetry,
   declarative-vs-explicit two-paths comparison, deferred
   `CompositeRun` APIs.
-- **`docs/migration-v0.12-to-v1.0.md`** — two-tier migration
-  walkthrough (Tier 1 `Agent.run` / `.stream` deprecation, Tier 2 5
-  JSON config kwargs removal) with side-by-side snippets and
-  PaaS-specific notes.
+- **`docs/migration-v0.12-to-v1.0.md`** — migration walkthrough for
+  the two v0.12 surfaces removed in v1.0 (`Agent.run` / `.stream` →
+  `Agent.invoke` / `Run.events`; five JSON config kwargs →
+  `output=JsonOutput(...)`) with side-by-side snippets.
 - **`docs/api-reference.md`** — new "Run", "Middleware", "RunUsage",
   "Output modes", and "Composers" sections; cross-links to the
   canonical narrative pages.
@@ -200,12 +199,6 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   `ctx.prior_messages` to thread the corrective hint into the next
   inference.  `allow_retry = True` class attribute signals
   `build_pipeline` to skip the `_NextGuard`.
-- **`Agent.run` (Tier 1 shim)** — when called with the v0.12
-  per-call JSON kwargs (`output_schema`, `json_mode`,
-  `max_json_retries`), translates them into a synthesised per-call
-  `JsonOutput(...)` and forwards via the canonical `output=`
-  channel.  Preserves Tier 1 byte-identity for callers that used
-  per-call overrides on JSON agents.
 - **`Run.cost()` / `Run.usage()`** populated by
   `CostTrackingMiddleware` on every inference.  v0.12 only tracked
   cost when guardrails were configured; v1.0 makes it always-on
@@ -214,12 +207,6 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   (one-line widening + weakref guard).  Required so `CompositeRun`
   can satisfy the `Run` nominal type without a synthetic Agent
   stub.
-- **Internal call-sites** (`compose/delegation.py`,
-  `compose/orchestrator.py`, `serve/routes.py`,
-  `serve/streaming_routes.py`) migrated from `agent.run(...)` /
-  `agent.stream(...)` shims to `agent.invoke(...).result()` /
-  `agent.invoke(...).events()`.  Eliminates ~4 internal
-  `DeprecationWarning` emissions per process.
 - **HTTP / WS serialization of `DoneEvent`** explicitly projects
   through the v0.12 read-side keys (`response`, `parsed`,
   `parse_strategy`, `json_parse_attempts`, `function_kind`) so
@@ -227,17 +214,15 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
 - **`docs/structured-outputs.md`** updated for the v1.0 surface
   with explicit v0.12 → v1.0 migration block.
 
-### Deprecated
-
-- **`Agent.run(...)`** — emits `DeprecationWarning` once per source
-  line.  Use `await agent.invoke(msg, ...)` (a `Run` is awaitable
-  and returns the same `AgentResult`).  Removed in **v1.1**.
-- **`Agent.stream(...)`** — emits `DeprecationWarning` once per
-  source line.  Use `async for ev in agent.invoke(msg, ...).events()`.
-  Removed in **v1.1**.
-
 ### Removed
 
+- **`Agent.run(...)`** — replaced by `await agent.invoke(msg, ...)`
+  (a `Run` is awaitable and returns the same `AgentResult`).
+  Migration is a one-liner per call site; see
+  [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
+- **`Agent.stream(...)`** — replaced by `async for ev in
+  agent.invoke(msg, ...).events()`.  Two-channel consumption is now
+  supported — see [`docs/run.md`](docs/run.md).
 - **`AgentConfig.function_kind`** — replaced by
   `AgentConfig.output: OutputMode`.  Passing it raises `TypeError`.
 - **`AgentConfig.json_mode`** — replaced by
@@ -255,9 +240,7 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   → `AgentConfig(output=JsonOutput(schema=S, json_mode="strict",
   permissive=True, max_retries=2))`.
 - **`Agent.invoke(..., output_schema=, json_mode=, max_json_retries=)`**
-  M1-deprecated per-call kwargs — removed in lockstep with the
-  config-level fields.  The `Agent.run` shim continues to accept
-  them for Tier 1 byte-identity and translates internally.
+  per-call kwargs — pass a per-call `output=JsonOutput(...)` instead.
 - **`RunInput.function_kind/output_schema/json_mode/max_json_retries`**
   — dispatch routes via `Run.output.expects_tool_loop`.
 - **`Agent._RETRY_HINT_BASE` + `Agent._build_retry_hint`** — moved

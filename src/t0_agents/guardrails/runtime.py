@@ -1,6 +1,6 @@
 """Guardrail runtime: the ``GuardedToolProvider`` wrapper.
 
-When :class:`AgentConfig.guardrails` is non-empty, :meth:`Agent.run`
+When :class:`AgentConfig.guardrails` is non-empty, :meth:`Agent.invoke`
 constructs a :class:`GuardedToolProvider` around the real ``tool_provider``
 and forwards it to ``run_agent``.  The wrapper:
 
@@ -53,7 +53,7 @@ class GuardedToolProvider:
     are forwarded (with hook interception on ``call_tool``).
 
     The wrapper holds a reference to the per-run :class:`GuardrailContext`
-    and to the shared ``log_sink`` list that :meth:`Agent.run` attaches to
+    and to the shared ``log_sink`` list that :meth:`Agent.invoke` attaches to
     :attr:`AgentResult.guardrail_log` after the run completes.
     """
 

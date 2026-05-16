@@ -65,7 +65,7 @@ for byte-perfect TensorZero-pure behaviour.
 
 1. Building an `AgentConfig(function_kind="json", json_mode="strict",
    …)` against the same TensorZero function.
-2. Calling `agent.run(message)` twice in a row — `Agent` dispatches to
+2. Calling `agent.invoke(message)` twice in a row — `Agent` dispatches to
    `run_structured_inference()` because of `function_kind`.
 3. Inspecting the resulting `AgentResult` — `function_kind == "json"`,
    `parsed` carrying the JSON object, `response` set to the raw JSON
@@ -178,7 +178,7 @@ For `structured_agent.py`:
   returned — they target the same function and variant.
 - `turns: 1` confirms the JSON path is single-shot (no tool loop).
 - Each run prints a fresh `episode_id` because no `episode_id` is
-  threaded into `agent.run(...)`.
+  threaded into `agent.invoke(...)`.
 
 For `recovery_demo.py`:
 

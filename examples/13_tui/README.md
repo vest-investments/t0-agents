@@ -3,7 +3,7 @@
 Interactive streaming REPL for an MCP-backed agent, powered by the new
 `[cli]` extra. Demonstrates:
 
-- **Token-level streaming** — `Agent.stream()` deltas rendered inside a
+- **Token-level streaming** — `Run.events()` deltas rendered inside a
   Rich `Live` panel that refreshes 20×/second.
 - **Tool-call spinners** — `🔧 add(a=2,b=3)` turns into `✓ add(a=2,b=3)`
   (or `❌` on error) as the tool completes.

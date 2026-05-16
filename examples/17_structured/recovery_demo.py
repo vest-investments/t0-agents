@@ -2,7 +2,7 @@
 
 Runs four scripted scenarios against an in-process fake of
 :class:`AsyncTensorZeroGateway`, exercising each ``parse_strategy``
-outcome end-to-end through ``Agent.run`` — no docker, no provider
+outcome end-to-end through ``Agent.invoke`` — no docker, no provider
 credentials, completes in under a second.
 
 Scenarios:

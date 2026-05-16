@@ -1,6 +1,6 @@
 """Real-provider demo of the permissive parsing + retry recovery ladder.
 
-Companion to ``recovery_demo.py`` — same ``Agent.run`` invocation, but
+Companion to ``recovery_demo.py`` — same ``Agent.invoke`` invocation, but
 driven against a live TensorZero gateway and the real model behind it.
 The prompt is deliberately under-specified and ``json_mode`` is set to
 ``"off"`` per call, so the model is free to wrap its JSON in prose or

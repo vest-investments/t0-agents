@@ -20,7 +20,7 @@ __all__ = ["Guardrail", "GuardrailContext", "GuardrailLogEntry"]
 class GuardrailContext:
     """Mutable per-run state threaded through every guardrail hook.
 
-    A fresh ``GuardrailContext`` is constructed inside :meth:`Agent.run` and
+    A fresh ``GuardrailContext`` is constructed inside :meth:`Agent.invoke` and
     passed to every ``before_run`` / ``before_tool`` / ``after_tool`` /
     ``after_run`` call for that run.  Sharing one context across runs would
     leak counters (``tool_calls_made``) and cost accumulation between them,

@@ -51,7 +51,7 @@ async def test_agent_run_json_end_to_end(mcp_client: Client[Any]) -> None:
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run(
+        result = await agent.invoke(
             "Hi, I'm Sarah Johnson and you can reach me at sarah.j@example.com",
         )
 

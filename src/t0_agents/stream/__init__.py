@@ -1,4 +1,4 @@
-"""Streaming primitives for ``Agent.stream`` and the SSE / WS serving layer.
+"""Streaming primitives for :meth:`Run.events` and the SSE / WS serving layer.
 
 Public surface:
 

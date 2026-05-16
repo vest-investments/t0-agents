@@ -208,9 +208,9 @@ class OutputMode(Protocol[T_co]):
 
     - ``expects_tool_loop`` — ``True`` for :class:`ChatOutput` (the
       MCP tool loop runs); ``False`` for single-shot modes.
-    - ``supports_streaming`` — ``True`` if ``run.events()`` /
-      ``agent.stream()`` are legal; ``False`` raises
-      :class:`ConfigurationError` early when streaming is attempted.
+    - ``supports_streaming`` — ``True`` if ``run.events()`` is legal;
+      ``False`` raises :class:`ConfigurationError` early when streaming
+      is attempted.
 
     ``name`` is a short identifier used in error messages and
     diagnostics.

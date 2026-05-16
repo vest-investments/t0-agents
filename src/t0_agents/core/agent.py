@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal, TypeVar, cast, overload
 
 from fastmcp import Client
@@ -20,7 +19,6 @@ from t0_agents.core.output import (
     InferenceRequest,
     OutputMode,
 )
-from t0_agents.core.outputs.json import JsonOutput
 from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.types import (
     AgentResult,
@@ -29,7 +27,7 @@ from t0_agents.core.types import (
 )
 from t0_agents.mcp.loop import run_agent
 from t0_agents.memory.base import MemoryRecord, render_memory_summary
-from t0_agents.stream.events import AgentEvent, DoneEvent
+from t0_agents.stream.events import DoneEvent
 from t0_agents.stream.runner import StreamingAgentLoop
 
 logger = logging.getLogger(__name__)
@@ -191,7 +189,7 @@ class Agent:
         return None
 
     # ------------------------------------------------------------------
-    # v1.0 canonical entry point + deprecation shims
+    # v1.0 canonical entry point
     # ------------------------------------------------------------------
 
     @overload
@@ -293,117 +291,6 @@ class Agent:
             context=context,
             middleware=middleware,
         )
-
-    async def run(
-        self,
-        user_message: str,
-        *,
-        episode_id: str | None = None,
-        tags: dict[str, str] | None = None,
-        system_arguments: dict[str, Any] | None = None,
-        system: str | None = None,
-        output_schema: Mapping[str, Any] | None = None,
-        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
-        max_json_retries: int | None = None,
-    ) -> AgentResult[Any]:
-        """Deprecated v0.12 entry point — delegates to :meth:`invoke`.
-
-        Emits ``DeprecationWarning`` once per source line (Python's
-        default filter dedups by stacklevel).  Output stays byte-
-        identical to v0.12; the only stderr change is the warning.
-        Removed in v1.1.
-
-        Per-call JSON kwargs (``output_schema``, ``json_mode``,
-        ``max_json_retries``) are translated into a per-call
-        :class:`JsonOutput` before delegating, preserving Tier 1
-        byte-identity for v0.12 callers that used per-call overrides
-        on JSON agents.
-        """
-        warnings.warn(
-            "Agent.run() is deprecated and will be removed in t0-agents 1.1. "
-            "Use `await agent.invoke(msg, ...)` instead — Run is awaitable "
-            "and returns the same AgentResult.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        per_call_output: OutputMode[Any] | None = None
-        if (
-            output_schema is not None
-            or json_mode is not None
-            or max_json_retries is not None
-        ):
-            # Translate v0.12 per-call JSON overrides into a per-call
-            # JsonOutput so the canonical surface stays clean.  Inherit
-            # any non-overridden fields from the config-level mode via
-            # ``getattr`` so the inheritance is single-shot-mode-agnostic:
-            # ``JsonOutput``, ``StructuredOutput`` (and any third-party
-            # single-shot mode that shares the same field names) all
-            # contribute their config-level settings when the caller
-            # didn't override them per-call.
-            base = self._config.output
-            permissive: bool = getattr(base, "permissive", True)
-            retries: int = (
-                max_json_retries
-                if max_json_retries is not None
-                else getattr(base, "max_retries", 2)
-            )
-            mode: Literal["off", "on", "strict", "tool"] = (
-                json_mode
-                if json_mode is not None
-                else cast(
-                    Literal["off", "on", "strict", "tool"],
-                    getattr(base, "json_mode", "strict"),
-                )
-            )
-            schema: Mapping[str, Any] | None = (
-                output_schema
-                if output_schema is not None
-                else getattr(base, "schema", None)
-            )
-            per_call_output = JsonOutput(
-                schema=schema,
-                json_mode=mode,
-                permissive=permissive,
-                max_retries=retries,
-            )
-        return await self.invoke(
-            user_message,
-            output=per_call_output,
-            episode_id=episode_id,
-            tags=tags,
-            system_arguments=system_arguments,
-            system=system,
-        ).result()
-
-    async def stream(
-        self,
-        user_message: str,
-        *,
-        episode_id: str | None = None,
-        tags: dict[str, str] | None = None,
-        system_arguments: dict[str, Any] | None = None,
-        system: str | None = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """Deprecated v0.12 streaming entry point — delegates to :meth:`invoke`.
-
-        Emits ``DeprecationWarning`` once per source line.  Output
-        stays byte-identical to v0.12; the only stderr change is the
-        warning.  Removed in v1.1.
-        """
-        warnings.warn(
-            "Agent.stream() is deprecated and will be removed in t0-agents 1.1. "
-            "Use `async for ev in agent.invoke(msg, ...).events()` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        async for ev in self.invoke(
-            user_message,
-            episode_id=episode_id,
-            tags=tags,
-            system_arguments=system_arguments,
-            system=system,
-        ).events():
-            yield ev
 
     # ------------------------------------------------------------------
     # Pipeline driver + terminals (v1.0 orchestration)

@@ -71,7 +71,7 @@ async def test_require_approval_auto_decline_surfaces_to_llm() -> None:
             t0=t0,
             tool_provider=cast(ToolProvider, client),
         )
-        result = await agent.run("Add 2 and 3 using the add tool.")
+        result = await agent.invoke("Add 2 and 3 using the add tool.")
 
     assert result.response
     # Some rejection entry must appear in the log for the auto-declined call.
@@ -102,4 +102,4 @@ async def test_max_tool_calls_zero_aborts_through_live_loop() -> None:
             tool_provider=cast(ToolProvider, client),
         )
         with pytest.raises(GuardrailBlockedError, match="Tool-call cap"):
-            await agent.run("Use the add tool to compute 2 + 3.")
+            await agent.invoke("Use the add tool to compute 2 + 3.")

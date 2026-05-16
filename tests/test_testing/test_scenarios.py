@@ -33,7 +33,8 @@ class TestSingleToolHappy:
         gateway = scenarios.single_tool_happy("lookup", final_text="The answer is 42")
         tools = MockToolProvider({"lookup": lambda args: "42"})
 
-        result = await _agent(gateway, tools).run("what is it?")
+        agent = _agent(gateway, tools)
+        result = await agent.invoke("what is it?")
 
         assert_tool_called("lookup", tool_provider=tools)
         assert "42" in result.response
@@ -44,7 +45,8 @@ class TestSingleToolHappy:
         gateway = scenarios.single_tool_happy("ping")
         tools = MockToolProvider({"ping": lambda args: "pong"})
 
-        await _agent(gateway, tools).run("go")
+        agent = _agent(gateway, tools)
+        await agent.invoke("go")
 
         assert_tool_args_equal("ping", {}, tool_provider=tools)
 
@@ -60,7 +62,8 @@ class TestToolErrorRecovery:
 
         tools = MockToolProvider({"flaky": handler})
 
-        result = await _agent(gateway, tools).run("try it")
+        agent = _agent(gateway, tools)
+        result = await agent.invoke("try it")
 
         assert_tool_called("flaky", tool_provider=tools)
         assert "answering" in result.response.lower()
@@ -71,5 +74,6 @@ class TestMaxTurnsExhausted:
         gateway = scenarios.max_turns_exhausted("loop")
         tools = MockToolProvider({"loop": lambda args: "still running"})
 
+        agent = _agent(gateway, tools, max_turns=3)
         with pytest.raises(MaxTurnsExceededError):
-            await _agent(gateway, tools, max_turns=3).run("forever")
+            await agent.invoke("forever")

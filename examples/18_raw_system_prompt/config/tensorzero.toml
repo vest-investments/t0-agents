@@ -7,7 +7,7 @@
 # ``system_template``, which is the precondition for TensorZero to
 # accept ``input.system`` as a raw string (per the gateway API
 # reference).  That's what enables the ``system="..."`` kwarg on
-# ``Agent.run`` to flow through unchanged.
+# ``Agent.invoke`` to flow through unchanged.
 #
 # See: https://www.tensorzero.com/docs/gateway/api-reference
 

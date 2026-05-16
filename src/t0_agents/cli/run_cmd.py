@@ -98,11 +98,11 @@ async def _repl(agent: Agent, renderer: TUIRenderer, console: Console) -> None:
         if not user_message.strip():
             continue
         try:
-            stream = agent.stream(
+            run = agent.invoke(
                 user_message,
                 episode_id=episode_id,
             )
-            result = await renderer.consume(stream)
+            result = await renderer.consume(run.events())
         except T0AgentsFatalError as exc:
             console.print(f"[bold red]{type(exc).__name__}: {exc}[/bold red]")
             return

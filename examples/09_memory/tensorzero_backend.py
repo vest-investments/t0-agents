@@ -57,7 +57,7 @@ async def main() -> None:
         )
 
         print("=== Turn 1 (fresh episode) ===")
-        r1 = await agent.run(
+        r1 = await agent.invoke(
             "My favourite colour is teal. Please remember that.",
         )
         print(f"  episode_id: {r1.episode_id}")
@@ -71,7 +71,7 @@ async def main() -> None:
         await asyncio.sleep(1.5)
 
         print("=== Turn 2 (same episode) ===")
-        r2 = await agent.run(
+        r2 = await agent.invoke(
             "What is my favourite colour?",
             episode_id=r1.episode_id,
         )

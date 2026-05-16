@@ -7,7 +7,7 @@ The `Agent` class is the declarative front door of t0-agents. It holds your conf
 > (composable cross-cutting concerns), [Output modes](output-modes.md)
 > (polymorphic output shape), [Composition](composition.md) (nine
 > topology builders for multi-agent orchestration).  The legacy
-> `agent.run()` / `agent.stream()` shims keep working (one
+> `agent.invoke()` / `agent.invoke().events()` shims keep working (one
 > `DeprecationWarning` per source line); they're removed in v1.1.  The
 > v0.12 → v1.0 migration playbook lives in
 > [migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
@@ -86,7 +86,7 @@ async def main() -> None:
 
     async with await gateway as t0, mcp_client:
         agent = Agent(config, t0=t0, tool_provider=mcp_client)
-        result = await agent.run("What is the weather in Tokyo?")
+        result = await agent.invoke("What is the weather in Tokyo?")
 
     print(result.response)
     print(f"{result.turns} turn(s), episode {result.episode_id}")
@@ -95,7 +95,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-What just happened: `Agent.run` called `AsyncTensorZeroGateway.inference` with your prompt plus the tool schemas discovered from your FastMCP server, executed any tool calls the LLM produced, fed the results back, and looped until the model returned a tool-call-free response. The caller still owns the lifecycle of both the gateway and the MCP client — `Agent` never opens or closes either.
+What just happened: `Agent.invoke` called `AsyncTensorZeroGateway.inference` with your prompt plus the tool schemas discovered from your FastMCP server, executed any tool calls the LLM produced, fed the results back, and looped until the model returned a tool-call-free response. The caller still owns the lifecycle of both the gateway and the MCP client — `Agent` never opens or closes either.
 
 For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP server, README), see [`examples/08_agent_class/`](../examples/08_agent_class/).
 
@@ -111,9 +111,9 @@ For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP se
 | `MemoryProvider` | `AgentConfig.memory` | non-`None` | no load/save, no context injection |
 | `Guardrail` list | `AgentConfig.guardrails` | non-empty | provider passed through unwrapped, no cost tracking |
 | Sub-agents | `AgentConfig.sub_agents` | non-empty | no additional MCP tools registered |
-| Streaming | `Agent.stream()` call | chosen by caller | `.run()` returns a complete `AgentResult` |
+| Streaming | `Run.events()` call | chosen by caller | `.run()` returns a complete `AgentResult` |
 
-With every collaborator absent, `Agent.run(message)` is equivalent to calling `run_agent(t0, tool_provider, message, config.function_name, ...)` directly. Each collaborator is a non-invasive addition: you pay for what you use.
+With every collaborator absent, `Agent.invoke(message)` is equivalent to calling `run_agent(t0, tool_provider, message, config.function_name, ...)` directly. Each collaborator is a non-invasive addition: you pay for what you use.
 
 ### Lifecycle ownership
 
@@ -122,7 +122,7 @@ The caller opens and closes the gateway and the tool provider. `Agent` only hold
 ```python
 async with await AsyncTensorZeroGateway.build_http(...) as t0, Client(mcp) as tool_provider:
     agent = Agent(config, t0=t0, tool_provider=tool_provider)
-    result = await agent.run("…")
+    result = await agent.invoke("…")
 # t0 and tool_provider closed here; agent should no longer be used.
 ```
 
@@ -133,7 +133,7 @@ JSON-mode agents (`function_kind="json"`) never dispatch tools, so the `tool_pro
 ```python
 async with await AsyncTensorZeroGateway.build_http(...) as t0:
     agent = Agent(json_config, t0=t0)  # no tool_provider needed
-    result = await agent.run("…")
+    result = await agent.invoke("…")
 ```
 
 ### Concurrency
@@ -192,11 +192,11 @@ Frozen-shape dataclass (slots, no inheritance). Validation runs in `__post_init_
 | `memory_strategy` | `Literal["auto", "system_template", "prepended_message"]` | `"auto"` | Controls how loaded memory is injected into the prompt. See [memory.md](memory.md). |
 | `guardrails` | `list[Guardrail]` | `[]` | Declarative policy layer. See [guardrails.md](guardrails.md). |
 | `sub_agents` | `list[Agent]` | `[]` | Exposes nested agents as MCP tools on an orchestrator. See [multi-agent.md](multi-agent.md). |
-| `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function and routes `Agent.run` through `run_structured_inference`. See [structured-outputs.md](structured-outputs.md). |
+| `function_kind` | `Literal["chat", "json"]` | `"chat"` | Declares the TensorZero function type. `"chat"` (default) is byte-identical to v0.9.0; `"json"` marks a single-shot JSON function and routes `Agent.invoke` through `run_structured_inference`. See [structured-outputs.md](structured-outputs.md). |
 | `output_schema` | `Mapping[str, Any] \| Path \| None` | `None` | Optional dynamic schema for JSON functions. `Path` is read as JSON at construction time (relative paths resolve against `cwd`). Forbidden when `function_kind == "chat"`. |
 | `json_mode` | `Literal["off", "on", "strict", "tool"] \| None` | `None` | TensorZero `json_mode` override. Required when `function_kind == "json"`; forbidden when `function_kind == "chat"`. |
 | `permissive_json_parsing` | `bool` | `True` | When `True`, JSON runs whose `output.parsed` came back `None` fall through an in-Python recovery layer that scans the raw text for balanced `{}` / `[]` spans and fenced code blocks. `False` disables the in-Python recovery layer for byte-perfect TensorZero-pure behaviour. See [structured-outputs.md](structured-outputs.md). |
-| `max_json_retries` | `int` | `2` | Bounds the number of extra inferences the JSON path may emit when both TZ's parser and the permissive layer fail. `0` disables retries; negative values raise `ConfigurationError`. Per-call `Agent.run(max_json_retries=…)` overrides this for one call. See [structured-outputs.md](structured-outputs.md). |
+| `max_json_retries` | `int` | `2` | Bounds the number of extra inferences the JSON path may emit when both TZ's parser and the permissive layer fail. `0` disables retries; negative values raise `ConfigurationError`. Per-call `Agent.invoke(max_json_retries=…)` overrides this for one call. See [structured-outputs.md](structured-outputs.md). |
 
 ### `Agent`
 
@@ -310,7 +310,7 @@ Bridges a FastMCP elicitation handler (which must return inline) to an out-of-pr
 
 ### Easy — one-liner
 
-The quickstart above (and [`examples/08_agent_class/`](../examples/08_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.run(message)` call.
+The quickstart above (and [`examples/08_agent_class/`](../examples/08_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.invoke(message)` call.
 
 ### Intermediate — non-trivial config knobs
 
@@ -329,7 +329,7 @@ config = AgentConfig(
 agent = Agent(config, t0=t0, tool_provider=mcp_client)
 
 # Per-call override: merge a request-scoped tag on top of the configured ones.
-result = await agent.run(
+result = await agent.invoke(
     "Find papers on retrieval-augmented generation.",
     tags={"request_id": "req-42"},
 )
@@ -358,7 +358,7 @@ For real MCP deployments, `fastmcp.Client` satisfies the Protocol out of the box
 | `GuardrailBlockedError` | `T0AgentsFatalError` | A guardrail hard-aborted the run. Propagates past the loop's broad exception handler so it is never stringified into a tool result. See [guardrails.md](guardrails.md). |
 | `SubAgentError` | `T0AgentsError` | A delegated sub-agent raised a non-fatal exception. The original exception is preserved as `__cause__`. See [multi-agent.md](multi-agent.md). |
 
-Tool-call errors from inside the MCP server (wrong name, bad arguments, `ToolError`, `McpError`, unexpected exceptions) are never raised — they are stringified into a `ToolResult("ERROR: …")` payload so the LLM sees the failure and can retry on the next turn. That contract lives in `mcp/loop.py` and is preserved through `Agent.run`. Cross-cutting retry, logging, and feedback patterns are documented in [error-handling.md](error-handling.md).
+Tool-call errors from inside the MCP server (wrong name, bad arguments, `ToolError`, `McpError`, unexpected exceptions) are never raised — they are stringified into a `ToolResult("ERROR: …")` payload so the LLM sees the failure and can retry on the next turn. That contract lives in `mcp/loop.py` and is preserved through `Agent.invoke`. Cross-cutting retry, logging, and feedback patterns are documented in [error-handling.md](error-handling.md).
 
 ## Production considerations
 
@@ -372,9 +372,9 @@ Deployment topologies (single-process, per-surface servers, sticky-session load 
 
 ## Observability
 
-- **`episode_id`** correlates all turns of a single run in TensorZero's ClickHouse tables. Pass it to a follow-up `Agent.run(..., episode_id=result.episode_id)` to continue the episode.
+- **`episode_id`** correlates all turns of a single run in TensorZero's ClickHouse tables. Pass it to a follow-up `Agent.invoke(..., episode_id=result.episode_id)` to continue the episode.
 - **`inference_ids`** gives you one id per turn — the granularity feedback calls operate on. Call `t0.feedback(metric_name=..., inference_id=id, value=...)` directly to attach outcome signals.
-- **`tags`** attaches free-form metadata to every inference. Set them on `AgentConfig.tags` for deployment-wide values and on `Agent.run(tags=...)` / `Agent.stream(tags=...)` for per-call overrides; per-call keys win on collisions and configured tags are preserved otherwise.
+- **`tags`** attaches free-form metadata to every inference. Set them on `AgentConfig.tags` for deployment-wide values and on `Agent.invoke(tags=...)` / `Run.events(tags=...)` for per-call overrides; per-call keys win on collisions and configured tags are preserved otherwise.
 - **`namespace`** selects an experimentation block in `tensorzero.toml`. TensorZero also auto-stores it as the `tensorzero::namespace` tag, so you don't need to duplicate it in `tags` for cost accounting.
 - **`AgentResult.guardrail_log`** records every guardrail hook activation for audit and manual `t0.feedback(...)` emission. Empty when no guardrails are configured.
 
@@ -382,7 +382,7 @@ Cross-cutting observability patterns (dashboards, ClickHouse queries, PromQL) li
 
 ---
 
-Internally every `Agent.run()` / `Agent.stream()` call delegates to the `run_agent` loop in `t0_agents.mcp`. The next chapter opens that loop and walks through it step by step — tool discovery, inference, execution, error mapping — and names the design decisions the `Agent` class inherits. See [Concepts](concepts.md).
+Internally every `Agent.invoke()` / `Run.events()` call delegates to the `run_agent` loop in `t0_agents.mcp`. The next chapter opens that loop and walks through it step by step — tool discovery, inference, execution, error mapping — and names the design decisions the `Agent` class inherits. See [Concepts](concepts.md).
 
 ## External references
 

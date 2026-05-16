@@ -90,9 +90,9 @@ async def run_agent(
 | `parallel_tools` | `bool` | `False` | If `True`, dispatches tool calls concurrently via `asyncio.gather`. Otherwise sequential. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
-| `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.run` / `Agent.stream` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
+| `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.invoke` / `Run.events` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
 | `system` | `str \| None` | `None` | Raw system prompt forwarded to TensorZero as `input.system` (string form). Mutually exclusive with `system_arguments`. Only valid when the TensorZero function does **not** declare `schemas.system.path` — the gateway returns HTTP 400 otherwise. Escape hatch for prompt-as-a-service flows where the prompt body itself is runtime data; prefer `system_arguments` (with a configured template) for production code so ClickHouse captures structured prompt variables instead of opaque strings. See [Runtime system prompt: `system` vs `system_arguments`](#runtime-system-prompt-system-vs-system_arguments). |
-| `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.run` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
+| `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.invoke` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
 
 ### Returns
 
@@ -191,10 +191,10 @@ prompt *is* the user input.
 
 The two kwargs are mutually exclusive — passing both raises
 `ValueError`. The check is the same on every public surface
-(`run_agent`, `Agent.run`, `Agent.stream`, `run_structured_inference`,
+(`run_agent`, `Agent.invoke`, `Run.events`, `run_structured_inference`,
 `StreamingAgentLoop.stream`).
 
-When using `Agent.run` / `Agent.stream`, `system` is **also**
+When using `Agent.invoke` / `Run.events`, `system` is **also**
 incompatible with `memory_strategy="system_template"` (the strategy
 injects `memory_context` into `input.system` via the template, which
 requires a dict). Use `memory_strategy="prepended_message"` (the
@@ -204,14 +204,14 @@ alongside memory.
 ```python
 # Recommended: prompt structure lives in tensorzero.toml; only the
 # template variables flow at runtime.
-result = await agent.run(
+result = await agent.invoke(
     "where is the treasure?",
     system_arguments={"persona": "pirate"},
 )
 
 # Escape hatch: the prompt body itself is request data.  Only valid
 # when the TensorZero function has no system schema declared.
-result = await agent.run(
+result = await agent.invoke(
     "where is the treasure?",
     system="You are a pirate. Reply in exaggerated pirate slang.",
 )

@@ -39,7 +39,7 @@ async def test_agent_run_end_to_end(mcp_client: Client[Any]) -> None:
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run("Say hi briefly.")
+        result = await agent.invoke("Say hi briefly.")
 
     assert result.response
     assert result.episode_id is not None
@@ -60,8 +60,8 @@ async def test_agent_episode_continuation(mcp_client: Client[Any]) -> None:
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        r1 = await agent.run("Say hi briefly.")
-        r2 = await agent.run("What did I just say?", episode_id=r1.episode_id)
+        r1 = await agent.invoke("Say hi briefly.")
+        r2 = await agent.invoke("What did I just say?", episode_id=r1.episode_id)
 
     assert r1.episode_id is not None
     assert r2.episode_id is not None
@@ -91,7 +91,7 @@ async def test_agent_run_system_arguments_against_strict_schema(
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run(
+        result = await agent.invoke(
             "Say hi briefly.",
             system_arguments={"max_turns": 5},
         )
@@ -116,10 +116,10 @@ async def test_agent_stream_system_arguments_against_strict_schema(
             tool_provider=cast(ToolProvider, mcp_client),
         )
         terminal: DoneEvent | None = None
-        async for event in agent.stream(
+        async for event in agent.invoke(
             "Say hi briefly.",
             system_arguments={"max_turns": 5},
-        ):
+        ).events():
             if isinstance(event, DoneEvent):
                 terminal = event
                 break
@@ -151,7 +151,7 @@ async def test_agent_run_raw_system_string_against_schemaless_function(
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run(
+        result = await agent.invoke(
             "Say hi briefly.",
             system="Respond with at most five words.",
         )
@@ -176,10 +176,10 @@ async def test_agent_stream_raw_system_string_against_schemaless_function(
             tool_provider=cast(ToolProvider, mcp_client),
         )
         terminal: DoneEvent | None = None
-        async for event in agent.stream(
+        async for event in agent.invoke(
             "Say hi briefly.",
             system="Respond with at most five words.",
-        ):
+        ).events():
             if isinstance(event, DoneEvent):
                 terminal = event
                 break

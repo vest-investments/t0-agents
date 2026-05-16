@@ -152,7 +152,7 @@ def test_ws_streams_events_and_closes_cleanly(
 async def test_sse_tags_query_param_reaches_gateway(
     streaming_client_factory: Callable[[], FakeFastMCPClient],
 ) -> None:
-    """SSE ``?tags=<json>`` propagates to ``agent.stream(tags=...)``."""
+    """SSE ``?tags=<json>`` propagates to ``agent.invoke(tags=...).events()``."""
     fake_t0 = FakeT0(
         responses=[
             [

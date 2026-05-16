@@ -98,7 +98,7 @@ allowlist. The custom `enforce_email_allowlist` guardrail inspects
 `tool_call.arguments["to"]`, extracts the domain, records the attempt on
 `ctx.extra["email_attempts"]`, and raises `UnauthorizedRecipientError`
 (a `T0AgentsFatalError`). Because `after_run` fires in the `finally`
-branch of `Agent.run`, the audit summary is logged regardless of whether
+branch of `Agent.invoke`, the audit summary is logged regardless of whether
 the run completed.
 
 ## See also

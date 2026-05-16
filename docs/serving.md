@@ -1,6 +1,6 @@
 # Serving an Agent over HTTP
 
-You have built, composed, and instrumented an agent. `t0_agents.serve` is how you expose it to the outside world. The transport adds no new primitives — it drives the same `Agent.run()` and `Agent.stream()` you already know, behind four HTTP endpoints and an opt-in streaming surface.
+You have built, composed, and instrumented an agent. `t0_agents.serve` is how you expose it to the outside world. The transport adds no new primitives — it drives the same `Agent.invoke()` and `Run.events()` you already know, behind four HTTP endpoints and an opt-in streaming surface.
 
 `t0_agents.serve` wraps an [`Agent`](agent.md) in a [FastAPI](https://fastapi.tiangolo.com/)
 application. A single line — `app = create_app(agent, client_factory=...)` —
@@ -153,7 +153,7 @@ For `POST /chat` with a tagged payload, end to end:
 4. A fresh `Agent` (of the same class the caller passed, including
    subclasses) is built for this request with the merged config and the
    session client.
-5. `await agent.run(req.message, episode_id=req.episode_id)` drives the
+5. `await agent.invoke(req.message, episode_id=req.episode_id)` drives the
    non-streaming loop.
 6. The client is closed as the context exits. The response is
    serialised into [`ChatResponse`](#pydantic-models) — including the
@@ -717,7 +717,7 @@ middleware buckets per caller. See
 
 The library installs a `NullHandler` on `t0_agents.*` loggers;
 applications attach their own handler in the runner (for example
-`uvicorn --log-config logging.json`). Every `Agent.run` log record
+`uvicorn --log-config logging.json`). Every `Agent.invoke` log record
 carries `agent_name` / `function_name` metadata as `extra` fields.
 
 See [Production](production.md) for the library-wide production
@@ -767,7 +767,7 @@ queries and feedback-emission patterns.
   `EventSourceResponse` is used by `GET /chat/stream` when
   `streaming=True`.
 - **[TensorZero inference API](https://www.tensorzero.com/docs/gateway/api-reference#post-inference)**
-  — the request shape `Agent.run` issues through the gateway.
+  — the request shape `Agent.invoke` issues through the gateway.
 - **[TensorZero feedback API](https://www.tensorzero.com/docs/gateway/api-reference#post-feedback)**
   — what `POST /feedback` is a passthrough to.
 - **[FastMCP](https://gofastmcp.com/)** — `Client(mcp)` is the tool
@@ -777,7 +777,7 @@ queries and feedback-emission patterns.
 
 ---
 
-The FastAPI layer covered above is the right target for production deployments. For development, quick demos, and local exploration, the `[cli]` extra ships a `t0-agents` console script that wraps the same `create_app(...)` behind `t0-agents serve`, adds an interactive `run` REPL that consumes `Agent.stream()` directly, and an `info` command that introspects any loaded agent factory. That is the subject of the next chapter: [CLI](cli.md).
+The FastAPI layer covered above is the right target for production deployments. For development, quick demos, and local exploration, the `[cli]` extra ships a `t0-agents` console script that wraps the same `create_app(...)` behind `t0-agents serve`, adds an interactive `run` REPL that consumes `Run.events()` directly, and an `info` command that introspects any loaded agent factory. That is the subject of the next chapter: [CLI](cli.md).
 
 ## See also
 
@@ -786,12 +786,12 @@ The FastAPI layer covered above is the right target for production deployments. 
 - [`examples/12_streaming_http/`](../examples/12_streaming_http/) —
   runnable browser demo covering SSE, WebSocket, and live elicitation
   when `streaming=True`.
-- [Streaming](streaming.md) — `Agent.stream()` event model, SSE / WS
+- [Streaming](streaming.md) — `Run.events()` event model, SSE / WS
   frame shapes, `SessionProvider` recipes for streaming.
 - [Agent](agent.md) — the `Agent` class and its `AgentConfig` fields.
 - [Memory](memory.md) — cross-request memory via `AgentConfig.memory`.
 - [Guardrails](guardrails.md) — policy layer applied inside
-  `Agent.run`.
+  `Agent.invoke`.
 - [Multi-agent composition](multi-agent.md) — sub-agents registered
   via `AgentConfig.sub_agents`.
 - [CLI](cli.md) — `t0-agents serve` wraps `create_app` with

@@ -47,7 +47,7 @@ async def test_real_agent_against_provider() -> None:
         Client(mcp) as client,
     ):
         agent = build_agent(gw, cast(ToolProvider, client))
-        result = await agent.run("Say 'ready' and nothing else.")
+        result = await agent.invoke("Say 'ready' and nothing else.")
         assert result.response
         # Permissive check — exact wording is model-dependent.
         assert "ready" in result.response.lower()
@@ -61,7 +61,7 @@ async def test_real_agent_invokes_tool() -> None:
         Client(mcp) as client,
     ):
         agent = build_agent(gw, cast(ToolProvider, client))
-        result = await agent.run(
+        result = await agent.invoke(
             "Save a note titled 'hello' with body 'world', "
             "then confirm in one sentence."
         )

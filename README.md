@@ -89,7 +89,10 @@ async def main() -> None:
             t0=t0,
             tool_provider=client,
         )
-        result = await agent.run("What is 3 + 7?")
+        # `invoke` returns a Run handle.  Await it for the final
+        # AgentResult, or iterate `run.events()` to stream the loop
+        # live; `run.cancel()` stops it cooperatively.
+        result = await agent.invoke("What is 3 + 7?")
         print(result.response)     # e.g. "The answer is 10."
         print(result.episode_id)   # UUID — use it for follow-up feedback
         print(result.turns)        # inference turns consumed

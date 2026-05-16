@@ -11,7 +11,7 @@ CLI opens the context around the REPL / the uvicorn lifespan / the
 :class:`tensorzero.AsyncTensorZeroGateway` and the
 :class:`fastmcp.Client` that the :class:`Agent` delegates to.  Neither
 of those resources is usable without its ``async with`` entered —
-:meth:`Agent.stream` calls through to ``Client.list_tools`` which fails
+:meth:`Agent.invoke` calls through to ``Client.list_tools`` which fails
 without an open MCP session.
 
 Example user factory::

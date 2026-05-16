@@ -180,7 +180,7 @@ class TestAgent:
         client = FakeMCPClient()
         agent = _make_agent(t0=t0, client=client)
 
-        result = await agent.run("hello")
+        result = await agent.invoke("hello")
 
         assert result.response == "hi"
         assert result.episode_id == str(episode)
@@ -203,7 +203,7 @@ class TestAgent:
             tags={"env": "test"},
             namespace="staging",
         )
-        await agent.run("go")
+        await agent.invoke("go")
 
         call = t0.calls[0]
         assert call["dryrun"] is True
@@ -217,7 +217,7 @@ class TestAgent:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
 
-        await agent.run("go", episode_id=ep)
+        await agent.invoke("go", episode_id=ep)
         assert t0.calls[0]["episode_id"] == ep
 
     async def test_max_turns_exceeded_propagates(self) -> None:
@@ -238,7 +238,7 @@ class TestAgent:
         agent = _make_agent(t0=t0, client=client, max_turns=2)
 
         with pytest.raises(MaxTurnsExceededError) as exc_info:
-            await agent.run("loop forever")
+            await agent.invoke("loop forever")
         assert exc_info.value.max_turns == 2
 
     async def test_max_turns_exceeded_is_t0_agents_error(self) -> None:
@@ -248,14 +248,14 @@ class TestAgent:
     async def test_tags_forwarded(self) -> None:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"k": "v"})
-        await agent.run("go")
+        await agent.invoke("go")
         assert t0.calls[0]["tags"] == {"k": "v"}
 
     async def test_run_tags_override_merges_with_config(self) -> None:
         """Per-call tags shallow-merge on top of AgentConfig.tags."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"env": "prod", "app": "api"})
-        await agent.run("go", tags={"request_id": "r-1"})
+        await agent.invoke("go", tags={"request_id": "r-1"})
         assert t0.calls[0]["tags"] == {
             "env": "prod",
             "app": "api",
@@ -266,27 +266,27 @@ class TestAgent:
         """Override values replace base config values on matching keys."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"env": "prod"})
-        await agent.run("go", tags={"env": "staging"})
+        await agent.invoke("go", tags={"env": "staging"})
         assert t0.calls[0]["tags"] == {"env": "staging"}
 
     async def test_run_tags_none_preserves_config_only(self) -> None:
         """Default tags=None leaves config.tags untouched (byte-identity)."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"env": "prod"})
-        await agent.run("go")
+        await agent.invoke("go")
         assert t0.calls[0]["tags"] == {"env": "prod"}
 
     async def test_run_tags_empty_config_and_override_forwards_none(self) -> None:
         """No config.tags and no override → tags=None reaches run_agent."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)  # no tags in config
-        await agent.run("go")
+        await agent.invoke("go")
         assert t0.calls[0]["tags"] is None
 
     async def test_namespace_forwarded(self) -> None:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, namespace="prod")
-        await agent.run("go")
+        await agent.invoke("go")
         assert t0.calls[0]["namespace"] == "prod"
 
     async def test_run_system_arguments_forwarded(self) -> None:
@@ -297,28 +297,28 @@ class TestAgent:
         """
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
-        await agent.run("go", system_arguments={"max_turns": 5})
+        await agent.invoke("go", system_arguments={"max_turns": 5})
         assert t0.calls[0]["input"]["system"] == {"max_turns": 5}
 
     async def test_run_system_arguments_omitted_no_op(self) -> None:
         """Default system_arguments=None leaves the input.system key absent."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
-        await agent.run("go")
+        await agent.invoke("go")
         assert "system" not in t0.calls[0]["input"]
 
     async def test_run_system_arguments_empty_dict_no_op(self) -> None:
         """Empty system_arguments={} collapses to no `system` key (guard)."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
-        await agent.run("go", system_arguments={})
+        await agent.invoke("go", system_arguments={})
         assert "system" not in t0.calls[0]["input"]
 
     async def test_run_system_string_forwarded(self) -> None:
         """``system="..."`` reaches t0.inference as a raw string in input.system."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
-        await agent.run("go", system="Reply only in haiku.")
+        await agent.invoke("go", system="Reply only in haiku.")
         assert t0.calls[0]["input"]["system"] == "Reply only in haiku."
 
     async def test_run_system_and_system_arguments_rejected(self) -> None:
@@ -326,7 +326,7 @@ class TestAgent:
         t0 = FakeT0([])
         agent = _make_agent(t0=t0)
         with pytest.raises(ValueError, match="Pass either `system`"):
-            await agent.run(
+            await agent.invoke(
                 "go", system="raw", system_arguments={"foo": "bar"},
             )
         assert t0.calls == []
@@ -338,7 +338,7 @@ class TestAgent:
         with pytest.raises(
             ValueError, match="memory_strategy='system_template'"
         ):
-            await agent.run("go", system="raw")
+            await agent.invoke("go", system="raw")
         assert t0.calls == []
 
     async def test_run_system_with_prepended_message_strategy_ok(self) -> None:
@@ -348,7 +348,7 @@ class TestAgent:
         agent = _make_agent(
             t0=t0, memory_strategy="prepended_message",
         )
-        await agent.run("go", system="raw prompt")
+        await agent.invoke("go", system="raw prompt")
         assert t0.calls[0]["input"]["system"] == "raw prompt"
 
     async def test_none_timeout_uses_default(self) -> None:
@@ -367,7 +367,7 @@ class TestAgent:
             },
         )
         agent = _make_agent(t0=t0, client=client, tool_timeout=None)
-        await agent.run("go")
+        await agent.invoke("go")
         # FakeMCPClient records (name, args, timeout) per call_tool invocation.
         assert client.call_tool_invocations[0][2] == 30.0
 
@@ -387,7 +387,7 @@ class TestAgent:
             },
         )
         agent = _make_agent(t0=t0, client=client, tool_timeout=99.0)
-        await agent.run("go")
+        await agent.invoke("go")
         assert client.call_tool_invocations[0][2] == 99.0
 
     async def test_concurrent_runs_serial(self) -> None:
@@ -400,8 +400,8 @@ class TestAgent:
         ])
         agent = _make_agent(t0=t0)
 
-        r1 = await agent.run("one")
-        r2 = await agent.run("two")
+        r1 = await agent.invoke("one")
+        r2 = await agent.invoke("two")
 
         assert r1.response == "first"
         assert r2.response == "second"

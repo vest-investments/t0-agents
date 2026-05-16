@@ -20,7 +20,7 @@ The chat-path surface is byte-identical to v0.9.0; everything below is additive 
 > )
 > ```
 >
-> The 5 legacy v0.12 kwargs raise `TypeError` if passed.  Read-side `AgentResult.{parsed, parse_strategy, json_parse_attempts, function_kind, response}` properties continue to work (Tier 0 — preserved via `@property` aliases over the new `AgentResult[T].value` field).  The `Agent.run` shim still accepts per-call `agent.run(msg, output_schema=..., json_mode=..., max_json_retries=...)` for Tier 1 byte-identity and translates them into a synthesised per-call `JsonOutput`.
+> The 5 legacy v0.12 kwargs raise `TypeError` if passed.  Read-side `AgentResult.{parsed, parse_strategy, json_parse_attempts, function_kind, response}` properties continue to work (preserved via `@property` aliases over the new `AgentResult[T].value` field).  Per-call overrides live on the canonical surface: `agent.invoke(msg, output=JsonOutput(schema=..., json_mode=..., max_retries=...))`.
 >
 > **Canonical surface.**  [`docs/output-modes.md`](output-modes.md) is the v1.0 narrative for the full `OutputMode[T]` polymorphism (chat / JSON / Pydantic / tool-call / streaming + custom modes).  This page remains the reference for the legacy `run_structured_inference()` helper, the recovery ladder, and the `json_mode` provider matrix.  For the migration walkthrough see [`docs/migration-v0.12-to-v1.0.md`](migration-v0.12-to-v1.0.md).
 
@@ -162,7 +162,7 @@ This pattern keeps the contract local to your application: t0-agents guarantees 
 
 ## Structured `Agent`
 
-The high-level `Agent` wrapper recognises `function_kind="json"` and dispatches to `run_structured_inference()` automatically — no manual branching required. Build the same `AgentConfig` you would for a chat agent, set the two new fields, and call `agent.run(...)` exactly as before.
+The high-level `Agent` wrapper recognises `function_kind="json"` and dispatches to `run_structured_inference()` automatically — no manual branching required. Build the same `AgentConfig` you would for a chat agent, set the two new fields, and call `agent.invoke(...)` exactly as before.
 
 ```python
 from tensorzero import AsyncTensorZeroGateway
@@ -179,7 +179,7 @@ async with await AsyncTensorZeroGateway.build_http(
     gateway_url="http://localhost:3000",
 ) as t0:
     agent = Agent(config, t0=t0)
-    result = await agent.run("Hi, I'm Sarah at sarah@example.com")
+    result = await agent.invoke("Hi, I'm Sarah at sarah@example.com")
 
 # result.function_kind  — "json"
 # result.parsed         — {"name": "Sarah", "email": "sarah@example.com"}
@@ -192,33 +192,33 @@ JSON-mode agents are single-shot and never dispatch MCP tools, so the `Agent` co
 
 ### Per-call overrides
 
-Both `output_schema` and `json_mode` can be overridden for a single call. Per-call values win over the `AgentConfig` fields:
+Pass a per-call `output=JsonOutput(...)` to override schema, mode, retries, or permissive parsing for a single invocation. Per-call values win over the `AgentConfig` fields:
 
 ```python
-result = await agent.run(
+result = await agent.invoke(
     "...",
-    output_schema={"type": "object", "properties": {"email": {"type": "string"}}, ...},
-    json_mode="tool",  # overrides config's "strict"
+    output=JsonOutput(
+        schema={"type": "object", "properties": {"email": {"type": "string"}}, ...},
+        json_mode="tool",  # overrides config's "strict"
+    ),
 )
 ```
 
-Passing either kwarg on a chat-flavoured agent (`function_kind == "chat"`) raises `ConfigurationError` — the kwargs are specifically scoped to JSON functions.
+A chat-mode agent paired with a per-call single-shot `output=` (or vice versa) is rejected at `Agent.invoke()` with `ConfigurationError`.
 
-### How `Agent.run` dispatches
+### How `Agent.invoke` dispatches
 
 ```
-agent.run(message, ...)
+agent.invoke(message, ...) → Run[T]
         │
         ▼
-  function_kind == "json"?
+  output.expects_tool_loop?
         │
    ┌────┴────┐
    ▼         ▼
-  yes        no
+  False     True
    │         │
-   │         ├─► output_schema/json_mode set?  ─yes─► ConfigurationError
-   │         │
-   │         └─► run_agent (chat loop, byte-identical to v0.9.0)
+   │         └─► run_agent (chat loop)
    │
    └─► run_structured_inference (single-shot JSON inference)
 ```
@@ -236,7 +236,7 @@ JSON functions are single-shot — there is no tool loop, no parallel tool dispa
 | `MemoryProvider.load` | Yes when `episode_id` is set | `prepended_message` (default) prepends a summary; `system_template` threads into `input.system`. |
 | `MemoryProvider.save` | Yes | `MemoryRecord.agent_response` is the raw JSON string (i.e. `result.response`). |
 
-The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.run` raises `ConfigurationError` at runtime whenever a JSON-flavoured agent is configured with that strategy, regardless of whether a prior history exists. Use `"prepended_message"` (the default) or `"system_template"` instead.
+The `memory_strategy="messages"` mode is **not yet supported** for JSON functions — `Agent.invoke` raises `ConfigurationError` at runtime whenever a JSON-flavoured agent is configured with that strategy, regardless of whether a prior history exists. Use `"prepended_message"` (the default) or `"system_template"` instead.
 
 ## Robust JSON parsing
 
@@ -263,7 +263,7 @@ The layers are configured per-agent on `AgentConfig`:
 |-----------------------------|---------|----------------------------------------------------------------------------------|
 | `permissive_json_parsing`   | `True`  | Enables the in-Python recovery layer when TensorZero returned `parsed == None`. |
 | `max_json_retries`          | `2`     | Maximum number of *extra* inferences after the first.  `0` disables retries.    |
-| `Agent.run(max_json_retries=…)` | `None` | Per-call override.  `None` uses the config value, `0` disables retry for this call. |
+| `agent.invoke(msg, output=JsonOutput(max_retries=N))` | from config | Per-call override of the retry budget for one invocation. |
 
 Each call reports which layer produced the result on the new `AgentResult` fields:
 
@@ -279,7 +279,7 @@ Each call reports which layer produced the result on the new `AgentResult` field
 The model wraps its JSON in a fenced code block:
 
 ```python
-result = await agent.run("Tell me about Sarah Johnson, sarah.j@example.com.")
+result = await agent.invoke("Tell me about Sarah Johnson, sarah.j@example.com.")
 # Model returned: 'Sure! Here it is:\n```json\n{"name": "Sarah", "email": "sarah.j@example.com"}\n```'
 # TensorZero says: output.parsed == None
 # In-Python permissive layer extracts the JSON span and parses it.
@@ -303,7 +303,7 @@ config = AgentConfig(
     max_json_retries=2,                # the default
     permissive_json_parsing=True,      # the default
 )
-result = await agent.run("Tell me about a famous engineer.")
+result = await agent.invoke("Tell me about a famous engineer.")
 # Attempt 0: "Sorry, I cannot answer that."  → parsed=None, no recoverable JSON.
 # Attempt 1: another non-JSON apology         → still no JSON.
 # Attempt 2: '{"name": "...", "email": "..."}' → parsed.
@@ -381,7 +381,7 @@ agent = Agent(
     t0=cast(AsyncTensorZeroGateway, gateway),
 )
 
-result = await agent.run("Hi, I'm Ada at ada@example.com")
+result = await agent.invoke("Hi, I'm Ada at ada@example.com")
 ```
 
 Dict entries accept the keys `raw`, `parsed`, `episode_id`, `inference_id`, `usage`, `variant_name`, and `finish_reason` — all optional except `raw`.  Pre-built `JsonInferenceResponse` instances bypass the dict path entirely (useful when a test needs to pin a specific `Usage` shape or re-use the same response across attempts).
@@ -396,7 +396,7 @@ gateway = MockGateway.script_json([
     {"raw": '{"a": 2}', "parsed": {"a": 2}},           # attempt 1 — TZ parses cleanly
 ])
 
-result = await agent.run("hello")
+result = await agent.invoke("hello")
 # result.parse_strategy      == "retry"
 # result.json_parse_attempts == 1
 # len(result.inference_ids)  == 2
@@ -434,7 +434,7 @@ JSON functions sit at the intersection of three contracts (TensorZero, the model
 
 ### Configuration errors
 
-These combinations raise `ConfigurationError`.  Most are caught at `AgentConfig` construction; two are caught lazily on the first `Agent.run(...)` because the check requires async I/O.
+These combinations raise `ConfigurationError`.  Most are caught at `AgentConfig` construction; two are caught lazily on the first `Agent.invoke(...)` because the check requires async I/O.
 
 | Combination | Resolution |
 |-------------|------------|
@@ -444,18 +444,18 @@ These combinations raise `ConfigurationError`.  Most are caught at `AgentConfig`
 | `function_kind="json"` with `memory_strategy="messages"` | Use `"prepended_message"` (default) or `"system_template"` — JSON functions are single-shot and do not consume `prior_messages`. |
 | `max_json_retries < 0` | Use `0` to disable retry, positive values to allow it. |
 | Per-call `output_schema` / `json_mode` on a chat agent | Drop the kwargs — they are JSON-only. |
-| `function_kind="json"`, `json_mode="tool"`, **and** a tool provider that advertises tools | Switch to `"strict"`/`"on"`/`"off"`, or pass an empty tool provider (TZ guide §11.1 — `"tool"` mode cannot share a request with other tools). Verified on first `Agent.run(...)` because `list_tools()` is async. |
-| `Agent.stream(...)` on a JSON-flavoured agent | Use `Agent.run(...)`.  TensorZero does not emit `output.parsed` mid-stream (TZ guide §7.1, §11.3); the guard fires at first `__anext__` before any event is yielded. |
+| `function_kind="json"`, `json_mode="tool"`, **and** a tool provider that advertises tools | Switch to `"strict"`/`"on"`/`"off"`, or pass an empty tool provider (TZ guide §11.1 — `"tool"` mode cannot share a request with other tools). Verified on first `Agent.invoke(...)` because `list_tools()` is async. |
+| `run.events()` on a JSON-flavoured agent | Use `await agent.invoke(...)`.  TensorZero does not emit `output.parsed` mid-stream (TZ guide §7.1, §11.3); the guard fires at first `__anext__` before any event is yielded. |
 
 ### Why you cannot stream JSON functions
 
-TensorZero's streaming response for a JSON function only carries `raw` deltas — there is no `parsed` field per chunk and the gateway does not emit one on the terminal chunk either (TZ guide §7.1: *"The TensorZero Gateway does **not** provide a `parsed` field for streaming JSON inferences."*).  Surfacing this through `Agent.stream(...)` would yield a stream of `AgentEvent`s whose `parsed` is permanently `None`, which is a strictly worse contract than refusing.
+TensorZero's streaming response for a JSON function only carries `raw` deltas — there is no `parsed` field per chunk and the gateway does not emit one on the terminal chunk either (TZ guide §7.1: *"The TensorZero Gateway does **not** provide a `parsed` field for streaming JSON inferences."*).  Surfacing this through `Run.events(...)` would yield a stream of `AgentEvent`s whose `parsed` is permanently `None`, which is a strictly worse contract than refusing.
 
-If you have a workload that genuinely needs incremental JSON, the recommended pattern is to call `Agent.run(...)` and present the JSON object on the consumer side once it lands.  Reusing the [`permissive_parse`](#calling-permissive_parse-directly) layer over reassembled `raw` deltas is on the deferred-work list; the current refusal is by design.
+If you have a workload that genuinely needs incremental JSON, the recommended pattern is to call `Agent.invoke(...)` and present the JSON object on the consumer side once it lands.  Reusing the [`permissive_parse`](#calling-permissive_parse-directly) layer over reassembled `raw` deltas is on the deferred-work list; the current refusal is by design.
 
 ### Anthropic extended-thinking warning
 
-TensorZero guide §11.4 documents that Anthropic's extended-thinking models reject every `json_mode` value except `"strict"` (direct Anthropic) and `"off"`.  The Python SDK does not expose provider routing, so t0-agents cannot enforce this at runtime — but it surfaces a generic `WARNING` on the `t0_agents.core.agent` logger the first time `Agent.run(...)` fires on an agent configured with `json_mode in {"on", "tool"}`:
+TensorZero guide §11.4 documents that Anthropic's extended-thinking models reject every `json_mode` value except `"strict"` (direct Anthropic) and `"off"`.  The Python SDK does not expose provider routing, so t0-agents cannot enforce this at runtime — but it surfaces a generic `WARNING` on the `t0_agents.core.agent` logger the first time `Agent.invoke(...)` fires on an agent configured with `json_mode in {"on", "tool"}`:
 
 ```
 AgentConfig(json_mode='on') — Anthropic extended-thinking models reject this
@@ -497,7 +497,7 @@ config = AgentConfig(
 )
 ```
 
-When the run completes with `parsed is None` (every layer failed), the guardrail's `after_run` hook raises `GuardrailBlockedError` and the exception propagates out of `Agent.run(...)`.  Chat runs are a strict no-op: `parsed` is structurally absent on the chat path, so the guardrail short-circuits and never aborts a text run.  See [`docs/guardrails.md`](guardrails.md#require_parsed) for the full reference.
+When the run completes with `parsed is None` (every layer failed), the guardrail's `after_run` hook raises `GuardrailBlockedError` and the exception propagates out of `Agent.invoke(...)`.  Chat runs are a strict no-op: `parsed` is structurally absent on the chat path, so the guardrail short-circuits and never aborts a text run.  See [`docs/guardrails.md`](guardrails.md#require_parsed) for the full reference.
 
 ## `json_mode` provider matrix
 
@@ -520,7 +520,7 @@ See [the gateway guide §8](https://www.tensorzero.com/docs/gateway/generate-str
 
 Open follow-up candidates:
 
-- Streaming JSON with the permissive layer buffering reassembled `raw` deltas (today: `Agent.stream(...)` raises on JSON agents).
+- Streaming JSON with the permissive layer buffering reassembled `raw` deltas (today: `Run.events(...)` raises on JSON agents).
 - A `require_schema(model_or_schema)` built-in guardrail that runs Pydantic / jsonschema validation in the `after_run` hook.
 - An i18n / per-call hook for the corrective retry hint phrasing.
 
@@ -530,7 +530,7 @@ Open follow-up candidates:
 - [Concepts](concepts.md) — overview of TensorZero's chat-vs-json distinction.
 - [Guardrails](guardrails.md#require_parsed) — `require_parsed()` built-in for callers that want a hard abort on `parsed is None`.
 - [Memory](memory.md) — `MemoryRecord.agent_response` carries the raw JSON string for JSON runs; the inference id list captures every retry attempt.
-- [Streaming](streaming.md) — chat-only.  `Agent.stream(...)` on a JSON agent raises `ConfigurationError`; see [Why you cannot stream JSON functions](#why-you-cannot-stream-json-functions) above.
+- [Streaming](streaming.md) — chat-only.  `Run.events(...)` on a JSON agent raises `ConfigurationError`; see [Why you cannot stream JSON functions](#why-you-cannot-stream-json-functions) above.
 - [Testing](testing.md#testing-json-agents) — `MockGateway.script_json` / `canned_json` and the five JSON-aware assert helpers.
 - [`examples/17_structured/`](../examples/17_structured/) — five runnable demos: single-shot helper, `Agent` dispatch, local and real-provider recovery ladder, dynamic-schema NER.
 - [TensorZero structured-outputs guide](https://www.tensorzero.com/docs/gateway/generate-structured-outputs) — authoritative source for `output_schema`, `json_mode`, `response_format`, and provider quirks.

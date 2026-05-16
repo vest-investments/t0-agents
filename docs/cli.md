@@ -181,7 +181,7 @@ Why a factory rather than a bare `Agent` at module level? The
 and `AsyncTensorZeroGateway.build_http` returns an awaitable that must
 be `await`-ed. A zero-arg context-manager factory is the cleanest way
 for the CLI to bracket both lifecycles around the REPL, the uvicorn
-lifespan, or the `info` lookup. `Agent.stream()` ultimately calls
+lifespan, or the `info` lookup. `Run.events()` ultimately calls
 through to `Client.list_tools()`, which fails unless the session is
 open; trying to use a pre-built `Agent` would need the CLI to reach
 into private attributes to open the client.
@@ -225,7 +225,7 @@ t0-agents <cmd> <module:attr>
               │
               ├─ agent.warmup()             ← optional readiness probe
               │
-              └─ (run: renderer.consume(agent.stream(...)))
+              └─ (run: renderer.consume(agent.invoke(...).events()))
                  (serve: uvicorn.Server(create_app(agent, ...)).serve())
                  (info: print(agent.config))
         │
@@ -240,11 +240,11 @@ server lifetime and is torn down cleanly when the user presses
 
 ### Rendering pipeline
 
-`t0-agents run` turns the async stream from `Agent.stream()` into a
+`t0-agents run` turns the async stream from `Run.events()` into a
 live terminal frame:
 
 ```
-Agent.stream() ──▶ AsyncIterator[AgentEvent] ──▶ TUIRenderer.consume()
+Run.events() ──▶ AsyncIterator[AgentEvent] ──▶ TUIRenderer.consume()
                                                       │
                                                       └─ Rich Live + Panel
                                                           (refresh 20×/s)
@@ -460,7 +460,7 @@ resolves to. `Ctrl-D` or `Ctrl-C` at the `You:` prompt exits cleanly.
 uv run t0-agents run my_package.my_agent:assistant
 ```
 
-Each user turn drives one `agent.stream(...)` invocation. The renderer
+Each user turn drives one `agent.invoke(...).events()` invocation. The renderer
 folds the event stream into:
 
 - A pending / success / error status line per tool call
@@ -476,7 +476,7 @@ folds the event stream into:
 
 - **Episode continuity.** The REPL captures the last
   `DoneEvent.result.episode_id` and threads it into the next
-  `agent.stream(...)` call automatically, so memory state and
+  `agent.invoke(...).events()` call automatically, so memory state and
   TensorZero's episode tracking stay coherent across the whole session.
 
 - `--debug-log PATH` — write `DEBUG`-level logs from every
@@ -815,7 +815,7 @@ right surface:
 
 - **`t0-agents run` is interactive only.** There is no way to drive it
   from a pipe or a cron job because the REPL owns `stdin`. For
-  headless automation, call `Agent.run` or `Agent.stream` directly
+  headless automation, call `Agent.invoke` or `Run.events` directly
   from Python (see [Agent](agent.md)), or run `t0-agents serve` behind
   a request-driven caller.
 
@@ -846,7 +846,7 @@ story.
 
 - **Episode threading.** The REPL captures each turn's
   `DoneEvent.result.episode_id` and threads it into the next
-  `agent.stream(...)` call automatically. Memory load/save stays
+  `agent.invoke(...).events()` call automatically. Memory load/save stays
   keyed by the same episode; TensorZero sees one long trace per REPL
   session rather than one per user turn.
 
@@ -917,7 +917,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
   the flat-object + primitives + `enum` / `const` guarantees it relies
   on.
 - [TensorZero streaming](https://www.tensorzero.com/docs/gateway/guides/inference#streaming-inference)
-  — the stream the CLI drives through `Agent.stream()`. Stable
+  — the stream the CLI drives through `Run.events()`. Stable
   per-content-block ids are what the renderer uses to correlate
   deltas into coherent UI regions.
 

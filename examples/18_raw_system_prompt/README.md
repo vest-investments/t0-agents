@@ -70,8 +70,8 @@ The same `system="..."` kwarg is exposed on every public inference
 surface — pick whichever fits the call site:
 
 - `t0_agents.run_agent(..., system="...")` — low-level loop
-- `Agent.run(user_message, system="...")` — what this example uses
-- `Agent.stream(user_message, system="...")` — streaming variant
+- `Agent.invoke(user_message, system="...")` — what this example uses
+- `Run.events(user_message, system="...")` — streaming variant
 - `t0_agents.core.structured.run_structured_inference(..., system="...")` — JSON functions
 - `StreamingAgentLoop.stream(..., system="...")` — streaming runner
 

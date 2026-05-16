@@ -309,7 +309,7 @@ class TestParentEpisodeIdRefresh:
         monkeypatch.setattr("t0_agents.core.agent.run_agent", fake_run_agent)
 
         orch = self._orchestrator_with_sub_agent()
-        result = await orch.run("delegate", episode_id=None)
+        result = await orch.invoke("delegate", episode_id=None)
 
         assert observed == [str(self._EPISODE)]
         assert result.episode_id == str(self._EPISODE)
@@ -349,7 +349,7 @@ class TestParentEpisodeIdRefresh:
         monkeypatch.setattr("t0_agents.core.agent.run_agent", fake_run_agent)
 
         orch = self._orchestrator_with_sub_agent()
-        await orch.run("delegate", episode_id="ep-explicit")
+        await orch.invoke("delegate", episode_id="ep-explicit")
 
         # The refresh wrapper was not installed, so the ContextVar
         # remained at the initial bind ("ep-explicit") even after the
@@ -394,7 +394,7 @@ class TestParentEpisodeIdRefresh:
 
         orch = self._orchestrator_with_sub_agent()
         events: list[AgentEvent] = []
-        async for event in orch.stream("delegate", episode_id=None):
+        async for event in orch.invoke("delegate", episode_id=None).events():
             events.append(event)
 
         assert observed == [str(self._EPISODE)]
@@ -440,7 +440,7 @@ class TestParentEpisodeIdRefresh:
         )
 
         orch = self._orchestrator_with_sub_agent()
-        async for _ in orch.stream("delegate", episode_id="ep-explicit"):
+        async for _ in orch.invoke("delegate", episode_id="ep-explicit").events():
             pass
 
         assert observed == ["ep-explicit"]
@@ -692,7 +692,7 @@ class TestParentEpisodeIdEndToEnd:
         orch._t0 = cast(AsyncTensorZeroGateway, fake_t0)
 
         async with client:
-            result = await orch.run("go", episode_id=None)
+            result = await orch.invoke("go", episode_id=None)
 
         assert result.response == "final"
         assert result.episode_id == str(self._ORCH_EPISODE)

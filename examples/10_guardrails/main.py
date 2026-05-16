@@ -120,7 +120,7 @@ async def main() -> None:
         agent = Agent(config, t0=t0, tool_provider=client)
 
         try:
-            result = await agent.run(
+            result = await agent.invoke(
                 "Read my calendar. Then send a follow-up email to "
                 "alice@example.com with subject 'design review recap' and a "
                 "two-sentence summary. Do not attempt destructive database "

@@ -36,7 +36,7 @@ examples/12_streaming_http/run.sh
 │     │  per-connection Client(mcp, elicitation_handler=h)       │
 │     │  per-connection ElicitationForwarder (on_request=ws)     │
 │     ▼                                                          │
-│  Agent.stream(message, episode_id=...)                         │
+│  Run.events(message, episode_id=...)                         │
 │     │                                                          │
 │     │  stream=True                                             │
 │     ▼                                                          │

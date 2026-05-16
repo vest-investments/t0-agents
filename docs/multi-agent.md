@@ -187,7 +187,7 @@ id.
   binding; returns `None` if called outside a
   `bind_parent_episode_id` block.
 - `update_parent_episode_id(episode_id: str) -> None` — overwrites
-  the binding in place. Used by `Agent.run` / `Agent.stream` to
+  the binding in place. Used by `Agent.invoke` / `Run.events` to
   refresh the id once TensorZero allocates the real episode id on
   the first inference.
 

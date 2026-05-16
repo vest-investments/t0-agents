@@ -69,7 +69,7 @@ async def _run_once(mcp_client: Any, *, parallel_tools: bool) -> float:
         tool_provider=mcp_client,
     )
     start = time.monotonic()
-    result = await agent.run("Fetch a, b, c.")
+    result = await agent.invoke("Fetch a, b, c.")
     elapsed = time.monotonic() - start
     print(
         f"  parallel_tools={parallel_tools!s:<5} -> {elapsed:5.2f}s "

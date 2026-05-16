@@ -364,8 +364,7 @@ class Run(Generic[T]):
 
         For streaming-capable agents the first call to ``events()``
         selects the streaming drive mode.  For non-streaming output
-        modes the call raises :class:`ConfigurationError` mirroring
-        v0.12 :meth:`Agent.stream` semantics.
+        modes the call raises :class:`ConfigurationError`.
 
         Args:
             replay: When ``True``, yield from the earliest still-
@@ -387,8 +386,7 @@ class Run(Generic[T]):
         start_cursor = 0 if replay else self._buffer.total_pushed
         async for ev in self._buffer.iter_from(start_cursor=start_cursor):
             yield ev
-        # Buffer is now closed.  ``events()`` mirrors v0.12
-        # :meth:`Agent.stream` semantics: drive-time failures raise the
+        # Buffer is now closed.  Drive-time failures raise the
         # ORIGINAL exception (``GuardrailBlockedError``,
         # ``MaxTurnsExceededError``, ...) on the iterator — same
         # behaviour as :meth:`result`.  Cancellation surfaces as

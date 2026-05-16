@@ -6,7 +6,7 @@ class T0AgentsError(Exception):
 
 
 class T0AgentsFatalError(T0AgentsError):
-    """Marker class for exceptions that must abort an ``Agent.run()``.
+    """Marker class for exceptions that must abort an ``Agent.invoke()``.
 
     ``mcp/loop.py::_execute_single_tool_call`` re-raises this class before
     its broad ``except Exception`` belt-and-braces clause, so guardrail
@@ -28,7 +28,7 @@ class ConfigurationError(T0AgentsError):
 
 
 class GuardrailBlockedError(T0AgentsFatalError):
-    """Raised by a guardrail to hard-abort an ``Agent.run()``.
+    """Raised by a guardrail to hard-abort an ``Agent.invoke()``.
 
     Short-circuits any tool calls that were about to run in the current
     turn and propagates out of the agent loop so the caller sees a clear

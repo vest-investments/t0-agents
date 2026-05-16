@@ -278,7 +278,7 @@ class SessionFactory:
 
         Returns ``None`` when both inputs are empty so downstream
         observability receives the same payload it would for a plain
-        :meth:`Agent.run` call with no tags configured.
+        :meth:`Agent.invoke` call with no tags configured.
         """
         base = self._base_config.tags or {}
         extra = extra_tags or {}

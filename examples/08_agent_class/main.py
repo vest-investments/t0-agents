@@ -1,7 +1,7 @@
 """Agent class: declarative agent with AgentConfig.
 
 Demonstrates the Agent wrapper around run_agent. Configure once with
-AgentConfig, then call agent.run(message) with no boilerplate.
+AgentConfig, then call agent.invoke(message) with no boilerplate.
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
@@ -51,7 +51,7 @@ async def main() -> None:
             t0=t0,
             tool_provider=cast(ToolProvider, mcp_client),
         )
-        result = await agent.run("What is the weather in Tokyo?")
+        result = await agent.invoke("What is the weather in Tokyo?")
 
     # 4. Inspect the result.
     print(f"\nResponse: {result.response}")

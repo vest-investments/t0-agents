@@ -1,7 +1,7 @@
 # Run — the first-class invocation handle
 
 `Agent.invoke(user_message, ...)` returns a `Run[T]` — the v1.0 handle
-for one invocation of an agent.  Where `agent.run(...)` in v0.12
+for one invocation of an agent.  Where `agent.invoke(...)` in v0.12
 returned the terminal `AgentResult`, `agent.invoke(...)` returns the
 *invocation itself* — an object you can `await`, iterate, cancel,
 replay, fork, attach feedback to, and introspect for cost and usage.
@@ -22,11 +22,11 @@ opt-in for the patterns the simple `await` doesn't cover.
 
 ## Why `Run` exists
 
-v0.12 returned `AgentResult` directly from `agent.run(...)`:
+v0.12 returned `AgentResult` directly from `agent.invoke(...)`:
 
 ```python
 # v0.12
-result = await agent.run("hi")
+result = await agent.invoke("hi")
 print(result.response)
 ```
 
@@ -45,7 +45,7 @@ That shape has three structural limits:
   cancel when the first finishes" needs a uniform handle on each
   agent's invocation — exactly what `Run` provides.
 
-`Run[T]` solves all three, additively.  v0.12's `agent.run(...)` is
+`Run[T]` solves all three, additively.  v0.12's `agent.invoke(...)` is
 preserved as a deprecated shim that emits `DeprecationWarning` once
 per source line and delegates to `agent.invoke(...).result()` —
 existing code keeps working byte-identical until v1.1.
