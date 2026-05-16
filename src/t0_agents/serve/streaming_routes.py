@@ -232,8 +232,32 @@ def _to_sse_frame(event: AgentEvent) -> dict[str, str]:
 
 
 def _event_to_json(event: AgentEvent) -> dict[str, Any]:
-    """Convert an event dataclass to a JSON-serialisable dict."""
-    return dataclasses.asdict(event)
+    """Convert an event dataclass to a JSON-serialisable dict.
+
+    DoneEvent gets a custom shape: ``result`` is projected through the
+    v0.12 read-side keys (``response``, ``parsed``, ``parse_strategy``,
+    ``json_parse_attempts``, ``function_kind``) so downstream
+    HTTP / WS clients keep working byte-identical across the v1.0
+    refactor (chat byte-identity invariant §2.3).
+    """
+    payload = dataclasses.asdict(event)
+    if event.type == "done" and "result" in payload:
+        result_obj = event.result
+        payload["result"] = {
+            "response": result_obj.response,
+            "episode_id": result_obj.episode_id,
+            "inference_ids": list(result_obj.inference_ids),
+            "turns": result_obj.turns,
+            "response_source": result_obj.response_source,
+            "guardrail_log": [
+                dataclasses.asdict(entry) for entry in result_obj.guardrail_log
+            ],
+            "function_kind": result_obj.function_kind,
+            "parsed": result_obj.parsed,
+            "parse_strategy": result_obj.parse_strategy,
+            "json_parse_attempts": result_obj.json_parse_attempts,
+        }
+    return payload
 
 
 def _validate_ws_incoming(raw: Any) -> WSUserMessage | WSElicitationResponse:

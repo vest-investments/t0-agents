@@ -19,9 +19,11 @@ is **outermost** — it sees the run first on the way in and last on the
 way out.
 
 The terminal is selected by :class:`~t0_agents.core.agent.Agent` per
-``(function_kind, is_streaming)`` and corresponds to the inner
-inference loop (``run_agent`` for chat, ``StreamingAgentLoop.stream``
-for streaming chat, ``run_structured_inference`` for JSON).
+``(output.expects_tool_loop, is_streaming)`` and corresponds to the
+inner inference loop (``run_agent`` for chat,
+``StreamingAgentLoop.stream`` for streaming chat,
+``Agent._single_shot_terminal`` for every non-chat
+:class:`~t0_agents.core.output.OutputMode`).
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
     from tensorzero import AsyncTensorZeroGateway
 
     from t0_agents.core.config import AgentConfig
+    from t0_agents.core.output import OutputMode
     from t0_agents.core.run import Run
     from t0_agents.core.types import AgentResult, ToolProvider
 
@@ -44,7 +47,7 @@ if TYPE_CHECKING:
 # Public protocol
 # ---------------------------------------------------------------------------
 
-Next = Callable[["RunContext"], Awaitable["AgentResult"]]
+Next = Callable[["RunContext"], Awaitable["AgentResult[Any]"]]
 """Callable that advances the pipeline to the next layer.
 
 Each middleware receives one of these and must call it at most once.
@@ -84,7 +87,7 @@ class Middleware(Protocol):
         self,
         ctx: RunContext,
         next_: Next,
-    ) -> AgentResult: ...
+    ) -> AgentResult[Any]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +133,7 @@ class RunContext:
     tags: dict[str, str] | None
     system: str | None
     system_arguments: dict[str, Any] | None
-    output: Any  # OutputMode | None — wired in M3.
+    output: OutputMode[Any] | None
 
     # 2. Gateway + tools
     t0: AsyncTensorZeroGateway
@@ -142,7 +145,7 @@ class RunContext:
     extras: dict[str, Any] = field(default_factory=dict)
 
     # 4. Outputs
-    result: AgentResult | None = None
+    result: AgentResult[Any] | None = None
     run: Run[Any] | None = None
 
     def chain_on_inference(self, cb: OnInferenceCallback) -> None:
@@ -219,7 +222,7 @@ class _NextGuard:
         self._mw_name = mw_name
         self._called = False
 
-    async def __call__(self, ctx: RunContext) -> AgentResult:
+    async def __call__(self, ctx: RunContext) -> AgentResult[Any]:
         if self._called:
             raise T0AgentsError(
                 f"Middleware {self._mw_name!r} called next_() more than once. "
@@ -238,7 +241,12 @@ def build_pipeline(
 
     Composition order: ``middleware[0]`` becomes the **outermost** layer
     (entered first, exited last).  Each layer's ``next_`` is wrapped in
-    a :class:`_NextGuard` so double-calls raise a clear error.
+    a :class:`_NextGuard` so double-calls raise a clear error — *unless*
+    the middleware sets the class attribute ``allow_retry = True`` (per
+    :class:`~t0_agents.core.middleware.builtins.JsonRetryMiddleware`,
+    which inherently re-invokes the inner chain on parse failures).
+    Retry-enabled middlewares receive the raw inner :class:`Next`
+    without guarding.
 
     When ``middleware`` is empty the terminal is returned unchanged — a
     valid pipeline that just runs the inner inference loop with no
@@ -254,13 +262,17 @@ def build_pipeline(
 
     chain = terminal
     for mw in reversed(middleware):
-        guarded_next = _NextGuard(chain, mw.name)
+        inner_next: Next
+        if getattr(mw, "allow_retry", False):
+            inner_next = chain
+        else:
+            inner_next = _NextGuard(chain, mw.name)
 
         async def wrapped(
             ctx: RunContext,
             _mw: Middleware = mw,
-            _next: _NextGuard = guarded_next,
-        ) -> AgentResult:
+            _next: Next = inner_next,
+        ) -> AgentResult[Any]:
             return await _mw(ctx, _next)
 
         chain = wrapped
