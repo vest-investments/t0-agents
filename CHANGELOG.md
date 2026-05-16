@@ -140,15 +140,42 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   surface: lifecycle, two-channel consumption, replay / fork
   semantics, error model, `Run(agent=None)` mode for third-party
   Composer authors, runnable snippets.
+- **`docs/middleware.md`** — canonical guide for the Middleware
+  chain: protocol, `RunContext` mutability, default chain ordering,
+  the 6 built-ins, `middleware=[]` opt-out trade-off, custom
+  authoring walkthrough, `allow_retry = True` opt-in.
+- **`docs/output-modes.md`** — canonical guide for `OutputMode[T]`:
+  protocol, the 5 built-ins, per-call narrowing via
+  `Agent.invoke(output=...)` overloads, retry-and-recovery handshake,
+  `OutputDiagnostics.failure_detail`, third-party `YamlOutput`
+  walkthrough, the `[pydantic]` extra.
+- **`docs/composition.md`** — canonical guide for `Composer`: the 9
+  topology builders with runnable examples, narrow `Composer.invoke`
+  surface, cancellation cascade, `parent_episode_id` audit, saga
+  compensation contract, `retry_chain` exception asymmetry,
+  declarative-vs-explicit two-paths comparison, deferred
+  `CompositeRun` APIs.
+- **`docs/migration-v0.12-to-v1.0.md`** — two-tier migration
+  walkthrough (Tier 1 `Agent.run` / `.stream` deprecation, Tier 2 5
+  JSON config kwargs removal) with side-by-side snippets and
+  PaaS-specific notes.
 - **`docs/api-reference.md`** — new "Run", "Middleware", "RunUsage",
-  "Output modes", and "Composers" sections.
+  "Output modes", and "Composers" sections; cross-links to the
+  canonical narrative pages.
 - **`docs/guardrails.md`** — new section "Guardrails vs. TensorZero
   rate limits" distinguishing per-invocation guardrails from
   gateway-layer `rate_limiting.rules`.
 - **`docs/production.md`** — new section "Rate limits and quotas"
   with a cross-link to the guardrails section.
-- **`docs/agent.md`** rewritten preamble pointing at the four
+- **`docs/agent.md`** preamble rewritten pointing at the four
   canonical doc pages.
+- **`docs/index.md`** reading path extended with Run / Middleware /
+  Output Modes / Composition between Agent and Concepts.
+- **`docs/structured-outputs.md`** header cross-links to the new
+  `docs/output-modes.md` canonical narrative.
+- **`docs/multi-agent.md`** preview rewritten to a stable
+  cross-link at `docs/composition.md` (the orthogonal code-driven
+  path).
 
 ### Changed
 
@@ -267,12 +294,6 @@ v0.12 for the 17 chat-mode examples (`examples/00..16, 18`);
   `docs/internal/v1-refactor/logs/milestone-5-dev-log.md` §2; the
   related open questions Q4/Q5/Q6 are marked
   `Status: deferred` in `02-open-questions.md`.
-- **Doc pages deferred** — `docs/middleware.md`,
-  `docs/output-modes.md`, `docs/composition.md`, and
-  `docs/migration-v0.12-to-v1.0.md` will ship in a follow-up minor
-  (1.0.1 / 1.1) dedicated to public documentation polish.  The
-  M2/M3/M4 surfaces are reachable today via
-  `docs/api-reference.md`.
 
 ## [0.13.0] — Unreleased
 

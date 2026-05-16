@@ -22,21 +22,26 @@ The documentation is written as a progressive tour: start with [Getting Started]
 
 1. **[Getting Started](getting-started.md)** — install the library and run your first agent in under five minutes, using the low-level `run_agent` API directly.
 2. **[Agent](agent.md)** — meet the declarative `Agent` class, its `AgentConfig`, and the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`) the later chapters wire in.
-3. **[Concepts](concepts.md)** — pop the hood: what `Agent.run()` actually does, turn by turn, through the `run_agent` loop — tool discovery, inference, execution, error mapping, episode correlation.
-4. **[Elicitation](elicitation.md)** — once tools can call back to a human, the loop has to pause; here is how that round-trip works end-to-end without any change to `run_agent`.
-5. **[Memory](memory.md)** — the loop is stateless between runs; wire a `MemoryProvider` into `AgentConfig` to give it a past — ephemeral in-process, persistent SQLite, or a backend of your own.
-6. **[Guardrails](guardrails.md)** — the agent now remembers and is equipped with tools; guardrails decide what it may do with them (approval gates, cost caps, tool-call limits, deny-lists, custom policies).
-7. **[Streaming](streaming.md)** — until now you only saw the final response; switch to `Agent.stream()` to narrate the loop live with typed events, SSE, and WebSocket.
-8. **[Multi-Agent Composition](multi-agent.md)** — one agent is not always enough; let an orchestrator delegate to others via the agent-as-tool pattern, with episode correlation across the tree.
-9. **[Serving](serving.md)** — drop the whole stack (single agent or orchestrator, with or without memory and guardrails) behind `/chat`, `/chat/stream`, and `/chat/ws` with `create_app`.
-10. **[CLI](cli.md)** — the same stack, in a terminal, via the `t0-agents` console script: an interactive `run` REPL, a `serve` dev HTTP server, and `info` introspection.
-11. **[Testing](testing.md)** — keep every layer above from regressing with `MockGateway` and `MockToolProvider` for deterministic unit tests, and `EmbeddedGatewayHelper` for real-inference integration tests without Docker.
+3. **[Run](run.md)** — `agent.invoke(message)` returns a `Run[T]`: the first-class invocation handle.  Await it for the final `AgentResult`, iterate `events()` for live `AgentEvent`s, cancel, replay, fork, attach feedback.
+4. **[Middleware](middleware.md)** — what runs around every inference: memory hydration, guardrail gating, cost tracking, sub-agent orchestration, JSON retry.  Add your own via the Starlette-style chain.
+5. **[Output Modes](output-modes.md)** — the polymorphic surface for what an agent returns: chat strings, JSON dicts, Pydantic models, tool calls.  Custom modes for YAML / Instructor-style retry / SQLAlchemy plug in via the same protocol.
+6. **[Composition](composition.md)** — nine topology builders (`sequential`, `parallel`, `race`, `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`, `circuit_breaker`) compose Agents and other Composers into code-driven pipelines with cancellation cascade and `parent_episode_id` audit.
+7. **[Concepts](concepts.md)** — pop the hood: what `agent.invoke()` actually does, turn by turn, through the `run_agent` loop — tool discovery, inference, execution, error mapping, episode correlation.
+8. **[Elicitation](elicitation.md)** — once tools can call back to a human, the loop has to pause; here is how that round-trip works end-to-end without any change to `run_agent`.
+9. **[Memory](memory.md)** — the loop is stateless between runs; wire a `MemoryProvider` into `AgentConfig` to give it a past — ephemeral in-process, persistent SQLite, or a backend of your own.
+10. **[Guardrails](guardrails.md)** — the agent now remembers and is equipped with tools; guardrails decide what it may do with them (approval gates, cost caps, tool-call limits, deny-lists, custom policies).
+11. **[Streaming](streaming.md)** — until now you only saw the final response; iterate `agent.invoke(message).events()` to narrate the loop live with typed events, SSE, and WebSocket.
+12. **[Multi-Agent Composition](multi-agent.md)** — the declarative `AgentConfig.sub_agents=[...]` path (LLM-driven delegation) — orthogonal and complementary to [Composition](composition.md) above.
+13. **[Serving](serving.md)** — drop the whole stack (single agent or orchestrator, with or without memory and guardrails) behind `/chat`, `/chat/stream`, and `/chat/ws` with `create_app`.
+14. **[CLI](cli.md)** — the same stack, in a terminal, via the `t0-agents` console script: an interactive `run` REPL, a `serve` dev HTTP server, and `info` introspection.
+15. **[Testing](testing.md)** — keep every layer above from regressing with `MockGateway` and `MockToolProvider` for deterministic unit tests, and `EmbeddedGatewayHelper` for real-inference integration tests without Docker.
 
 ## Appendices
 
 Cross-cutting references that span every chapter above. Reach for them when you need detail on a specific axis instead of the narrative.
 
 - **[API Reference](api-reference.md)** — library-wide symbol index: public signatures and the shortest import path for every exported class, function, and Protocol.
+- **[Migration v0.12 → v1.0](migration-v0.12-to-v1.0.md)** — the two-tier upgrade walkthrough: `Agent.run` / `.stream` deprecation (Tier 1, removed in v1.1) and the 5 JSON config kwargs removed in v1.0 (Tier 2 — one-line migration per `AgentConfig`).
 - **[Error Handling](error-handling.md)** — tool-error semantics, recoverable inference retries, `ToolError` vs `McpError`, and the full exception taxonomy.
 - **[Observability](observability.md)** — episode and inference correlation, the `t0.feedback` API, structured logging conventions, and ClickHouse analytics hooks.
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.

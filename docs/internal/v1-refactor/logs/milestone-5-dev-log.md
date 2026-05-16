@@ -31,16 +31,23 @@ The shipped M5 surface is therefore:
 | Path | Lines | Purpose |
 |------|-------|---------|
 | `docs/run.md` | 340 | Canonical public guide for `Run[T]` — lifecycle, two-channel consumption, replay / fork, error model, `Run(agent=None)` mode for third-party Composer authors, two runnable snippets. |
+| `docs/middleware.md` | 475 | Canonical guide for the Middleware chain — protocol, RunContext mutability, default chain ordering, 6 built-ins, `middleware=[]` opt-out trade-off, custom authoring walkthrough, `allow_retry = True` opt-in. |
+| `docs/output-modes.md` | 504 | Canonical guide for `OutputMode[T]` — protocol, 5 built-ins, per-call narrowing via overloads, retry-and-recovery handshake, `OutputDiagnostics` anatomy, `[pydantic]` extra, custom `YamlOutput` walkthrough, wire-format preservation. |
+| `docs/composition.md` | 561 | Canonical guide for `Composer` — 9 topology builders with examples, narrow `Composer.invoke` surface, cancellation cascade, `parent_episode_id` audit, saga compensation contract, `retry_chain` exception asymmetry, declarative-vs-explicit two-paths comparison, deferred `CompositeRun` APIs. |
+| `docs/migration-v0.12-to-v1.0.md` | 408 | Two-tier migration walkthrough (Tier 1 `Agent.run` / `.stream` deprecation, Tier 2 5 JSON config kwargs removal) with side-by-side snippets, the `StructuredOutput` → `StructuredInferenceResult` rename note, and PaaS-specific notes. |
 | `docs/internal/v1-refactor/logs/milestone-5-dev-log.md` | this file | M5 closing log. |
 
 ### Files modified
 
-- `CHANGELOG.md` — four `## [1.0.0-M1..M4] — Unreleased` sub-sections (~420 lines) consolidated into a single `## [1.0.0] — Unreleased` with the canonical Keep-a-Changelog sub-sections (Added, Changed, Deprecated, Removed, Fixed) plus a Notes section that documents the dropped industrial scope and the deferred doc pages.
+- `CHANGELOG.md` — four `## [1.0.0-M1..M4] — Unreleased` sub-sections (~420 lines) consolidated into a single `## [1.0.0] — Unreleased` with the canonical Keep-a-Changelog sub-sections (Added, Changed, Deprecated, Removed, Fixed) plus a Notes section.  Notes only mentions the industrial-middleware deferral now — the doc-pages-deferred bullet was removed when the 4 docs landed in the same PR (commits 6–10).
 - `pyproject.toml` — `version = "0.12.0"` → `version = "1.0.0"`.
 - `uv.lock` — regenerated (one line change: `t0-agents 0.12.0 → 1.0.0`).
 - `src/t0_agents/core/agent.py` — `Agent.invoke` docstring slim from ~55 LoC to ~11 LoC (the verbose kwarg documentation moves to `docs/run.md`).  Net: 913 → 870 LoC.
 - `docs/agent.md` — replaced the four-paragraph v1.0 preview block (M1/M2/M3/M4 forward references) with a single one-paragraph pointer at the four canonical doc pages and the migration guide.  `Agent.run` mentions in the quickstart example unchanged for byte-identity.
-- `docs/api-reference.md` — `Run` section now opens with a "see `docs/run.md`" pointer.
+- `docs/api-reference.md` — `Run` section now opens with a "see `docs/run.md`" pointer; new "Output modes" section between Middleware and Composers (~70 lines) listing the protocol shape, 5 built-ins, helper types, per-call narrowing, and the `[pydantic]` extra — closes the M3 §4 carry-forward 5.
+- `docs/index.md` — reading path extended with four new steps between "Agent" and "Concepts" (Run → Middleware → Output Modes → Composition).  Migration guide added to the Appendices.
+- `docs/structured-outputs.md` — header cross-links to the new `docs/output-modes.md` canonical narrative + to `docs/migration-v0.12-to-v1.0.md`.  The page retains its role as legacy reference for `run_structured_inference()`, the recovery ladder, and the `json_mode` provider matrix.
+- `docs/multi-agent.md` — preview rewritten as a stable cross-link to `docs/composition.md` (instead of "ships in M5").  Frames the two paths as orthogonal and composable.
 - `docs/guardrails.md` — new section "Guardrails vs. TensorZero rate limits" distinguishing per-invocation guardrails (`max_cost`, `max_tool_calls`) from gateway-layer `rate_limiting.rules` (cross-request, 429-on-breach).  The original cherry-pick of C5 referenced `RedisRateLimitMiddleware` as a "third layer"; that paragraph was removed at cherry-pick time because the middleware is no longer part of v1.0.
 - `docs/production.md` — new section "Rate limits and quotas" with cross-link to the new guardrails section.  Same edit: the original C5 cherry-pick mentioned `RedisRateLimitMiddleware`; that paragraph was removed.
 - `examples/02_basic_agent/README.md` — directory drift fix (replaced `01_basic_agent` → `02_basic_agent`; removed stale forward-reference note).
@@ -112,65 +119,72 @@ approach.  The Q4/Q5/Q6 recommendations (base for pure-stdlib,
 `[ratelimit]` extra for Redis, Protocol-based middleware + `[otel]`
 extra adapter) carry forward as-is.
 
-### D-2.  Four new public docs and 4 examples deferred to a follow-up session.
+### D-2.  Four new public docs planned for a follow-up session, then folded back into the same PR.
 
 **What changed.**  Spec §4 lists `docs/middleware.md` (~450 lines),
 `docs/output-modes.md` (~400 lines), `docs/composition.md` (~500
 lines), `docs/migration-v0.12-to-v1.0.md` (~450 lines), plus 4 new
 examples (`examples/19_middleware_custom/`, `20_run_compose/`,
-`21_output_modes/`, `22_industrial_topology/`).  M5 ships only
-`docs/run.md` (`docs/middleware.md` etc. are deferred to the next
-session).  Examples 19–22 are also deferred — `19_middleware_custom`
-and `22_industrial_topology` were keyed off the dropped industrial
-bundle anyway, so they would need rescoping; `20_run_compose` and
-`21_output_modes` are pure demos of `Run` / `OutputMode` that fit
-naturally with the doc-polish session.
+`21_output_modes/`, `22_industrial_topology/`).  At first the user
+asked to defer all 4 docs to a separate session.  After the
+housekeeping commits landed (1..5), the user re-evaluated and
+decided to fold the 4 docs into the **same PR** rather than wait —
+commits 6..10 of this PR ship them.
 
-**Why.**  The user (interview 2026-05-16, second round) decided to
-treat documentation as a dedicated session — "después de M5 voy a
-empezar otra sesión para pulir y documentar mejor lo de los
-milestones anteriores".  Rationale: each doc is ~400-500 lines of
-careful prose drawing on the dev-log + the CHANGELOG + the example
-code; rushing it inside M5 (already large) risks shallow content.
-Better to ship 1.0.0 with the API surface + the consolidated
-CHANGELOG + the `Run` page already promoted, then iterate on docs
-under 1.0.1 / 1.1.
+**Why.**  Twofold:
+1. The deferred docs all draw from sources already at hand
+   (CHANGELOG `## [1.0.0]`, the four M1–M4 dev-logs, the live code);
+   no fresh exploration was needed, so producing them inside M5 was
+   cheaper than originally feared.
+2. Cross-links in `docs/run.md` and `docs/agent.md` already pointed
+   at the deferred docs.  Shipping in two PRs would leave broken
+   cross-links in 1.0.0 until 1.0.1; shipping in one PR closes the
+   loop cleanly.
 
-**Impact on subsequent sessions.**  See §4 carry-forward — the next
-session has a tight checklist of what each deferred doc must cover.
-Cross-links to the deferred docs already exist in `docs/run.md` and
-`docs/agent.md` (pointers that resolve once the targets ship).
+Examples 19–22 from the original spec **are still deferred** —
+`19_middleware_custom` and `22_industrial_topology` were keyed off
+the dropped industrial bundle (D-1) and would need rescoping;
+`20_run_compose` and `21_output_modes` are pure API demos that the
+4 new docs already cover with inline snippets.  They can land as
+1.0.1 / 1.1 if a concrete need surfaces.
 
-### D-3.  `docs/api-reference.md` Output Modes section deferred.
+**Impact on subsequent sessions.**  None for docs.  See §4
+carry-forward for the residual examples item.
 
-**What changed.**  M3 dev-log §4 carry-forward 5 said `docs/api-reference.md`
-should add a dedicated "Output modes" section by M5.  Deferred
-because the natural place for output-mode narrative is
-`docs/output-modes.md` (D-2 above), and dropping a stub-only
-api-reference section ahead of the dedicated doc creates an
-out-of-order cross-link pattern.  The api-reference Output-modes
-section will ship in the next session alongside `docs/output-modes.md`.
+### D-3.  `docs/api-reference.md` Output Modes section shipped at C8.
 
-**Impact on subsequent sessions.**  Captured in §4 carry-forward.
+**What changed.**  M3 dev-log §4 carry-forward 5 said
+`docs/api-reference.md` should add a dedicated "Output modes" section
+by M5.  Initially deferred with the rest of the docs (D-2 above);
+then folded into commit C8 alongside `docs/output-modes.md`.  The
+section sits between Middleware and Composers, lists the protocol
+shape, the 5 built-ins, the helper types, the per-call narrowing,
+and the `[pydantic]` extra; cross-links to `docs/output-modes.md` as
+narrative.
 
-### D-4.  Migration guide (`docs/migration-v0.12-to-v1.0.md`) deferred.
+**Impact on subsequent sessions.**  None.
+
+### D-4.  Migration guide (`docs/migration-v0.12-to-v1.0.md`) shipped at C6.
 
 **What changed.**  Spec §4 lists the full migration guide as part of
-M5.  Deferred to the next session.  This is the most user-facing of
-the deferred docs because Tier 1 (`Agent.run` deprecation) and Tier 2
-(5 JSON config kwargs removed) are direct breakage signals.
+M5.  Initially deferred with the rest of the docs (D-2 above); then
+folded into commit C6.  The guide ships at 408 lines with the 8
+sections the spec sketched + a PaaS-specific notes section + the
+`StructuredOutput` → `StructuredInferenceResult` rename note.
 
-**Why this is OK in the interim.**  The CHANGELOG `## [1.0.0]` entry
-already documents Tier 1 + Tier 2 with explicit migration recipes
-(under "Deprecated" and "Removed").  The dev-logs of M1 (Tier 1 shim
-mechanics) and M3 (Tier 2 cross-field validation collapse + per-call
-JSON translation in the shim) cover the implementation details.  Any
-user upgrading from v0.12 to v1.0 today has enough information to
-migrate via the CHANGELOG; the standalone migration guide is a
-better-curated walkthrough but not a blocker.
+**Why this matters more than the other deferrals would have.**
+Tier 1 (`Agent.run` deprecation) and Tier 2 (5 JSON config kwargs
+removed) are direct breakage signals for existing v0.12 callers.
+The CHANGELOG `## [1.0.0]` Deprecated + Removed sections already
+covered the mechanical migration steps; the migration guide turns
+those into a structured walkthrough with side-by-side snippets,
+the `StructuredOutput` → `StructuredInferenceResult` rename
+caveat (M3 D-1), the deprecation timeline, and PaaS-specific
+notes confirming the PaaS plan needs at most one-line rewrites
+per SSE handler.
 
-**Impact.**  The next session captures this as the highest-priority
-carry-forward.
+**Impact.**  None for subsequent sessions; the guide ships in this
+PR.
 
 ### D-5.  Long `Agent.invoke` docstring relocation kept partial.
 
@@ -241,65 +255,20 @@ work + cherry-pick + 1 file rewrite (CHANGELOG) + 1 file edit
 
 ## §4 — Carry-forward notes for subsequent sessions
 
-### For the next session (public-docs polish)
+### For a future minor (post-1.0) — residual examples
 
-The dedicated docs session inherits a tight checklist from M1–M4
-dev-logs that M5 deferred (D-2 above).  Priority order:
+The 8-item docs checklist that opened this section in the first draft
+of this dev-log was completed in commits 6–10 of the same PR (D-2
+above; see CHANGELOG `## [1.0.0]` → **Added → Documentation**).
+What remains as a future-work item:
 
-1. **`docs/migration-v0.12-to-v1.0.md`** (highest priority — user-facing breakage).  The CHANGELOG `## [1.0.0]` entry is the source of truth for content; expand into a structured walkthrough with side-by-side `v0.12 → v1.0` snippets.  Required sections (per `milestones/milestone-5-industrial-polish.md` §4 sketch):
-   1. What changes (TL;DR table — Tier 0 / Tier 1 / Tier 2).
-   2. Migrating `Agent.run()` → `await agent.invoke()` (include `RunFailedError` defensive fallback note from M1 D-3).
-   3. Migrating `Agent.stream()` → `agent.invoke().events()`.
-   4. Migrating JSON config kwargs → `output=JsonOutput(...)` (full mapping table; note the `StructuredOutput` → `StructuredInferenceResult` rename per M3 D-1).
-   5. What's the same (`AgentResult.response/.parsed/.parse_strategy/.json_parse_attempts/.function_kind`).
-   6. What's new and opt-in (Middleware, Composers, Run replay/fork; saga compensation idempotency caveat per M4 §4 carry-forward 5).
-   7. Deprecation timeline (v1.0 warns Tier 1; v1.1 removes).
-   8. PaaS-specific notes (PaaS plan at `~/Descargas/prompt-as-a-service-mvp-plan-with-t0-agents.md` already uses `agent.invoke(...).result()` — minimal rewriting needed).
-
-2. **`docs/middleware.md`** (~450 lines).  Promote M2 CHANGELOG content
-   into a dedicated page.  Required content (per M2 dev-log §4
-   carry-forward 1):
-   - The Starlette-style protocol + `RunContext`.
-   - The default chain ordering: `Memory → SubAgents → Guardrails → CostTracking → JsonRetry` (cite M2 D-1: this preserves the v0.12 invariant "guardrails see sub-agent delegations").
-   - The 6 built-in middlewares — table + one-liner each.
-   - The `middleware=[]` opt-out — explicitly note `Run.cost()` / `Run.usage()` stop working (M2 D-4).
-   - Custom middleware authoring — PII redactor walkthrough.
-   - The `allow_retry = True` opt-in for retry-style middlewares (M3 D-3).
-
-3. **`docs/output-modes.md`** (~400 lines).  Per M3 §4 carry-forward 1:
-   - The protocol (`expects_tool_loop` / `supports_streaming` / `shape_inference` / `materialize` / `recover`).
-   - The 5 built-ins with construction examples.
-   - The retry-and-recovery mechanism (`OutputDiagnostics.parse_strategy`, `JsonRetryMiddleware`, `Recovery` types).
-   - Third-party authoring: YAML extraction, Instructor-style retry, SQLAlchemy row materialisation as concrete examples.
-   - The `[pydantic]` extra for `StructuredOutput`.
-   - The `failure_detail` field on `OutputDiagnostics` (M3 D-2).
-   - The `_event_to_json` wire-format preservation (M3 D-5) — pointer only.
-
-4. **`docs/composition.md`** (~500 lines).  Per M4 §4 carry-forward 1:
-   - The `Composable[Input, T]` protocol.
-   - The 9 topologies with runnable examples.
-   - The narrow `Composer.invoke(...)` surface (M4 D-3): only `eager`, `context`, `cancel_timeout` are accepted.
-   - Cancellation cascade — 30s default (Q3 resolution).
-   - Audit via `parent_episode_id` + a ClickHouse `WHERE` example.
-   - Saga: compensation idempotent (Q10), same input as paired action (M4 D-4), raising compensate logs WARN without blocking cascade.
-   - `retry_chain` exception asymmetry (M4 D-5).
-   - Two-paths comparison: declarative `AgentConfig.sub_agents=` vs. explicit topology factories.
-   - `CompositeRun.feedback/.replay/.fork` deferred (M4 D-2).
-
-5. **`docs/structured-outputs.md` migration block** (per M3 §4
-   carry-forward 2).  Add a v0.12 → v1.0 migration section at the top
-   with cross-link to `docs/output-modes.md`.
-
-6. **`docs/api-reference.md` Output modes section** (per M3 §4
-   carry-forward 5).  Promote the M3 preview block at the top of the
-   page into a proper section beneath the existing Composers section.
-
-7. **`docs/structured-outputs.md`** (the existing legacy reference)
-   should pick up cross-links to the new pages so the legacy page
-   doesn't drift.
-
-8. **`docs/multi-agent.md`** — cross-link to `docs/composition.md` for
-   the M4 code-driven path (per M4 dev-log §1).
+- **Examples 19–22.**  The spec listed
+  `examples/19_middleware_custom/`, `20_run_compose/`,
+  `21_output_modes/`, `22_industrial_topology/` as runnable demos.
+  19 and 22 were keyed off the dropped industrial bundle and would
+  need rescoping; 20 and 21 cover material that the 4 new doc pages
+  already address with inline snippets.  Ship if a real consumer
+  asks for runnable demos; otherwise leave deferred.
 
 ### For a hypothetical industrial-middleware minor (post-1.0)
 
@@ -317,11 +286,10 @@ the starting design.
 
 ### For users upgrading from v0.12 to v1.0 today
 
-Until `docs/migration-v0.12-to-v1.0.md` ships, point them at:
-- `CHANGELOG.md` `## [1.0.0]` Deprecated + Removed sections for the breakage signals.
-- `docs/run.md` for the `Agent.run` → `agent.invoke` migration shape.
-- `docs/internal/v1-refactor/logs/milestone-{1,3}-dev-log.md` for the
-  shim mechanics (M1) and the per-call JSON kwarg translation (M3).
+Point them at [`docs/migration-v0.12-to-v1.0.md`](../../../migration-v0.12-to-v1.0.md)
+— the single canonical source for the two-tier migration walkthrough
+(Tier 1 entry-point deprecation, Tier 2 JSON kwargs removal,
+`StructuredOutput` rename, PaaS-specific notes).
 
 ---
 
@@ -337,7 +305,7 @@ Commands run and outcomes:
 | `git diff origin/main src/t0_agents/mcp/` | **empty** — invariant §2.1 holds across the whole roadmap. |
 | `grep -rE "BulkheadMiddleware\|CircuitBreakerMiddleware\|TenantIsolationMiddleware\|PiiRedactorMiddleware\|RedisRateLimitMiddleware\|OTelTracerAdapter" src/ docs/ examples/ CHANGELOG.md` | **0 matches in user-facing surfaces**; remaining mentions are in `docs/internal/v1-refactor/{00-integration-contract,02-open-questions}.md` (planning docs) and this dev-log (intentional). |
 | `uv run python -c "from importlib.metadata import version; print(version('t0-agents'))"` | **`1.0.0`** — version bump landed in `pyproject.toml` and `uv.lock`. |
-| `git log --oneline origin/main..HEAD` | **5 commits exactly** — `chore: pre-public polish`, `docs: docs/run.md + slim`, `docs: CHANGELOG consolidation`, `chore: bump 1.0.0`, `docs: dev-log + defer Q4/Q5/Q6`. |
+| `git log --oneline origin/main..HEAD` | **10 commits exactly** — 5 housekeeping (`chore: pre-public polish`, `docs: docs/run.md + slim`, `docs: CHANGELOG consolidation`, `chore: bump 1.0.0`, `docs: dev-log + defer Q4/Q5/Q6`) + 5 docs (`docs: migration guide`, `docs: middleware.md`, `docs: output-modes.md + api-ref section`, `docs: composition.md + multi-agent x-link`, `docs: index reading path + reflect shipped`). |
 
 User-side verification (pending — deferred to user):
 
@@ -356,9 +324,10 @@ Numbers for the regression baseline:
 
 - Pre-M5 non-integration test count: 886.
 - Post-M5 non-integration test count: 887 (+1 — `test_429_rate_limit_re_raised`).
-- New source code in M5: 0 LoC (`docs/run.md` is documentation).
+- New source code in M5: 0 LoC.
 - Removed source code in M5: ~45 LoC of `Agent.invoke` docstring (moved to `docs/run.md`).
 - `core/agent.py`: 913 → 870 LoC (post-docstring-slim).
+- New public documentation in M5: ~2 280 LoC across `docs/run.md` (340), `docs/middleware.md` (475), `docs/output-modes.md` (504), `docs/composition.md` (561), `docs/migration-v0.12-to-v1.0.md` (408) plus ~70 LoC api-reference Output Modes section and edits across `docs/{index,structured-outputs,multi-agent,guardrails,production,agent}.md`.
 - Repo size change: ~+340 lines of docs (`docs/run.md`), ~+150 lines of docs (CHANGELOG `## [1.0.0]` consolidated minus the 4 sub-sections that were ~420 lines), ~+50 lines of polish edits across `docs/{guardrails,production,agent,api-reference}.md`, ~+1 test.  Net: roughly neutral on src/ + ~+400 lines of docs.
 
 When the user runs the integration suite + byte-identity smoke and
