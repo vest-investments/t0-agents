@@ -4,13 +4,17 @@ Each middleware reproduces a slice of behaviour that v0.12's
 ``Agent._execute_*_legacy`` orchestrated inline.  The default chain
 materialised by :meth:`AgentConfig.__post_init__` is::
 
-    Memory → Guardrails → CostTracking → SubAgents → JsonRetry → terminal
+    Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
 
 `middleware[0]` (``Memory``) is outermost; ``JsonRetry`` is innermost
 right before the terminal.  Each layer's responsibility:
 
 - :class:`MemoryMiddleware` — load prior records, inject summary or
   ``prior_messages``, save the new record in ``finally``.
+- :class:`SubAgentMiddleware` — wrap ``tool_provider`` with
+  :class:`_OrchestrationToolProvider`, bind ``parent_episode_id``
+  ContextVar, refresh it on the first inference when the orchestrator
+  did not pre-allocate an episode.
 - :class:`GuardrailsMiddleware` — wrap ``tool_provider`` with
   :class:`GuardedToolProvider`, fire ``before_run``/``after_run`` hooks
   (with ``T0AgentsFatalError`` propagation), populate
@@ -20,13 +24,12 @@ right before the terminal.  Each layer's responsibility:
 - :class:`CostTrackingMiddleware` — always-on accumulator independent of
   guardrails; writes :class:`RunUsage` totals onto the live
   :class:`Run` so :meth:`Run.cost` / :meth:`Run.usage` read live data.
-- :class:`SubAgentMiddleware` — wrap ``tool_provider`` with
-  :class:`_OrchestrationToolProvider`, bind ``parent_episode_id``
-  ContextVar, refresh it on the first inference when the orchestrator
-  did not pre-allocate an episode.
-- :class:`JsonRetryMiddleware` — **M2 no-op placeholder**.  M3 activates
-  it by consulting ``OutputMode.recover()`` and the JSON terminal
-  becomes a single-attempt call.
+- :class:`JsonRetryMiddleware` — **M3 activated**.  Drives the
+  parse-failure retry loop for single-shot output modes
+  (:class:`JsonOutput`, :class:`StructuredOutput`).  Calls the terminal
+  in a loop, inspects ``result.diagnostics.parse_strategy``, and on
+  ``"none"`` consults ``ctx.output.recover(...)`` for retry / accept /
+  fail.
 - :class:`ObservabilityMiddleware` — wraps the run in
   ``tracer.start_as_current_span(f"agent.invoke/{name}")``; ``None``
   tracer falls back to a no-op span.
@@ -47,6 +50,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from t0_agents.core.exceptions import T0AgentsFatalError
 from t0_agents.core.middleware.base import Next, RunContext
+from t0_agents.core.output import (
+    Attempt,
+    OutputDiagnostics,
+    ParseFailure,
+)
 from t0_agents.core.types import (
     AgentResult,
     Guardrail,
@@ -107,7 +115,7 @@ class MemoryMiddleware:
         self._provider = provider
         self._strategy = strategy
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
+    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         agent = ctx.run.agent if ctx.run is not None else None
         original_user_message = (
             ctx.run.input.user_message
@@ -171,7 +179,7 @@ class MemoryMiddleware:
                 ctx.prior_messages = list(mem_prior)
 
         # --- 3. Call next + save in finally ---
-        result: AgentResult | None = None
+        result: AgentResult[Any] | None = None
         try:
             result = await next_(ctx)
         finally:
@@ -237,7 +245,7 @@ class GuardrailsMiddleware:
     def __init__(self, guardrails: list[Guardrail]) -> None:
         self._guardrails = guardrails
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
+    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         original_user_message = (
             ctx.run.input.user_message
             if ctx.run is not None
@@ -283,7 +291,7 @@ class GuardrailsMiddleware:
         # ``after_run`` via the finally clause — the docs/guardrails.md
         # contract promises ``after_run`` fires once around every run,
         # success or fatal abort.
-        result: AgentResult | None = None
+        result: AgentResult[Any] | None = None
         try:
             for guardrail in self._guardrails:
                 try:
@@ -369,7 +377,7 @@ class CostTrackingMiddleware:
 
     name = "cost_tracking"
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
+    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         usage_acc = _CumulativeUsage()
         ctx.extras["cumulative_usage"] = usage_acc
 
@@ -383,7 +391,7 @@ class CostTrackingMiddleware:
 
         ctx.chain_on_inference(_tracker)
 
-        result: AgentResult | None = None
+        result: AgentResult[Any] | None = None
         try:
             result = await next_(ctx)
             return result
@@ -438,7 +446,7 @@ class SubAgentMiddleware:
     def __init__(self, sub_agents: list[Agent]) -> None:
         self._sub_agents = sub_agents
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
+    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         from t0_agents.compose.orchestrator import (
             _OrchestrationToolProvider,
             bind_parent_episode_id,
@@ -486,33 +494,135 @@ class SubAgentMiddleware:
 
 
 class JsonRetryMiddleware:
-    """**M2: no-op pass-through.**  M3 activates the recovery loop.
+    """Drives the parse-failure retry loop for single-shot output modes.
 
-    Placed at the innermost position in the default chain (Q13
-    resolved 2026-05-15) so memory/guardrails/cost-tracking see only
-    the final successful inference rather than every retry attempt.
-    Audit of retries is intended to surface via TensorZero tags
-    (``retry_attempt=N``) and the M3 ``result.diagnostics.attempts``
-    field.
+    Placed at the innermost position in the default chain (Q13 resolution)
+    so memory, guardrails, and cost tracking see only the final
+    successful inference rather than every retry attempt.  Audit of
+    retries surfaces via ``result.diagnostics.attempts`` and TensorZero
+    tags.
 
-    M2 keeps the retry loop inline in :meth:`Agent._json_terminal`
-    so the chain shape is stable across the milestone boundary.  M3
-    will:
+    Chat agents bypass the retry logic entirely
+    (``ctx.output.expects_tool_loop == True`` short-circuits to a single
+    ``next_(ctx)`` call).  Single-shot modes drive through the loop:
 
-    1. Move the retry logic into this middleware's ``__call__`` body,
-       consulting ``ctx.output.recover(failure, attempts)`` for the
-       hint.
-    2. Reduce the JSON terminal to a single ``run_structured_inference``
-       call.
-    3. Drop the ``Mapping`` per-call kwargs (``output_schema``,
-       ``json_mode``, ``max_json_retries``) from
-       :meth:`Agent.invoke` in the same milestone.
+    1. Seed ``ctx.extras["_output_attempts"]`` with the attempts list so
+       the single-shot terminal can pass it to
+       :meth:`OutputMode.materialize`.
+    2. Call ``next_(ctx)`` — the terminal materialises a result.
+    3. If ``result.diagnostics.parse_strategy != "none"`` → success;
+       return.
+    4. Otherwise build a :class:`ParseFailure`, append an
+       :class:`Attempt` to the buffer, and call
+       :meth:`ctx.output.recover` to decide what to do next.
+       - :meth:`Recovery.fail` → return the failed result as-is so v0.12
+         byte-identity is preserved (``parsed=None``,
+         ``parse_strategy="none"`` flow through the
+         :attr:`AgentResult.parsed` property).
+       - :meth:`Recovery.accept` → synthesise a new :class:`AgentResult`
+         carrying the coerced value with ``parse_strategy="permissive"``.
+       - :meth:`Recovery.retry` → append the prior user/assistant turn
+         pair to ``ctx.prior_messages``, set ``ctx.user_message`` to
+         the corrective hint, and loop.
+
+    This middleware needs to call ``next_(ctx)`` more than once per
+    invocation.  The ``allow_retry`` class attribute signals
+    :func:`build_pipeline` to skip the :class:`_NextGuard` for this
+    layer so re-invocation does not raise.
     """
 
     name = "json_retry"
+    allow_retry = True
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
-        return await next_(ctx)
+    async def __call__(
+        self, ctx: RunContext, next_: Next
+    ) -> AgentResult[Any]:
+        if ctx.output is None or ctx.output.expects_tool_loop:
+            # Chat / tool-loop path — no retry orchestration, single
+            # call through.
+            return await next_(ctx)
+
+        attempts: list[Attempt] = []
+        ctx.extras["_output_attempts"] = attempts
+
+        while True:
+            result = await next_(ctx)
+            # Latch the episode_id from the first response so retries
+            # reuse it (mirrors v0.12 ``_json_terminal`` semantics —
+            # the whole retry chain belongs to one episode).
+            if ctx.episode_id is None and result.episode_id is not None:
+                ctx.episode_id = result.episode_id
+            diag = result.diagnostics
+            if diag is None or diag.parse_strategy != "none":
+                # Success path: terminal materialised a valid result.
+                return result
+
+            failure = ParseFailure(
+                raw_text=diag.raw_text or "",
+                inference_id=(
+                    result.inference_ids[-1]
+                    if result.inference_ids
+                    else ""
+                ),
+                reason=(
+                    "validation_failed"
+                    if diag.failure_detail is not None
+                    else "parse_failed"
+                ),
+                detail=(
+                    diag.failure_detail
+                    if diag.failure_detail is not None
+                    else "JSON parsing failed after permissive attempt"
+                ),
+            )
+            attempts.append(
+                Attempt(
+                    inference_id=failure.inference_id,
+                    raw_text=failure.raw_text,
+                    parsed=None,
+                    usage=None,
+                ),
+            )
+            recovery = await ctx.output.recover(failure, attempts)
+
+            if recovery.kind == "fail":
+                # Preserve v0.12 byte-identity: failed JSON parse
+                # returns the failed AgentResult with parsed=None and
+                # parse_strategy="none".  Stamp the final attempts
+                # count on the diagnostics.
+                result.diagnostics = OutputDiagnostics(
+                    parse_strategy="none",
+                    attempts=len(attempts) - 1,
+                    raw_text=diag.raw_text,
+                    failure_detail=diag.failure_detail,
+                )
+                return result
+
+            if recovery.kind == "accept":
+                return AgentResult(
+                    value=recovery.value,
+                    episode_id=result.episode_id,
+                    inference_ids=list(result.inference_ids),
+                    turns=result.turns,
+                    diagnostics=OutputDiagnostics(
+                        parse_strategy="permissive",
+                        attempts=len(attempts),
+                        raw_text=diag.raw_text,
+                    ),
+                )
+
+            # recovery.kind == "retry"
+            hint = recovery.hint or ""
+            prior = list(ctx.prior_messages or [])
+            prior.append(
+                {"role": "user", "content": ctx.user_message},
+            )
+            prior.append(
+                {"role": "assistant", "content": failure.raw_text},
+            )
+            ctx.prior_messages = prior
+            ctx.user_message = hint
+            # Loop: re-call next_(ctx).
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +655,7 @@ class ObservabilityMiddleware:
     def __init__(self, tracer: Any = None) -> None:
         self._tracer = tracer
 
-    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult:
+    async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         span_name = f"agent.invoke/{ctx.config.name}"
         if self._tracer is None:
             cm: Any = contextlib.nullcontext()
