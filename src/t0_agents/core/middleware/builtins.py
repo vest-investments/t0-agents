@@ -606,7 +606,11 @@ class JsonRetryMiddleware:
                     turns=result.turns,
                     diagnostics=OutputDiagnostics(
                         parse_strategy="permissive",
-                        attempts=len(attempts),
+                        # ``attempts`` includes the just-failed attempt;
+                        # ``json_parse_attempts`` counts EXTRA inferences
+                        # past the first, so subtract one to match the
+                        # fail branch (line 595) and the v0.12 semantics.
+                        attempts=len(attempts) - 1,
                         raw_text=diag.raw_text,
                     ),
                 )
