@@ -99,12 +99,21 @@ class StructuredOutput(Generic[M]):
         return f"structured/{self.model.__name__}"
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest:
-        """Derive the schema from the Pydantic model and apply JSON-mode kwargs."""
+        """Derive the schema from the Pydantic model and apply JSON-mode kwargs.
+
+        The Pydantic-emitted schema is tightened before send-off so
+        strict-JSON providers (Groq, OpenAI) accept it: every object
+        gets ``additionalProperties: false`` and ``required`` is
+        expanded to cover every key in ``properties``.  Pydantic v2
+        emits neither by default.
+        """
         params = req.params if req.params is not None else {}
         chat = params.setdefault("chat_completion", {})
         chat["json_mode"] = self.json_mode
         req.params = params
-        req.output_schema = self.model.model_json_schema()
+        req.output_schema = _enforce_strict_object_schema(
+            self.model.model_json_schema()
+        )
         return req
 
     async def materialize(
@@ -207,9 +216,41 @@ class StructuredOutput(Generic[M]):
         # Plain JSON parse failure — reuse JsonOutput's hint shape so the
         # model sees the same base sentence regardless of which mode
         # surfaced the failure.
-        schema = self.model.model_json_schema()
+        schema = _enforce_strict_object_schema(self.model.model_json_schema())
         hint_helper = JsonOutput(schema=schema, json_mode=self.json_mode)
         return Recovery.retry(hint_helper._build_retry_hint())
+
+
+def _enforce_strict_object_schema(schema: Any) -> Any:
+    """Tighten every object node so strict-JSON providers accept it.
+
+    Pydantic v2's ``model_json_schema()`` emits a permissive shape:
+    ``additionalProperties`` is unset (treated as ``true``) and
+    ``required`` lists only fields without defaults.  Strict-JSON
+    providers (Groq, OpenAI) reject both, surfacing as ``HTTP 400`` with
+    ``invalid JSON schema for response_format``.  This helper walks the
+    schema (including ``$defs``/``definitions`` blocks and
+    ``items``/``anyOf``/``oneOf`` subtrees) and on every object node:
+
+    1. Sets ``additionalProperties: false`` if absent.
+    2. Sets ``required`` to the full list of ``properties`` keys (in
+       declaration order) if ``properties`` is present.
+
+    Mutates the dict in place and returns it for chaining convenience.
+    """
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            if "additionalProperties" not in schema:
+                schema["additionalProperties"] = False
+            properties = schema.get("properties")
+            if isinstance(properties, dict) and properties:
+                schema["required"] = list(properties.keys())
+        for value in schema.values():
+            _enforce_strict_object_schema(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _enforce_strict_object_schema(item)
+    return schema
 
 
 def _summarise_validation_error(exc: Any) -> str:

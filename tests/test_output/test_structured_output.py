@@ -87,6 +87,73 @@ class TestShapeInference:
         assert result.params == {"chat_completion": {"json_mode": "strict"}}
 
 
+class TestStrictSchemaEnforcement:
+    """Groq/OpenAI strict mode rejects schemas that don't carry
+    ``additionalProperties: false`` and a ``required`` array covering
+    every property — but Pydantic v2 emits neither by default.  These
+    tests lock in the post-processing that ``shape_inference`` applies
+    so a regression surfaces here instead of in a 502 from the gateway.
+    """
+
+    def test_root_object_gets_additional_properties_false(self) -> None:
+        out = StructuredOutput(Customer)
+        req = out.shape_inference(
+            InferenceRequest(function_name="x", input={"messages": []})
+        )
+        assert req.output_schema is not None
+        assert req.output_schema.get("additionalProperties") is False
+
+    def test_root_object_required_covers_every_property(self) -> None:
+        # ``Customer`` has ``name`` and ``email``, both Optional with
+        # default=None — Pydantic would normally omit both from
+        # ``required``.  Strict mode demands the full set.
+        out = StructuredOutput(Customer)
+        req = out.shape_inference(
+            InferenceRequest(function_name="x", input={"messages": []})
+        )
+        assert req.output_schema is not None
+        assert set(req.output_schema.get("required", [])) == {"name", "email"}
+
+    def test_nested_objects_get_strict_treatment(self) -> None:
+        class Address(BaseModel):
+            street: str | None = None
+            city: str | None = None
+
+        class Person(BaseModel):
+            name: str | None = None
+            address: Address | None = None
+
+        out = StructuredOutput(Person)
+        req = out.shape_inference(
+            InferenceRequest(function_name="x", input={"messages": []})
+        )
+        assert req.output_schema is not None
+        # The nested model lands in ``$defs`` in Pydantic v2.
+        defs = req.output_schema.get("$defs") or req.output_schema.get(
+            "definitions", {}
+        )
+        assert "Address" in defs
+        address_schema = defs["Address"]
+        assert address_schema.get("additionalProperties") is False
+        assert set(address_schema.get("required", [])) == {"street", "city"}
+
+    def test_existing_additional_properties_preserved(self) -> None:
+        # If the user already set ``additionalProperties`` (unlikely via
+        # Pydantic, but possible via a model_config override), the
+        # helper must not overwrite their choice.
+        from t0_agents.core.outputs.structured import (
+            _enforce_strict_object_schema,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "additionalProperties": True,
+        }
+        _enforce_strict_object_schema(schema)
+        assert schema["additionalProperties"] is True
+
+
 class TestMaterialize:
     async def test_materialize_validates_pydantic_model(self) -> None:
         out = StructuredOutput(Customer)
