@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from typing import Any
 
@@ -63,3 +64,30 @@ async def test_consensus_merge_exception_wraps_with_composer_self() -> None:
 async def test_consensus_empty_raises() -> None:
     with pytest.raises(ValueError, match=r"consensus.*at least one"):
         await consensus(merge=_majority).invoke("seed").result()
+
+
+async def test_consensus_fail_fast_does_not_wait_for_slow_voters() -> None:
+    """consensus surfaces failure without waiting for slow proposers.
+
+    Regression guard for the gemini-code-assist PR #33 review:
+    consensus has no ``continue`` policy — any sub-Run failure aborts
+    the vote.  The driver must therefore cancel siblings the moment
+    one proposer raises, rather than waiting on all proposers to
+    settle.
+    """
+    fast_boom = MockComposable(
+        name="boom", raises=RuntimeError("vote crashed"), delay=0.01,
+    )
+    slow_a = MockComposable(name="slow_a", value="A", delay=5.0)
+    slow_b = MockComposable(name="slow_b", value="B", delay=5.0)
+
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    with pytest.raises(ComposerError):
+        await consensus(
+            fast_boom, slow_a, slow_b, merge=_majority, cancel_timeout=2.0,
+        ).invoke("seed").result()
+    elapsed = loop.time() - start
+    assert elapsed < 2.5, (
+        f"consensus fail-fast waited too long: {elapsed:.2f}s"
+    )

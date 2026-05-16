@@ -207,23 +207,45 @@ async def _drive_parallel(
             for child in children
         ]
         composite._sub_runs.extend(sub_runs)
+
+    successful: list[AgentResult[Any]]
+    for_reducer: Any
+    if error_policy == "fail_fast":
+        # True fail-fast: ``asyncio.wait(..., return_when=FIRST_EXCEPTION)``
+        # returns as soon as any sub-Run raises (or all succeed), so we
+        # don't wait for the slow ones.  When a failure surfaces we
+        # cancel the still-pending sibling result tasks AND the
+        # underlying sub-Runs (via ``composite._cancel_sub_runs`` under
+        # the bounded ``cancel_timeout``).  Drain the lot at the end
+        # to suppress "Task exception was never retrieved" warnings.
+        tasks: list[asyncio.Task[AgentResult[Any]]] = [
+            asyncio.create_task(r.result()) for r in sub_runs
+        ]
+        done, pending = await asyncio.wait(
+            tasks, return_when=asyncio.FIRST_EXCEPTION,
+        )
+        failed_task: asyncio.Task[AgentResult[Any]] | None = next(
+            (t for t in done if t.exception() is not None), None,
+        )
+        if failed_task is not None:
+            for t in pending:
+                t.cancel()
+            await composite._cancel_sub_runs()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            failed_idx = tasks.index(failed_task)
+            failed_child = children[failed_idx]
+            exc = failed_task.exception()
+            assert exc is not None
+            raise ComposerError(failed_child, exc) from exc
+        # ``FIRST_EXCEPTION`` collapses to ``ALL_COMPLETED`` when nothing
+        # raised — every task is in ``done`` with a successful result.
+        successful = [t.result() for t in tasks]
+        for_reducer = successful
+    else:  # continue
         gathered: list[AgentResult[Any] | BaseException] = await asyncio.gather(
             *(r.result() for r in sub_runs),
             return_exceptions=True,
         )
-
-    if error_policy == "fail_fast":
-        for r, child in zip(gathered, children, strict=True):
-            if isinstance(r, BaseException):
-                # Best-effort cleanup of any still-running peers.
-                await composite._cancel_sub_runs()
-                raise ComposerError(child, r) from r
-        # All success.
-        successful: list[AgentResult[Any]] = [
-            r for r in gathered if not isinstance(r, BaseException)
-        ]
-        for_reducer: Any = successful
-    else:  # continue
         successful = [r for r in gathered if not isinstance(r, BaseException)]
         for_reducer = gathered
 
@@ -345,19 +367,31 @@ async def _drive_consensus(
             for child in children
         ]
         composite._sub_runs.extend(sub_runs)
-        gathered: list[AgentResult[Any] | BaseException] = await asyncio.gather(
-            *(r.result() for r in sub_runs),
-            return_exceptions=True,
-        )
 
-    for r, child in zip(gathered, children, strict=True):
-        if isinstance(r, BaseException):
-            await composite._cancel_sub_runs()
-            raise ComposerError(child, r) from r
-
-    results: list[AgentResult[Any]] = [
-        r for r in gathered if not isinstance(r, BaseException)
+    # Consensus has no ``continue`` policy — any sub-Run failure aborts
+    # the vote.  ``FIRST_EXCEPTION`` lets us cancel siblings the moment
+    # one proposer raises rather than waiting for slow voters to settle.
+    tasks: list[asyncio.Task[AgentResult[Any]]] = [
+        asyncio.create_task(r.result()) for r in sub_runs
     ]
+    done, pending = await asyncio.wait(
+        tasks, return_when=asyncio.FIRST_EXCEPTION,
+    )
+    failed_task: asyncio.Task[AgentResult[Any]] | None = next(
+        (t for t in done if t.exception() is not None), None,
+    )
+    if failed_task is not None:
+        for t in pending:
+            t.cancel()
+        await composite._cancel_sub_runs()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        failed_idx = tasks.index(failed_task)
+        failed_child = children[failed_idx]
+        exc = failed_task.exception()
+        assert exc is not None
+        raise ComposerError(failed_child, exc) from exc
+
+    results: list[AgentResult[Any]] = [t.result() for t in tasks]
     values: list[Any] = [r.value for r in results]
 
     try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -91,3 +92,32 @@ async def test_parallel_inference_ids_aggregated() -> None:
 async def test_parallel_empty_raises() -> None:
     with pytest.raises(ValueError, match=r"parallel.*at least one"):
         await parallel().invoke("seed").result()
+
+
+async def test_parallel_fail_fast_does_not_wait_for_slow_siblings() -> None:
+    """fail_fast must surface the exception without waiting for slow peers.
+
+    Regression guard for the gemini-code-assist PR #33 review: the
+    previous implementation used ``asyncio.gather(...,
+    return_exceptions=True)`` which waited for every sub-Run before
+    propagating; the fix uses ``asyncio.wait(...,
+    return_when=FIRST_EXCEPTION)`` so the cascade cancels siblings
+    the moment one child raises.
+    """
+    fast_boom = MockComposable(
+        name="boom", raises=ValueError("nope"), delay=0.01,
+    )
+    slow_a = MockComposable(name="slow_a", value="A", delay=5.0)
+    slow_b = MockComposable(name="slow_b", value="B", delay=5.0)
+
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    with pytest.raises(ComposerError):
+        await parallel(
+            fast_boom, slow_a, slow_b, cancel_timeout=2.0,
+        ).invoke("seed").result()
+    elapsed = loop.time() - start
+    assert elapsed < 2.5, (
+        f"fail_fast waited too long: {elapsed:.2f}s "
+        "(should surface before slow siblings complete)"
+    )

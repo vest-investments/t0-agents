@@ -47,8 +47,8 @@
 
 ### Tests
 
-- 67 new tests under `tests/test_compose/v1/` (12 test files + `__init__.py` + `_helpers.py`).
-- Existing suite: 811 → 884 non-integration tests (+73 net — 67 new from v1/ + 6 from upstream of M3 that I hadn't counted in the planning baseline).  No existing test was modified beyond ruff auto-fixes (import ordering, raw-string patterns).
+- 69 new tests under `tests/test_compose/v1/` (12 test files + `__init__.py` + `_helpers.py`; counts 67 at initial PR plus 2 fail-fast regression tests added in the D-7 follow-up commit).
+- Existing suite: 811 → 886 non-integration tests (+75 net — 69 new from v1/ + 6 from upstream of M3 that I hadn't counted in the planning baseline).  No existing test was modified beyond ruff auto-fixes (import ordering, raw-string patterns).
 - mypy strict: clean on 70 source files.
 - ruff: clean on `src/` + `tests/test_compose/v1/`.
 
@@ -123,6 +123,14 @@
 
 **Impact on subsequent milestones.**  None — `examples/14_multi_agent/` byte-identity is the user's verification responsibility per the cross-cutting checklist.
 
+### D-7.  Post-PR-review fix: `parallel`/`consensus` fail-fast no longer waits for slow siblings.
+
+**What changed.**  The initial M4 commit shipped `_drive_parallel` (`error_policy="fail_fast"`) and `_drive_consensus` using `asyncio.gather(..., return_exceptions=True)` followed by a post-hoc scan for failed slots.  Because `gather(return_exceptions=True)` blocks until every task settles, the "cancel siblings on first failure" contract in the plan and CHANGELOG was structurally broken: a 0.01s failure with two 5s sibling agents would still take ~5s to surface.  The follow-up commit switches both drivers to `asyncio.wait(..., return_when=asyncio.FIRST_EXCEPTION)` and cancels siblings (both the result-wrapping tasks and the underlying sub-Runs via `composite._cancel_sub_runs`) the moment the first exception surfaces.  Two regression tests (`test_parallel_fail_fast_does_not_wait_for_slow_siblings`, `test_consensus_fail_fast_does_not_wait_for_slow_voters`) lock the latency: the cascade must surface within `cancel_timeout`, not within `max(child_delay)`.
+
+**Why.**  Flagged by the `gemini-code-assist[bot]` PR #33 review (two HIGH-priority comments) and confirmed against the M4 plan ("fail_fast: first sub-Run exception cancels others under `cancel_timeout` and raises `ComposerError`") and the CHANGELOG entry ("`fail_fast` cancels siblings on first failure").  The dead-code path (`composite._cancel_sub_runs()` after `gather(return_exceptions=True)`) was the visible smell — by the time the post-hoc scan ran, every sub-Run was already terminal so the cascade was a no-op.
+
+**Impact on subsequent milestones.**  None at the API level — observable behaviour for users matches the plan/CHANGELOG more closely.  M5's `docs/composition.md` should reuse the regression tests' setup (mix of fast-failing + slow-succeeding mock composables) as a documentation example of the cascade in action.
+
 ---
 
 ## §3 — Open questions resolved
@@ -188,8 +196,8 @@ Commands run and outcomes:
 |---------|---------|
 | `uv run ruff check src/ tests/test_compose/v1/` | **passed** — all checks clean. |
 | `uv run mypy src/` | **passed** — no issues found in 70 source files (with the pre-existing `mcp/` `disallow_any_generics = false` override from M3). |
-| `uv run pytest -m "not integration"` | **passed** — 884 passed, 2 skipped, 57 deselected, 122 deprecation warnings (expected M1 shim emissions in pre-existing tests). |
-| `uv run pytest tests/test_compose/v1/` | **passed** — 67 passed in 1.5s. |
+| `uv run pytest -m "not integration"` | **passed** — 886 passed, 2 skipped, 57 deselected, 122 deprecation warnings (expected M1 shim emissions in pre-existing tests). |
+| `uv run pytest tests/test_compose/v1/` | **passed** — 69 passed in 1.6s (67 at PR-open + 2 fail-fast latency regression tests added in D-7). |
 | `git diff src/t0_agents/mcp/` | **empty** — invariant §2.1 holds. |
 | `python -c "from t0_agents import sequential, parallel, race, consensus, map_reduce, conditional, saga, retry_chain, circuit_breaker, Composable, Composer, ComposerError"` | **passed** — all 12 new symbols import cleanly. |
 | Nested smoke construction (`sequential(race(a, b), conditional(routes={...}))`) | **passed** — tested in `test_nested_composers.py`. |
@@ -203,7 +211,7 @@ User-side verification (pending — deferred to user):
 Numbers for the regression baseline:
 
 - Pre-M4 non-integration test count: 811 (M3 close).
-- Post-M4 non-integration test count: 884 (+73 net — 67 new under `tests/test_compose/v1/` + a 6-test drift from upstream tests I had not counted in the planning baseline).
+- Post-M4 non-integration test count: 886 (+75 net — 69 new under `tests/test_compose/v1/` + a 6-test drift from upstream tests I had not counted in the planning baseline).
 - New code: ~1391 lines across `compose/{topology,builtins,_runtime}.py`.
 - Modified code: `core/run.py` +6 LoC (the `agent: Agent | None` widening + guard).
 - New tests: ~1116 lines across 12 files + `_helpers.py`.
