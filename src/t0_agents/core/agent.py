@@ -5,24 +5,23 @@ from __future__ import annotations
 import logging
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast, overload
 
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
-from tensorzero.types import JsonInferenceResponse
 
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
 )
 from t0_agents.core.middleware.base import RunContext, build_pipeline
-from t0_agents.core.run import Run, build_run_input
-from t0_agents.core.structured import (
-    ParseStrategy,
-    StructuredOutput,
-    permissive_parse,
-    run_structured_inference,
+from t0_agents.core.output import (
+    Attempt,
+    InferenceRequest,
+    OutputMode,
 )
+from t0_agents.core.outputs.json import JsonOutput
+from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.types import (
     AgentResult,
     MemoryProvider,
@@ -40,44 +39,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TOOL_TIMEOUT: float = 30.0
 
 
-_RETRY_HINT_BASE = (
-    "Your previous response was not valid JSON. "
-    "Return ONLY a valid JSON object that matches the schema, "
-    "with no commentary or prose."
-)
-
-
-def _build_retry_hint(schema: Mapping[str, Any] | None) -> str:
-    """Compose the corrective user-turn message sent on a JSON retry.
-
-    Starts from :data:`_RETRY_HINT_BASE` (the cross-call invariant the
-    retry tests can pattern-match on), then optionally enriches the hint
-    with schema metadata when a non-trivial ``schema`` is available:
-
-    - ``title`` — when the schema's top-level ``title`` is a non-empty
-      string, the hint mentions it so the model has a name to anchor on.
-    - ``required`` — when the top-level ``required`` array is a non-empty
-      list of strings, the hint enumerates the required field names.
-
-    Anything else (nested ``required``, ``properties``, ``oneOf``) is
-    deliberately ignored: surfacing it would balloon prompt cost on every
-    retry and risk crowding out the model's context.  The enrichment is
-    additive on top of a fixed English base sentence; opt out entirely by
-    setting ``permissive_json_parsing=False, max_json_retries=0``.
-    """
-    parts: list[str] = [_RETRY_HINT_BASE]
-    if schema is None:
-        return parts[0]
-    title = schema.get("title")
-    if isinstance(title, str) and title:
-        parts.append(f"The schema is named '{title}'.")
-    required = schema.get("required")
-    if isinstance(required, list):
-        names = [str(n) for n in required if isinstance(n, str)]
-        if names:
-            joined = ", ".join(repr(n) for n in names)
-            parts.append(f"Required top-level fields: {joined}.")
-    return " ".join(parts)
+T = TypeVar("T")
 
 
 class Agent:
@@ -90,11 +52,13 @@ class Agent:
     ``fastmcp.Client``).
 
     The ``tool_provider`` kwarg is **required for chat-mode agents**
-    (``function_kind="chat"``) because the tool loop calls
-    ``list_tools()`` / ``call_tool()`` on it every turn.  For JSON-mode
-    agents (``function_kind="json"``) it is **optional**: JSON functions
-    are single-shot and never dispatch MCP tools, so a JSON agent can be
-    constructed with just the gateway.
+    (``output=ChatOutput()``, the default) because the tool loop calls
+    ``list_tools()`` / ``call_tool()`` on it every turn.  For
+    single-shot agents (``output=JsonOutput(...)``,
+    ``output=StructuredOutput(Model)``, ``output=ToolCallOutput()``) it
+    is **optional**: those agents make one inference call and never
+    dispatch MCP tools, so they can be constructed with just the
+    gateway.
 
     Cross-cutting concerns (memory, guardrails, cost-tracking, sub-agent
     orchestration, JSON retry) are materialised by
@@ -114,12 +78,26 @@ class Agent:
         config = AgentConfig(
             name="extractor",
             function_name="extract_customer",
-            function_kind="json",
-            json_mode="strict",
+            output=JsonOutput(json_mode="strict"),
         )
         agent = Agent(config, t0=gateway)
         result = await agent.invoke("Hi, I'm Sarah Johnson <sarah@example.com>")
         print(result.parsed)
+
+    Example (Pydantic)::
+
+        from pydantic import BaseModel
+        class Customer(BaseModel):
+            name: str
+            email: str
+        config = AgentConfig(
+            name="extractor",
+            function_name="extract_customer",
+            output=StructuredOutput(Customer),
+        )
+        agent = Agent(config, t0=gateway)
+        result = await agent.invoke("Hi, Sarah <sarah@example.com>").result()
+        print(result.value)        # Customer(name='Sarah', email='sarah@example.com')
     """
 
     def __init__(
@@ -134,12 +112,13 @@ class Agent:
                 f"tool_provider must implement the ToolProvider protocol "
                 f"(list_tools + call_tool), got {type(tool_provider).__name__}"
             )
-        if config.function_kind == "chat" and tool_provider is None:
+        if config.output.expects_tool_loop and tool_provider is None:
             raise ConfigurationError(
-                "Agent with function_kind='chat' requires a tool_provider. "
-                "Pass a fastmcp.Client wrapping your tool server, or set "
-                "AgentConfig(function_kind='json') for a single-shot JSON "
-                "agent that does not need a tool provider."
+                f"Agent with output={config.output.name!r} requires a "
+                f"tool_provider.  Pass a fastmcp.Client wrapping your tool "
+                f"server, or use a single-shot output mode (JsonOutput, "
+                f"StructuredOutput, ToolCallOutput) that does not need a "
+                f"tool provider."
             )
         if config.memory is not None and not isinstance(config.memory, MemoryProvider):
             raise ConfigurationError(
@@ -179,11 +158,11 @@ class Agent:
         # ``list_tools()`` round-trip that confirms the provider is
         # empty.  We cannot decide at construction time whether the
         # check is needed: ``Agent.invoke`` accepts a per-call
-        # ``json_mode`` override, so a config-level ``"strict"`` agent
-        # may still receive ``invoke(..., json_mode="tool")`` and must
-        # verify the provider lazily.  ``_warned_anthropic_combination``
-        # latches the once-per-instance Anthropic extended-thinking
-        # compatibility warning (TZ guide §11.4).
+        # ``output=`` override, so a config-level ``ChatOutput`` agent
+        # may still receive ``invoke(..., output=JsonOutput(json_mode="tool"))``
+        # and must verify the provider lazily.
+        # ``_warned_anthropic_combination`` latches the once-per-instance
+        # Anthropic extended-thinking compatibility warning (TZ guide §11.4).
         self._tool_provider_verified_empty = False
         self._warned_anthropic_combination = False
 
@@ -215,33 +194,71 @@ class Agent:
     # v1.0 canonical entry point + deprecation shims
     # ------------------------------------------------------------------
 
+    @overload
     def invoke(
         self,
         user_message: str,
         *,
+        output: OutputMode[T],
+        episode_id: str | None = ...,
+        tags: dict[str, str] | None = ...,
+        system_arguments: dict[str, Any] | None = ...,
+        system: str | None = ...,
+        prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        middleware: Sequence[Any] | None = ...,
+        eager: bool = ...,
+        context: Mapping[str, Any] | None = ...,
+    ) -> Run[T]: ...
+
+    @overload
+    def invoke(
+        self,
+        user_message: str,
+        *,
+        output: None = ...,
+        episode_id: str | None = ...,
+        tags: dict[str, str] | None = ...,
+        system_arguments: dict[str, Any] | None = ...,
+        system: str | None = ...,
+        prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        middleware: Sequence[Any] | None = ...,
+        eager: bool = ...,
+        context: Mapping[str, Any] | None = ...,
+    ) -> Run[Any]: ...
+
+    def invoke(
+        self,
+        user_message: str,
+        *,
+        output: OutputMode[Any] | None = None,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
-        output_schema: Mapping[str, Any] | None = None,
-        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
-        max_json_retries: int | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
         middleware: Sequence[Any] | None = None,
-        output: Any | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
     ) -> Run[Any]:
         """v1.0 canonical entry point — returns a :class:`Run` handle.
 
-        The single entry point for both chat and JSON agents; the
-        :class:`Run` dispatches the drive mode on first consumer
-        (``result()`` selects the non-streaming chat path or the JSON
-        path; ``events()`` selects the streaming chat path or raises
-        :class:`ConfigurationError` for JSON agents).
+        The single entry point for both chat and single-shot agents;
+        the :class:`Run` dispatches the drive mode on first consumer
+        (``result()`` selects the non-streaming chat path or the
+        single-shot path; ``events()`` selects the streaming chat path
+        or raises :class:`ConfigurationError` for non-streaming output
+        modes).
 
         Args:
             user_message: The user's query as a plain string.
+            output: Optional per-call :class:`OutputMode` override.  When
+                ``None`` (the default) the Run uses
+                :attr:`AgentConfig.output`.  Per-call values win over
+                the config-level default.  This is the v1.0 surface for
+                request-shape / parse-strategy / recovery customisation;
+                v0.12 ``function_kind=``/``json_mode=``/``output_schema=``
+                / ``permissive_json_parsing=``/``max_json_retries=`` are
+                removed (Tier 2 — contract §2.4).
             episode_id: Existing TensorZero episode id, or ``None`` to
                 let the gateway mint a fresh one.
             tags: Per-call tags shallow-merged on top of ``config.tags``.
@@ -251,14 +268,6 @@ class Agent:
                 (string form).  Mutually exclusive with
                 ``system_arguments`` and with
                 ``memory_strategy="system_template"``.
-            output_schema: **M1-deprecated** per-call schema override
-                for JSON agents.  Removed in M3 alongside the
-                :class:`AgentConfig` field; use the M3 ``output=``
-                replacement when it lands.
-            json_mode: **M1-deprecated** per-call ``json_mode`` override
-                for JSON agents.  Removed in M3.
-            max_json_retries: **M1-deprecated** per-call retry budget
-                override for JSON agents.  Removed in M3.
             prior_messages: TensorZero-shape ``{role, content}`` history
                 to seed the inference loop; used by :meth:`Run.fork` to
                 continue from a recorded transcript.  Overrides any
@@ -266,8 +275,6 @@ class Agent:
             middleware: Explicit middleware chain that overrides
                 ``config.middleware`` for this Run only.  ``None`` (the
                 default) uses the config-materialised chain.
-            output: **M3 placeholder** — stored on the Run, not yet
-                consulted by the orchestration.
             eager: When ``True`` (default), the Run's drive task is
                 scheduled immediately.  ``eager=False`` defers task
                 start to the first consumer of ``result()`` /
@@ -276,69 +283,58 @@ class Agent:
             context: User-supplied metadata dict copied onto the Run.
 
         Returns:
-            A :class:`Run` whose lifecycle is the canonical v1.0 shape.
-            Awaiting the Run is equivalent to ``await run.result()``.
+            A :class:`Run` whose ``T`` is inferred from ``output``:
+            ``Run[Customer]`` for ``output=StructuredOutput(Customer)``,
+            ``Run[dict[str, Any]]`` for ``output=JsonOutput(...)``,
+            ``Run[str]`` for the default chat path.  Awaiting the Run
+            is equivalent to ``await run.result()``.
 
         Raises:
             ValueError: When ``system`` is set alongside
                 ``system_arguments`` or alongside
                 ``memory_strategy='system_template'``.
-            ConfigurationError: When per-call ``output_schema`` or
-                ``json_mode`` is passed against a chat agent, or when
-                a JSON agent is configured with
-                ``memory_strategy='messages'``.
+            ConfigurationError: When the per-call ``output`` mode is
+                incompatible with the run shape (e.g. a single-shot
+                mode with ``memory_strategy='messages'``).
         """
+        effective_output: OutputMode[Any] = (
+            output if output is not None else self._config.output
+        )
+
         # Sync pre-flight so the synchronous-call surface stays
-        # byte-identical with v0.12.  ``Agent.run`` and ``Agent.stream``
-        # raised these eagerly; in v1.0 they surface from the shim's
-        # synchronous ``self.invoke(...)`` call before the Run is even
-        # constructed.
+        # byte-identical with v0.12.
         self._validate_system_kwargs(system, system_arguments)
-        if self._config.function_kind == "chat" and (
-            output_schema is not None or json_mode is not None
+        effective_json_mode = _resolve_json_mode(effective_output)
+        if effective_json_mode is not None:
+            self._maybe_warn_anthropic_quirk(effective_json_mode)
+        if (
+            not effective_output.expects_tool_loop
+            and self._resolve_memory_strategy() == "messages"
         ):
             raise ConfigurationError(
-                "output_schema/json_mode kwargs are only valid when "
-                "AgentConfig.function_kind == 'json'; got function_kind="
-                f"{self._config.function_kind!r}."
+                f"memory_strategy='messages' is not supported for "
+                f"output={effective_output.name!r} (single-shot mode — "
+                f"there is no multi-turn message history to thread).  Use "
+                f"memory_strategy='prepended_message' (the default) or "
+                f"'system_template' instead."
             )
-        if self._config.function_kind == "json":
-            # Mirror the JSON terminal's step 0 sync validations so they
-            # raise before the Run task spawns — preserves the v0.12
-            # caller experience (the same exception is raised from the
-            # same await).
-            effective_mode_for_safety = (
-                json_mode if json_mode is not None else self._config.json_mode
-            )
-            self._maybe_warn_anthropic_quirk(effective_mode_for_safety)
-            if self._resolve_memory_strategy() == "messages":
-                raise ConfigurationError(
-                    "memory_strategy='messages' is not supported for "
-                    "function_kind='json' — JSON functions are single-shot. "
-                    "Use memory_strategy='prepended_message' (the default) "
-                    "or 'system_template' instead."
-                )
 
         input_ = build_run_input(
             user_message=user_message,
             function_name=self._config.function_name,
-            function_kind=self._config.function_kind,
             episode_id=episode_id,
             tags=tags,
             system=system,
             system_arguments=system_arguments,
-            output_schema=output_schema,
-            json_mode=json_mode,
-            max_json_retries=max_json_retries,
             prior_messages=prior_messages,
         )
         return Run(
             self,
             input_,
+            effective_output,
             eager=eager,
             context=context,
             middleware=middleware,
-            output=output,
         )
 
     async def run(
@@ -352,13 +348,19 @@ class Agent:
         output_schema: Mapping[str, Any] | None = None,
         json_mode: Literal["off", "on", "strict", "tool"] | None = None,
         max_json_retries: int | None = None,
-    ) -> AgentResult:
+    ) -> AgentResult[Any]:
         """Deprecated v0.12 entry point — delegates to :meth:`invoke`.
 
         Emits ``DeprecationWarning`` once per source line (Python's
         default filter dedups by stacklevel).  Output stays byte-
         identical to v0.12; the only stderr change is the warning.
         Removed in v1.1.
+
+        Per-call JSON kwargs (``output_schema``, ``json_mode``,
+        ``max_json_retries``) are translated into a per-call
+        :class:`JsonOutput` before delegating, preserving Tier 1
+        byte-identity for v0.12 callers that used per-call overrides
+        on JSON agents.
         """
         warnings.warn(
             "Agent.run() is deprecated and will be removed in t0-agents 1.1. "
@@ -367,15 +369,53 @@ class Agent:
             DeprecationWarning,
             stacklevel=2,
         )
+        per_call_output: OutputMode[Any] | None = None
+        if (
+            output_schema is not None
+            or json_mode is not None
+            or max_json_retries is not None
+        ):
+            # Translate v0.12 per-call JSON overrides into a per-call
+            # JsonOutput so the canonical surface stays clean.  Inherit
+            # any non-overridden fields from the config-level mode via
+            # ``getattr`` so the inheritance is single-shot-mode-agnostic:
+            # ``JsonOutput``, ``StructuredOutput`` (and any third-party
+            # single-shot mode that shares the same field names) all
+            # contribute their config-level settings when the caller
+            # didn't override them per-call.
+            base = self._config.output
+            permissive: bool = getattr(base, "permissive", True)
+            retries: int = (
+                max_json_retries
+                if max_json_retries is not None
+                else getattr(base, "max_retries", 2)
+            )
+            mode: Literal["off", "on", "strict", "tool"] = (
+                json_mode
+                if json_mode is not None
+                else cast(
+                    Literal["off", "on", "strict", "tool"],
+                    getattr(base, "json_mode", "strict"),
+                )
+            )
+            schema: Mapping[str, Any] | None = (
+                output_schema
+                if output_schema is not None
+                else getattr(base, "schema", None)
+            )
+            per_call_output = JsonOutput(
+                schema=schema,
+                json_mode=mode,
+                permissive=permissive,
+                max_retries=retries,
+            )
         return await self.invoke(
             user_message,
+            output=per_call_output,
             episode_id=episode_id,
             tags=tags,
             system_arguments=system_arguments,
             system=system,
-            output_schema=output_schema,
-            json_mode=json_mode,
-            max_json_retries=max_json_retries,
         ).result()
 
     async def stream(
@@ -418,13 +458,13 @@ class Agent:
         *,
         is_streaming: bool,
         middleware: Sequence[Any] | None = None,
-    ) -> AgentResult:
+    ) -> AgentResult[Any]:
         """Build the middleware pipeline and drive it.
 
         Called by :class:`~t0_agents.core.run.Run` after the first
         consumer (``result()`` or ``events()``) picks the drive mode.
-        Selects the terminal by ``(function_kind, is_streaming)`` and
-        wraps the supplied middleware chain around it.
+        Selects the terminal by ``(output.expects_tool_loop, is_streaming)``
+        and wraps the supplied middleware chain around it.
 
         ``middleware=None`` (the default) reads from
         ``ctx.config.middleware`` — the v0.12-compat chain materialised
@@ -434,9 +474,9 @@ class Agent:
         explicit "no middleware" override) bypasses the chain entirely;
         the terminal runs unwrapped.
         """
-        terminal: Callable[[RunContext], Awaitable[AgentResult]]
-        if self._config.function_kind == "json":
-            terminal = self._json_terminal
+        terminal: Callable[[RunContext], Awaitable[AgentResult[Any]]]
+        if ctx.output is None or not ctx.output.expects_tool_loop:
+            terminal = self._single_shot_terminal
         elif is_streaming:
             terminal = self._chat_streaming_terminal
         else:
@@ -449,7 +489,7 @@ class Agent:
         pipeline = build_pipeline(effective, terminal)
         return await pipeline(ctx)
 
-    async def _chat_terminal(self, ctx: RunContext) -> AgentResult:
+    async def _chat_terminal(self, ctx: RunContext) -> AgentResult[Any]:
         """Non-streaming chat terminal — drives the inner tool loop.
 
         Calls :func:`run_agent` with the (possibly memory-injected)
@@ -496,7 +536,9 @@ class Agent:
             **extra_kwargs,
         )
 
-    async def _chat_streaming_terminal(self, ctx: RunContext) -> AgentResult:
+    async def _chat_streaming_terminal(
+        self, ctx: RunContext
+    ) -> AgentResult[Any]:
         """Streaming chat terminal — pushes events to the Run buffer, returns final result.
 
         Mirrors :meth:`_chat_terminal` but drives via
@@ -528,7 +570,7 @@ class Agent:
             extra_kwargs["prior_messages"] = list(ctx.prior_messages)
 
         streamer = StreamingAgentLoop()
-        done_result: AgentResult | None = None
+        done_result: AgentResult[Any] | None = None
         run = ctx.run
         assert run is not None, "_chat_streaming_terminal requires a live Run"
 
@@ -565,33 +607,46 @@ class Agent:
             )
         return done_result
 
-    async def _json_terminal(self, ctx: RunContext) -> AgentResult:
-        """JSON function dispatch — retry loop wrapping ``run_structured_inference``.
+    async def _single_shot_terminal(
+        self, ctx: RunContext
+    ) -> AgentResult[Any]:
+        """Single-shot terminal — one inference, delegated to ``ctx.output``.
 
-        Reproduces the v0.12 retry semantics inline.  In M2 the
-        :class:`JsonRetryMiddleware` is a no-op placeholder; M3 will
-        invert this — the retry loop moves into the middleware
-        (consulting ``OutputMode.recover()``) and the terminal becomes
-        a single ``run_structured_inference`` call.
+        Replaces v0.12's ``_json_terminal`` retry loop.  The terminal
+        is now flat:
 
-        Memory load/save, ``before_run``/``after_run`` hooks, and
-        cost accumulation are handled by the outer middleware chain;
-        this terminal only manages the retry budget and the
-        ``permissive_parse`` recovery layer.
+        1. Build an :class:`InferenceRequest` from ``ctx`` (input
+           messages, tags, namespace, etc.).
+        2. Apply ``ctx.output.shape_inference(req)`` so the
+           :class:`OutputMode` injects its specific kwargs (JSON mode,
+           output schema, tool_choice).
+        3. Call ``t0.inference(...)``.
+        4. Fire ``ctx.on_inference(response)`` so middlewares (cost
+           tracking) observe the usage.
+        5. Call ``ctx.output.materialize(response, attempts)`` and
+           return the typed :class:`AgentResult`.
+
+        Retry orchestration moved into
+        :class:`~t0_agents.core.middleware.builtins.JsonRetryMiddleware`,
+        which calls this terminal in a loop and consults
+        ``ctx.output.recover()`` between attempts.  The middleware
+        threads its accumulated attempts list via
+        ``ctx.extras["_output_attempts"]`` so :meth:`OutputMode.materialize`
+        can choose the right ``parse_strategy`` value (``"strict"`` /
+        ``"permissive"`` on the first attempt, ``"retry"`` after one
+        or more retries).
         """
-        # --- 0. Safety check: json_mode='tool' against non-empty provider ---
-        # Uses ``self._tool_provider`` directly (not ``ctx.tool_provider``)
-        # so the check sees the raw agent-level provider rather than any
-        # GuardedToolProvider wrap.  Latched to once per Agent instance.
-        run_input = ctx.run.input if ctx.run is not None else None
-        per_call_json_mode = run_input.json_mode if run_input is not None else None
-        effective_mode_for_safety = (
-            per_call_json_mode
-            if per_call_json_mode is not None
-            else self._config.json_mode
+        assert ctx.output is not None, (
+            "_single_shot_terminal requires ctx.output to be set"
         )
+
+        # --- json_mode='tool' safety check (latched once per Agent) ---
+        # Replicates the v0.12 _json_terminal step-0 check: a tool-mode
+        # JSON inference combined with a tool-advertising provider is
+        # incompatible (TZ guide §11.1).
+        json_mode = _resolve_json_mode(ctx.output)
         if (
-            effective_mode_for_safety == "tool"
+            json_mode == "tool"
             and not self._tool_provider_verified_empty
         ):
             if self._tool_provider is None:
@@ -600,126 +655,68 @@ class Agent:
                 advertised_tools = await self._tool_provider.list_tools()
                 if advertised_tools:
                     raise ConfigurationError(
-                        "function_kind='json' with json_mode='tool' is "
-                        "incompatible with a tool_provider that advertises "
-                        "tools (TensorZero guide §11.1).  Either change "
-                        "json_mode to 'strict'/'on'/'off' or use an empty "
+                        "output=JsonOutput(json_mode='tool') is incompatible "
+                        "with a tool_provider that advertises tools "
+                        "(TensorZero guide §11.1).  Either switch to "
+                        "json_mode='strict'/'on'/'off' or use an empty "
                         "tool_provider."
                     )
                 self._tool_provider_verified_empty = True
 
-        # --- 1. Resolve effective output_schema / json_mode / max_json_retries ---
-        # Per-call kwargs (M1-deprecated; M3-removed) take precedence over
-        # the config-level fields.  ``AgentConfig.__post_init__`` resolves
-        # ``Path`` schemas into ``Mapping`` at construction time, so the
-        # config field is ``Mapping | None`` here.
-        per_call_output_schema = (
-            run_input.output_schema if run_input is not None else None
-        )
-        per_call_max_retries = (
-            run_input.max_json_retries if run_input is not None else None
-        )
-        config_schema = self._config.output_schema
-        effective_schema: Mapping[str, Any] | None
-        if per_call_output_schema is not None:
-            effective_schema = per_call_output_schema
-        elif config_schema is not None:
-            effective_schema = cast(Mapping[str, Any], config_schema)
-        else:
-            effective_schema = None
-        effective_mode = (
-            per_call_json_mode
-            if per_call_json_mode is not None
-            else self._config.json_mode
+        # --- 1. Build the inference request ---
+        messages: list[Mapping[str, Any]] = []
+        if ctx.prior_messages:
+            messages.extend(ctx.prior_messages)
+        messages.append({"role": "user", "content": ctx.user_message})
+        input_dict: dict[str, Any] = {"messages": messages}
+        if ctx.system is not None:
+            input_dict["system"] = ctx.system
+        elif ctx.system_arguments:
+            input_dict["system"] = dict(ctx.system_arguments)
+
+        req = InferenceRequest(
+            function_name=self._config.function_name,
+            input=input_dict,
+            additional_tools=None,
+            tool_choice=self._config.tool_choice,
+            tags=self._merge_tags(ctx.tags),
+            namespace=self._config.namespace,
+            dryrun=self._config.dryrun,
+            output_schema=None,
+            params=None,
         )
 
-        # --- 2. Retry budget + per-call override ---
-        retry_budget = (
-            per_call_max_retries
-            if per_call_max_retries is not None
-            else self._config.max_json_retries
-        )
-        permissive_enabled = self._config.permissive_json_parsing
+        # --- 2. Apply the output mode's request shaping ---
+        req = ctx.output.shape_inference(req)
 
-        attempts = 0
-        prior_msgs: list[Mapping[str, Any]] = []
-        current_user = ctx.user_message
-        inference_ids: list[str] = []
-        captured_episode: str | None = None
-        final_parsed: Any | None = None
-        final_raw: str = ""
-        final_strategy: ParseStrategy = "none"
+        # --- 3. Call TensorZero ---
+        inference_kwargs: dict[str, Any] = {
+            "function_name": req.function_name,
+            "input": req.input,
+            "episode_id": ctx.episode_id,
+            "tags": req.tags,
+            "namespace": req.namespace,
+            "dryrun": req.dryrun,
+        }
+        if req.output_schema is not None:
+            inference_kwargs["output_schema"] = dict(req.output_schema)
+        if req.params is not None:
+            inference_kwargs["params"] = req.params
+        if req.tool_choice is not None:
+            inference_kwargs["tool_choice"] = req.tool_choice
+        if req.additional_tools is not None:
+            inference_kwargs["additional_tools"] = req.additional_tools
 
-        on_inference_cb = cast(
-            Callable[[JsonInferenceResponse], Awaitable[None]] | None,
-            ctx.on_inference,
-        )
+        response = await self._t0.inference(**inference_kwargs)
 
-        while True:
-            # ``captured_episode`` is None on attempt 0 — use the
-            # caller-supplied ``episode_id`` so the first inference may
-            # mint a fresh episode (when both are None) or continue an
-            # existing one.  Subsequent attempts always reuse the id
-            # TZ assigned the first response, so the whole retry chain
-            # belongs to one episode.
-            structured: StructuredOutput = await run_structured_inference(
-                self._t0,
-                function_name=self._config.function_name,
-                user_message=current_user,
-                prior_messages=prior_msgs if prior_msgs else None,
-                output_schema=effective_schema,
-                json_mode=effective_mode,
-                # Empty dict collapses to None (parity with
-                # ``_merge_caller_system_arguments`` in v0.12).
-                system_arguments=ctx.system_arguments or None,
-                system=ctx.system,
-                episode_id=(
-                    captured_episode
-                    if captured_episode is not None
-                    else ctx.episode_id
-                ),
-                tags=self._merge_tags(ctx.tags),
-                namespace=self._config.namespace,
-                dryrun=self._config.dryrun,
-                on_inference=on_inference_cb,
-            )
-            inference_ids.append(structured.inference_id)
-            if captured_episode is None:
-                captured_episode = structured.episode_id
-            final_raw = structured.raw
+        # --- 4. Notify middlewares (cost tracking, observability) ---
+        if ctx.on_inference is not None:
+            await ctx.on_inference(response)
 
-            if structured.parsed is not None:
-                final_parsed = structured.parsed
-                final_strategy = "retry" if attempts > 0 else "strict"
-                break
-
-            if permissive_enabled:
-                candidate, _ = permissive_parse(structured.raw)
-                if candidate is not None:
-                    final_parsed = candidate
-                    final_strategy = "retry" if attempts > 0 else "permissive"
-                    break
-
-            if attempts >= retry_budget:
-                final_parsed = None
-                final_strategy = "none"
-                break
-
-            prior_msgs.append({"role": "user", "content": current_user})
-            prior_msgs.append({"role": "assistant", "content": structured.raw})
-            current_user = _build_retry_hint(effective_schema)
-            attempts += 1
-
-        return AgentResult(
-            response=final_raw,
-            episode_id=captured_episode,
-            inference_ids=inference_ids,
-            turns=1 + attempts,
-            function_kind="json",
-            parsed=final_parsed,
-            parse_strategy=final_strategy,
-            json_parse_attempts=attempts,
-        )
+        # --- 5. Materialise via the output mode ---
+        attempts: list[Attempt] = ctx.extras.get("_output_attempts", [])
+        result = await ctx.output.materialize(response, attempts)
+        return result
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -741,16 +738,14 @@ class Agent:
         spam.  Modes ``"strict"`` and ``"off"`` are safe and do not
         trigger the warning.
 
-        Takes the *effective* mode (per-call override resolved against
-        the config field) so a chat-agent-style config that gets
-        ``invoke(..., json_mode="on")`` per call still surfaces the
-        warning.
+        Takes the *effective* mode (resolved from the per-call or
+        config-level :class:`OutputMode`).
         """
         if self._warned_anthropic_combination:
             return
         if effective_mode in {"on", "tool"}:
             logger.warning(
-                "AgentConfig/Agent.invoke(json_mode=%r) — Anthropic "
+                "OutputMode(json_mode=%r) — Anthropic "
                 "extended-thinking models reject this combination "
                 "(TensorZero guide §11.4).  Verify your provider routing.",
                 effective_mode,
@@ -898,3 +893,21 @@ class Agent:
             f"{summary}\n---\n{user_message}",
             {},
         )
+
+
+def _resolve_json_mode(
+    output: OutputMode[Any],
+) -> Literal["off", "on", "strict", "tool"] | None:
+    """Extract ``json_mode`` from an :class:`OutputMode`, when applicable.
+
+    Chat / streaming / tool-call modes have no ``json_mode``;
+    :class:`JsonOutput` and :class:`StructuredOutput` expose it as an
+    instance field.  Used by :meth:`Agent.invoke` to decide whether to
+    fire the Anthropic extended-thinking warning, and by
+    :meth:`Agent._single_shot_terminal` to drive the once-per-Agent
+    ``json_mode='tool'`` safety check.
+    """
+    mode = getattr(output, "json_mode", None)
+    if mode in {"off", "on", "strict", "tool"}:
+        return cast(Literal["off", "on", "strict", "tool"], mode)
+    return None

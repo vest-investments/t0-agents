@@ -4,6 +4,175 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.0-M3] — Unreleased
+
+Third milestone of the v1.0 four-abstraction refactor.  Collapses the
+v0.12 chat/JSON dichotomy into a single polymorphic protocol:
+`OutputMode[T]` owns request shaping, response materialisation, and
+parse-failure recovery.  The five v0.12 JSON-only `AgentConfig` fields
+(`function_kind`, `json_mode`, `output_schema`, `permissive_json_parsing`,
+`max_json_retries`) are **removed in v1.0** (Tier 2 — contract §2.4);
+the canonical replacement is `AgentConfig(output=JsonOutput(...))` (or
+`StructuredOutput(Model)`, `ToolCallOutput()`).  Third parties can plug
+in custom modes (YAML extraction, Instructor-style retry, SQLAlchemy
+row materialisation) without forking.
+
+### Added
+
+- **`OutputMode[T]` protocol** — `expects_tool_loop` / `supports_streaming`
+  capability flags; `shape_inference(req)` mutates the request;
+  `materialize(response, attempts) -> AgentResult[T]`;
+  `recover(failure, attempts) -> Recovery` drives retry/accept/fail.
+- **Five built-in output modes** (`from t0_agents import ChatOutput,
+  JsonOutput, StructuredOutput, ToolCallOutput, StreamingOutput`):
+  - `ChatOutput` (T=str, default) — the MCP tool loop.
+  - `JsonOutput(schema, json_mode, permissive, max_retries)` — single-shot
+    JSON with permissive parsing + bounded retry-with-hint; class-level
+    `JsonOutput.RETRY_HINT_BASE` is the stable base sentence (tests
+    pattern-match against it).
+  - `StructuredOutput[M](model)` — Pydantic-validated single-shot
+    inference; `result.value` is statically typed as `M` (mypy-verified
+    via the per-call overload on `Agent.invoke`).
+  - `ToolCallOutput(tool_choice)` — router pattern: extracts tool calls
+    from a chat response without executing them.
+  - `StreamingOutput(base)` — placeholder that delegates to `base`.
+    Only `base=ChatOutput()` works in v1.0; `base=JsonOutput(...)`
+    raises `ConfigurationError` (Q11 deferred to post-v1.0).
+- **`AgentResult[T]` generic** with `value: T` as the canonical field.
+  The v0.12 read-side properties (`response`, `parsed`, `parse_strategy`,
+  `json_parse_attempts`, `function_kind`) remain available as
+  `@property` aliases (Tier 0 byte-identity).  `response=` is accepted
+  as a constructor alias for `value=` because `mcp/loop.py` (invariant
+  §2.1) constructs the chat result with that kwarg.
+- **`OutputDiagnostics`** — per-result observability payload attached
+  to `AgentResult.diagnostics` (`parse_strategy`, `attempts`,
+  `raw_text`, `failure_detail`).
+- **`InferenceRequest`** — mutable request descriptor threaded through
+  `OutputMode.shape_inference`.
+- **`Recovery`, `ParseFailure`, `Attempt`** — the retry handshake the
+  middleware uses to drive `OutputMode.recover`.
+- **`AgentConfig.output: OutputMode = ChatOutput()`** — canonical
+  config-level field.  Per-call override via `Agent.invoke(...,
+  output=...)` (per-call overloads narrow `Run[T]`).
+- **`[pydantic]` extra** in `pyproject.toml` — `pip install
+  't0-agents[pydantic]'` pulls `pydantic>=2.0` for `StructuredOutput`.
+  Lazy-imported at construction time; `ImportError` surfaces as
+  `ConfigurationError` with an install hint.
+- **`examples/17_structured/structured_pydantic.py`** — runnable demo
+  of `StructuredOutput[Customer]` (Pydantic-validated extraction).
+- **`tests/test_output/`** — 8 new test files covering the protocol,
+  the 5 built-in modes, the `AgentResult[T]` properties, the
+  `TypeError`-on-legacy-kwargs contract, and the streaming gate.
+  69 tests under this package.
+
+### Changed
+
+- **`Agent.invoke(..., output=...)` per-call overload** — when a
+  per-call `output: OutputMode[T]` is supplied, `Run[T]` is narrowed
+  by mypy via overload pair.  Default (no per-call override) returns
+  `Run[Any]`.  The `output: T_co` field on `Run` is now real (M1's
+  phantom typing activates).
+- **`Agent._json_terminal` → `Agent._single_shot_terminal`** —
+  reduced to a flat ~50-LoC body: build `InferenceRequest`, apply
+  `ctx.output.shape_inference`, call `t0.inference`, fire
+  `on_inference`, return `ctx.output.materialize(response, attempts)`.
+  The retry loop moved to `JsonRetryMiddleware.__call__` (~80 LoC).
+- **`JsonRetryMiddleware` activated** — consults
+  `ctx.output.recover(failure, attempts)` between attempts; mutates
+  `ctx.user_message` and `ctx.prior_messages` to thread the corrective
+  hint into the next inference.  `allow_retry = True` class attribute
+  signals `build_pipeline` to skip the `_NextGuard` for this layer so
+  re-invocation does not raise.
+- **`Agent.run` (Tier 1 shim)** — when called with the v0.12 per-call
+  JSON kwargs (`output_schema`, `json_mode`, `max_json_retries`),
+  translates them into a synthesised per-call `JsonOutput(...)` and
+  forwards via the canonical `output=` channel.  Preserves Tier 1
+  byte-identity for callers like
+  `examples/17_structured/ner_dynamic_schema.py` that used per-call
+  overrides on JSON agents.
+- **`RunContext.output` typed `OutputMode[Any] | None`** — was `Any`.
+- **`AgentConfig.__post_init__`** validates `output`:
+  single-shot modes (`output.expects_tool_loop is False`) are
+  incompatible with `sub_agents` (tools unreachable) and with
+  `memory_strategy="messages"` (no multi-turn history).  ~80 LoC of
+  v0.12 cross-field validation collapses to ~10 LoC.
+- **`Agent` docstring + `Agent.__init__` check** now key off
+  `config.output.expects_tool_loop` instead of `config.function_kind`.
+- **`docs/structured-outputs.md`** updated for the v1.0 surface;
+  v0.12 migration shown explicitly.
+- **`docs/agent.md`** notes that `output=` is canonical.
+- **`docs/api-reference.md`** — new "Output modes" section listing
+  `OutputMode`, the 5 built-ins, and the helper types
+  (`InferenceRequest`, `Attempt`, `ParseFailure`, `Recovery`,
+  `OutputDiagnostics`).
+- **`examples/17_structured/{structured_agent,recovery_demo,
+  recovery_real_provider,ner_dynamic_schema}.py`** migrated to the
+  `output=JsonOutput(...)` shape and to `agent.invoke(...).result()`.
+  `main.py` is unchanged (calls `run_structured_inference` directly
+  — Tier 0).
+- **HTTP / WS serialization of DoneEvent** explicitly projects through
+  the v0.12 read-side keys (`response`, `parsed`, `parse_strategy`,
+  `json_parse_attempts`, `function_kind`) so downstream clients keep
+  working byte-identical.
+
+### Removed
+
+- **`AgentConfig.function_kind`** — replaced by
+  `AgentConfig.output: OutputMode`.  Passing it raises `TypeError`.
+- **`AgentConfig.json_mode`** — replaced by
+  `JsonOutput(json_mode=...)`.  Passing it raises `TypeError`.
+- **`AgentConfig.output_schema`** — replaced by
+  `JsonOutput(schema=...)` (callers load the JSON themselves and pass
+  a `dict`).  Passing it raises `TypeError`.
+- **`AgentConfig.permissive_json_parsing`** — replaced by
+  `JsonOutput(permissive=...)`.  Passing it raises `TypeError`.
+- **`AgentConfig.max_json_retries`** — replaced by
+  `JsonOutput(max_retries=...)`.  Passing it raises `TypeError`.
+- **`Agent.invoke(..., output_schema=, json_mode=, max_json_retries=)`**
+  M1-deprecated per-call kwargs — removed in lockstep with the
+  config-level fields.  The `Agent.run` shim continues to accept them
+  for Tier 1 byte-identity and translates internally.
+- **`RunInput.function_kind/output_schema/json_mode/max_json_retries`**
+  — dropped; dispatch routes via `Run.output.expects_tool_loop`.
+- **`Agent._RETRY_HINT_BASE` + `Agent._build_retry_hint`** — moved into
+  `JsonOutput` as a class attribute + instance method.
+- **`StructuredOutput` (dataclass result of
+  `run_structured_inference`)** — renamed to
+  `StructuredInferenceResult` to free the canonical name for the new
+  Pydantic-driven `OutputMode`.  Direct callers of
+  `run_structured_inference` that imported the dataclass name should
+  switch to `StructuredInferenceResult`.
+
+### Validated
+
+- 811 non-integration tests pass (+62 over the M2 baseline of 749 —
+  69 new under `tests/test_output/`, modulo migrated counterparts).
+- mypy strict pass on 67 source files.  The `mcp/` module gets a
+  `disallow_any_generics = false` override so the invariant
+  `git diff src/t0_agents/mcp/` stays empty despite `AgentResult`
+  becoming generic.
+- ruff clean.
+- `git diff src/t0_agents/mcp/` — empty.
+- 17 chat-mode examples (`examples/00..16, 18`) run byte-identical to
+  v0.12 (stderr may include `DeprecationWarning` from M1 shims).
+- `examples/17_structured/recovery_demo.py` runs end-to-end against
+  the in-process fake gateway with all four `parse_strategy` outcomes
+  (`strict`, `permissive`, `retry`, `none`).
+- `AgentConfig(function_kind="json", ...)` raises `TypeError` (Tier 2
+  removal — contract §2.4).
+
+### Open questions resolved
+
+- **Q11** (`StreamingOutput` activation) — deferred officially.
+  Placeholder ships; `StreamingOutput(base=JsonOutput(...))` raises
+  `ConfigurationError`.  Re-open when TZ supports streaming JSON.
+- **Q12** (`AgentResult[T]` type narrowing helpers) — decided.  Per-call
+  overloads on `Agent.invoke(output=)` give `result.value: T`
+  narrowing; no separate `is_json` / `is_chat` `TypeGuard` helpers
+  ship in v1.0.
+- **Q13** (`JsonRetryMiddleware` placement) — already resolved at M2;
+  M3 activates it.
+
 ## [1.0.0-M2] — Unreleased
 
 Second milestone of the v1.0 four-abstraction refactor.  Replaces the

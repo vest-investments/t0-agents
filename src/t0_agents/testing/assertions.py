@@ -137,14 +137,14 @@ def assert_tool_args_equal(
     )
 
 
-def assert_max_turns(result: AgentResult, *, at_most: int) -> None:
+def assert_max_turns(result: AgentResult[Any], *, at_most: int) -> None:
     """Assert that *result* completed in at most *at_most* turns."""
     assert result.turns <= at_most, (
         f"Agent used {result.turns} turn(s); expected at most {at_most}"
     )
 
 
-def assert_response_contains(result: AgentResult, text: str) -> None:
+def assert_response_contains(result: AgentResult[Any], text: str) -> None:
     """Case-insensitive substring check on ``result.response``."""
     assert text.lower() in result.response.lower(), (
         f"Expected response to contain {text!r}; "
@@ -157,7 +157,7 @@ def assert_response_contains(result: AgentResult, text: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def assert_parsed_equals(result: AgentResult, expected: Any) -> None:
+def assert_parsed_equals(result: AgentResult[Any], expected: Any) -> None:
     """Assert that ``result.parsed`` equals *expected*.
 
     Use this in place of ``assert result.parsed == ...`` when you want a
@@ -172,7 +172,7 @@ def assert_parsed_equals(result: AgentResult, expected: Any) -> None:
 
 
 def assert_parsed_matches_schema(
-    result: AgentResult, schema: Mapping[str, Any]
+    result: AgentResult[Any], schema: Mapping[str, Any]
 ) -> None:
     """Validate ``result.parsed`` against a JSON Schema.
 
@@ -213,7 +213,7 @@ def assert_parsed_matches_schema(
         ) from exc
 
 
-def assert_invalid_json(result: AgentResult) -> None:
+def assert_invalid_json(result: AgentResult[Any]) -> None:
     """Assert that the JSON run could not produce a parseable result.
 
     Pins both ``result.parsed is None`` and
@@ -232,7 +232,7 @@ def assert_invalid_json(result: AgentResult) -> None:
 
 
 def assert_parse_strategy(
-    result: AgentResult, strategy: ParseStrategy
+    result: AgentResult[Any], strategy: ParseStrategy
 ) -> None:
     """Assert that ``result.parse_strategy`` equals *strategy*.
 
@@ -245,7 +245,7 @@ def assert_parse_strategy(
     )
 
 
-def assert_retry_attempts(result: AgentResult, expected: int) -> None:
+def assert_retry_attempts(result: AgentResult[Any], expected: int) -> None:
     """Assert that ``result.json_parse_attempts`` equals *expected*.
 
     The count is the number of **extra** inferences after the first, so

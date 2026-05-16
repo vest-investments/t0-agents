@@ -25,6 +25,7 @@ from tensorzero import AsyncTensorZeroGateway, Text
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import GuardrailBlockedError
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 from t0_agents.guardrails import require_parsed
 from t0_agents.testing import MockGateway
@@ -35,13 +36,13 @@ from tests._fake_t0 import FakeChatResponse, FakeT0
 def _json_agent(
     *,
     t0: MockGateway,
+    output: JsonOutput | None = None,
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
         "name": "extractor",
         "function_name": "extract_customer_info",
-        "function_kind": "json",
-        "json_mode": "strict",
+        "output": output if output is not None else JsonOutput(json_mode="strict"),
     }
     defaults.update(config_overrides)
     config = AgentConfig(**defaults)
@@ -78,9 +79,10 @@ async def test_require_parsed_aborts_when_none() -> None:
     )
     agent = _json_agent(
         t0=t0,
+        output=JsonOutput(
+            json_mode="strict", permissive=False, max_retries=0
+        ),
         guardrails=[require_parsed()],
-        permissive_json_parsing=False,
-        max_json_retries=0,
     )
 
     with pytest.raises(GuardrailBlockedError, match="parsed=None"):

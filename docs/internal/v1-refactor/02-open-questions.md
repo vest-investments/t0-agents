@@ -161,7 +161,7 @@
 
 ## Q11 — `StreamingOutput` activation when TZ supports streaming JSON
 
-**Status:** open (deferred to post-v1.0).
+**Status:** resolved (M3, 2026-05-16) — **deferred officially**.
 
 **Context.** TZ currently does not emit `output.parsed` mid-stream (per guide §7.1).  `StreamingOutput` ships as a placeholder.
 
@@ -169,26 +169,28 @@
 - Implement now with stdlib JSON-stream parser (`ijson`) → adds dependency.
 - Wait for TZ upstream → cleaner architecture.
 
-**Recommendation.** Defer.  `StreamingOutput(base=ChatOutput())` works for chat streaming.  `StreamingOutput(base=JsonOutput(...))` raises `ConfigurationError` with a "not yet supported" message + link to upstream issue.
-
-**Resolution target:** M3 dev-log §3.  Re-open when TZ ships streaming JSON.
+**Resolution.** Deferred.  `StreamingOutput(base=ChatOutput())` works for chat streaming and is functionally equivalent to plain `ChatOutput()` (the wrapper is intentional documentation that the caller opted into streaming explicitly).  `StreamingOutput(base=JsonOutput(...))` raises `ConfigurationError` at construction time with a "not yet supported" message pointing at this question.  Re-open when TZ ships streaming JSON.
 
 ---
 
 ## Q12 — `AgentResult[T]` type narrowing helpers
 
-**Status:** open.
+**Status:** resolved (M3, 2026-05-16).
 
 **Context.** With `AgentResult[T]` generic, users access `.value: T`.  Old code accesses `.response: str` or `.parsed: dict | None`.  Discrimination by `.function_kind` is awkward.
 
-**Trade-offs:**
-- TypeGuards (`is_json(result) -> TypeGuard[AgentResult[dict]]`) — mypy-friendly, requires PEP 647.
-- `match`-style pattern in user code — explicit but verbose.
-- Just rely on `output: OutputMode[T]` for static typing — `agent = Agent[Customer](config=..., output=StructuredOutput(Customer))` gives `Agent.invoke(...) -> Run[Customer]`.
+**Resolution.** Type narrowing flows through **per-call overloads on `Agent.invoke(output=...)`** — no `Agent[T]` class-level generic, no `is_json`/`is_chat` `TypeGuard` helpers in v1.0.  Callers write:
 
-**Recommendation.** Rely on `Agent[T]` typing.  Add `is_json()`, `is_chat()` TypeGuard helpers as bonus.
+```python
+result = await agent.invoke(msg, output=StructuredOutput(Customer)).result()
+result.value  # -> Customer (mypy-verified)
+```
 
-**Resolution target:** M3 dev-log §3.
+This was chosen over the class-level `Agent[T]` approach (which would have required threading the generic through `AgentConfig` and every callsite — much higher plumbing cost) and over `TypeGuard` helpers (which add API surface for a narrowing pattern users rarely need).  Without a per-call `output=`, `agent.invoke(...)` returns `Run[Any]` and `result.value: Any` — explicit and predictable.
+
+If future demand justifies it, `is_json()`/`is_chat()`/`is_structured()` `TypeGuard` helpers can be added as a backward-compatible extension.
+
+**Decided.**  User interview 2026-05-16.
 
 ---
 

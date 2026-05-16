@@ -9,10 +9,10 @@ The chat path of :meth:`Agent.run` and :meth:`Agent.stream` is
 preserved byte-identical to v0.12 by routing the shims through Run:
 the first consumer's call (``result()`` vs ``events()``) picks the
 drive mode.  ``result()`` runs the non-streaming chat path (or the
-JSON path); ``events()`` runs the streaming chat path.  JSON-mode
-agents only support ``result()`` — calling ``events()`` raises
-:class:`~t0_agents.core.exceptions.ConfigurationError`, mirroring
-v0.12's :meth:`Agent.stream` rejection.
+single-shot path); ``events()`` runs the streaming chat path.  Output
+modes whose :attr:`~OutputMode.supports_streaming` is ``False`` reject
+``events()`` with :class:`~t0_agents.core.exceptions.ConfigurationError`,
+mirroring v0.12's :meth:`Agent.stream` rejection for JSON agents.
 
 The Run holds a :class:`weakref.ref` to its :class:`Agent`, so a
 discarded Run does not extend the gateway's lifetime.  ``replay()``
@@ -36,6 +36,7 @@ from t0_agents.core.exceptions import (
     RunFailedError,
 )
 from t0_agents.core.middleware.base import RunContext
+from t0_agents.core.output import OutputMode
 from t0_agents.core.types import AgentResult, RunUsage
 from t0_agents.stream.events import AgentEvent, DoneEvent, TextDeltaEvent
 
@@ -64,59 +65,58 @@ class RunInput:
 
     Frozen so :meth:`Run.replay` and :meth:`Run.fork` can derive new
     inputs by :func:`dataclasses.replace` without mutating the source.
-    Per-call kwargs that v0.12's :meth:`Agent.run` accepted are
-    threaded through here; ``output_schema``, ``json_mode``, and
-    ``max_json_retries`` are kept M1-only and removed in M3 alongside
-    the equivalent :class:`AgentConfig` fields.
+    Per-call kwargs land here; the :class:`OutputMode` is stored
+    separately on the :class:`Run` itself (so each Run knows how to
+    materialise its result without re-deriving from config).
     """
 
     user_message: str
     function_name: str
-    function_kind: Literal["chat", "json"]
     episode_id: str | None = None
     tags: Mapping[str, str] | None = None
     system: str | None = None
     system_arguments: Mapping[str, Any] | None = None
-    output_schema: Mapping[str, Any] | None = None
-    json_mode: Literal["off", "on", "strict", "tool"] | None = None
-    max_json_retries: int | None = None
     prior_messages: tuple[Mapping[str, Any], ...] = ()
 
 
 class Run(Generic[T]):
     """Live or completed handle for one ``Agent.invoke(...)`` call.
 
-    Two consumption channels exist and both work concurrently for chat
-    agents: ``await run.result()`` returns the final
+    Two consumption channels exist and both work concurrently for
+    streaming-capable agents: ``await run.result()`` returns the final
     :class:`AgentResult`, and ``async for ev in run.events()`` yields
-    every :class:`AgentEvent` as the streaming runner emits it.  For
-    JSON agents only ``result()`` is supported (see module docstring).
+    every :class:`AgentEvent` as the streaming runner emits it.  Agents
+    whose :class:`OutputMode` does not support streaming (e.g.
+    :class:`JsonOutput`, :class:`StructuredOutput`) only support
+    ``result()`` — calling ``events()`` raises
+    :class:`ConfigurationError` (TZ does not emit ``output.parsed``
+    mid-stream).
 
     The first call to ``result()`` or ``events()`` picks the drive
-    mode for chat agents.  Subsequent calls share that mode — calling
-    ``events()`` after ``result()`` is well-defined but the buffer
-    will only have the synthetic ``DoneEvent`` that the non-streaming
-    drive emits at the end of the run.
+    mode for streaming-capable agents.  Subsequent calls share that
+    mode — calling ``events()`` after ``result()`` is well-defined but
+    the buffer will only have the synthetic ``DoneEvent`` that the
+    non-streaming drive emits at the end of the run.
     """
 
     def __init__(
         self,
         agent: Agent,
         input_: RunInput,
+        output: OutputMode[Any],
         *,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
         middleware: Sequence[Any] | None = None,
-        output: Any | None = None,
     ) -> None:
         self._agent_ref: weakref.ref[Agent] = weakref.ref(agent)
         self._input = input_
+        self._output: OutputMode[Any] = output
         self._context: dict[str, Any] = dict(context) if context else {}
         self._middleware: Sequence[Any] | None = middleware
-        self._output: Any | None = output
         self._state: RunState = "pending"
         self._buffer = EventBuffer()
-        self._result: AgentResult | None = None
+        self._result: AgentResult[Any] | None = None
         self._exception: BaseException | None = None
         self._task: asyncio.Task[None] | None = None
         self._mode: Literal["result", "events"] | None = None
@@ -125,8 +125,7 @@ class Run(Generic[T]):
         self._inference_ids: tuple[str, ...] = ()
         self._final_response: str = ""
         # Cost / usage totals — written by
-        # ``CostTrackingMiddleware`` via ``_set_cost`` / ``_set_usage``
-        # (M2 wiring of M1 D-5 placeholders).
+        # ``CostTrackingMiddleware`` via ``_set_cost`` / ``_set_usage``.
         self._cost: float = 0.0
         self._usage: RunUsage | None = None
         if eager:
@@ -140,6 +139,11 @@ class Run(Generic[T]):
     def input(self) -> RunInput:
         """The frozen :class:`RunInput` snapshot for this Run."""
         return self._input
+
+    @property
+    def output(self) -> OutputMode[Any]:
+        """The :class:`OutputMode` driving this Run."""
+        return self._output
 
     @property
     def context(self) -> dict[str, Any]:
@@ -178,17 +182,16 @@ class Run(Generic[T]):
         self._task = asyncio.create_task(self._drive())
 
     async def _drive(self) -> None:
-        """The asyncio task body.  Dispatches on function_kind + first-consumer.
+        """The asyncio task body.  Dispatches on ``output.expects_tool_loop``.
 
-        v1.0: builds a :class:`RunContext` from the frozen
-        :class:`RunInput` snapshot and dispatches to
-        :meth:`Agent._drive` which wraps the configured middleware
-        chain around the appropriate terminal.  For streaming chat the
-        terminal pushes events to ``self._buffer`` mid-iteration; this
-        method pushes the synthetic terminal :class:`DoneEvent` AFTER
-        the chain unwinds so outer middlewares (e.g.
-        :class:`GuardrailsMiddleware`) have a chance to mutate
-        ``result.guardrail_log`` first.
+        Builds a :class:`RunContext` from the frozen :class:`RunInput`
+        snapshot and dispatches to :meth:`Agent._drive` which wraps the
+        configured middleware chain around the appropriate terminal.
+        For streaming chat the terminal pushes events to
+        ``self._buffer`` mid-iteration; this method pushes the synthetic
+        terminal :class:`DoneEvent` AFTER the chain unwinds so outer
+        middlewares (e.g. :class:`GuardrailsMiddleware`) have a chance
+        to mutate ``result.guardrail_log`` first.
         """
         try:
             agent = self._agent_ref()
@@ -198,8 +201,8 @@ class Run(Generic[T]):
                     "Keep a reference to the Agent for the lifetime of the Run."
                 )
 
-            if self._input.function_kind == "json":
-                # JSON: only result() is valid (events() raises eagerly).
+            if not self._output.expects_tool_loop:
+                # Single-shot: only result() is valid (events() raises eagerly).
                 # No need to wait on _mode_chosen.
                 ctx = self._build_run_context(agent, is_streaming=False)
                 result = await agent._drive(
@@ -212,7 +215,7 @@ class Run(Generic[T]):
                 self._state = "succeeded"
                 return
 
-            # Chat: wait for first consumer to choose drive mode.
+            # Chat / tool-loop: wait for first consumer to choose drive mode.
             await self._mode_chosen.wait()
             is_streaming = self._mode == "events"
             ctx = self._build_run_context(agent, is_streaming=is_streaming)
@@ -277,7 +280,7 @@ class Run(Generic[T]):
             run=self,
         )
 
-    def _capture_result(self, result: AgentResult) -> None:
+    def _capture_result(self, result: AgentResult[Any]) -> None:
         """Record the final AgentResult on the Run's read-side properties."""
         self._result = result
         if result.episode_id:
@@ -301,13 +304,13 @@ class Run(Generic[T]):
     # Consumption
     # ------------------------------------------------------------------
 
-    async def result(self) -> AgentResult:
+    async def result(self) -> AgentResult[T]:
         """Await the final :class:`AgentResult`.
 
         For chat agents this selects the non-streaming drive mode when
-        called before :meth:`events`.  For JSON agents the drive mode
-        is fixed at construction; ``result()`` returns the JSON-path
-        result.
+        called before :meth:`events`.  For single-shot agents the drive
+        mode is fixed at construction; ``result()`` returns the
+        materialised result.
         """
         if self._mode is None:
             self._mode = "result"
@@ -355,10 +358,10 @@ class Run(Generic[T]):
     ) -> AsyncIterator[AgentEvent]:
         """Yield every :class:`AgentEvent` produced by this Run.
 
-        For chat agents the first call to ``events()`` selects the
-        streaming drive mode.  For JSON agents the call raises
-        :class:`ConfigurationError` mirroring v0.12
-        :meth:`Agent.stream` semantics.
+        For streaming-capable agents the first call to ``events()``
+        selects the streaming drive mode.  For non-streaming output
+        modes the call raises :class:`ConfigurationError` mirroring
+        v0.12 :meth:`Agent.stream` semantics.
 
         Args:
             replay: When ``True``, yield from the earliest still-
@@ -366,12 +369,11 @@ class Run(Generic[T]):
                 the current live cursor — events emitted before the
                 subscription are skipped.
         """
-        if self._input.function_kind == "json":
+        if not self._output.supports_streaming:
             raise ConfigurationError(
-                "Agent.invoke(...).events() is not supported for "
-                "function_kind='json'.  TensorZero does not emit "
-                "`output.parsed` mid-stream (guide §7.1, §11.3); use "
-                "`await run.result()` instead."
+                f"Agent.invoke(...).events() is not supported for "
+                f"output={self._output.name!r}.  Output mode does not "
+                "support streaming; use `await run.result()` instead."
             )
         if self._mode is None:
             self._mode = "events"
@@ -405,7 +407,7 @@ class Run(Generic[T]):
             if isinstance(ev, TextDeltaEvent):
                 yield ev.delta
 
-    def __await__(self) -> Generator[Any, None, AgentResult]:
+    def __await__(self) -> Generator[Any, None, AgentResult[T]]:
         """Awaiting a Run is an alias for ``await run.result()``."""
         return self.result().__await__()
 
@@ -517,8 +519,7 @@ class Run(Generic[T]):
         correlation; useful when treating replay as "re-execute under
         same conversation."
 
-        ``variant`` is reserved for the M3+ OutputMode plumbing and
-        currently flows through TensorZero's tags as
+        ``variant`` flows through TensorZero's tags as
         ``"t0_agents.variant"`` so operators can audit replay
         provenance without an SDK change.
         """
@@ -542,9 +543,6 @@ class Run(Generic[T]):
             tags=merged_tags,
             system_arguments=self._dict_or_none(self._input.system_arguments),
             system=self._input.system,
-            output_schema=self._input.output_schema,
-            json_mode=self._input.json_mode,
-            max_json_retries=self._input.max_json_retries,
             prior_messages=(
                 list(self._input.prior_messages)
                 if self._input.prior_messages
@@ -584,9 +582,6 @@ class Run(Generic[T]):
             tags=self._dict_or_none(self._input.tags),
             system_arguments=self._dict_or_none(self._input.system_arguments),
             system=self._input.system,
-            output_schema=self._input.output_schema,
-            json_mode=self._input.json_mode,
-            max_json_retries=self._input.max_json_retries,
             prior_messages=transcript,
             middleware=self._middleware,
             output=self._output,
@@ -600,12 +595,12 @@ class Run(Generic[T]):
     def transcript(self) -> list[Mapping[str, Any]]:
         """Return the recorded conversation as a list of TZ-shaped messages.
 
-        In M1 the transcript is any ``prior_messages`` the Run was
-        seeded with (so a fork-of-a-fork preserves the full conversation
+        The transcript is any ``prior_messages`` the Run was seeded
+        with (so a fork-of-a-fork preserves the full conversation
         chain) followed by the boundary pair — this Run's user turn plus
         the agent's final response.  Intermediate tool turns are not
-        captured at this milestone; M2/M3 may extend the transcript
-        with the full middleware-level message history.
+        captured at this milestone; future milestones may extend the
+        transcript with the full middleware-level message history.
         """
         if self._result is None:
             return []
@@ -651,14 +646,10 @@ def build_run_input(
     *,
     user_message: str,
     function_name: str,
-    function_kind: Literal["chat", "json"],
     episode_id: str | None = None,
     tags: Mapping[str, str] | None = None,
     system: str | None = None,
     system_arguments: Mapping[str, Any] | None = None,
-    output_schema: Mapping[str, Any] | None = None,
-    json_mode: Literal["off", "on", "strict", "tool"] | None = None,
-    max_json_retries: int | None = None,
     prior_messages: Sequence[Mapping[str, Any]] | None = None,
 ) -> RunInput:
     """Build a :class:`RunInput` from :meth:`Agent.invoke` kwargs.
@@ -673,13 +664,9 @@ def build_run_input(
     return RunInput(
         user_message=user_message,
         function_name=function_name,
-        function_kind=function_kind,
         episode_id=episode_id,
         tags=tags,
         system=system,
         system_arguments=system_arguments,
-        output_schema=output_schema,
-        json_mode=json_mode,
-        max_json_retries=max_json_retries,
         prior_messages=tuple(prior_messages) if prior_messages else (),
     )

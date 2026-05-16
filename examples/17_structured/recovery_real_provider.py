@@ -33,8 +33,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.agent import Agent
-from t0_agents.core.config import AgentConfig
+from t0_agents import Agent, AgentConfig, JsonOutput
 
 
 def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
@@ -48,10 +47,12 @@ async def main() -> None:
     config = AgentConfig(
         name="customer-extractor-loose",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",  # config baseline; overridden per call below
-        permissive_json_parsing=True,
-        max_json_retries=2,
+        # config baseline output mode; overridden per call below.
+        output=JsonOutput(
+            json_mode="strict",
+            permissive=True,
+            max_retries=2,
+        ),
     )
 
     prompt = (
@@ -63,7 +64,16 @@ async def main() -> None:
         agent = Agent(config, t0=t0)
         # ``json_mode="off"`` lets the model decide on output formatting,
         # which is exactly what the recovery layers are built to absorb.
-        result = await agent.run(prompt, json_mode="off")
+        # The per-call ``output=`` kwarg overrides the config-level mode
+        # for the duration of this invocation only.
+        result = await agent.invoke(
+            prompt,
+            output=JsonOutput(
+                json_mode="off",
+                permissive=True,
+                max_retries=2,
+            ),
+        ).result()
 
     print(f"parse_strategy:      {result.parse_strategy}")
     print(f"json_parse_attempts: {result.json_parse_attempts}")

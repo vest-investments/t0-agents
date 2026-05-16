@@ -65,7 +65,7 @@ def require_parsed(*, name: str = "require_parsed") -> Guardrail:
         async def after_run(
             self,
             ctx: GuardrailContext,
-            result: AgentResult | None,
+            result: AgentResult[Any] | None,
         ) -> None:
             # ``result`` is ``None`` on a fatal-abort teardown (the run
             # never produced an :class:`AgentResult`); chat runs short-

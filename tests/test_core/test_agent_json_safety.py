@@ -32,6 +32,7 @@ from t0_agents.core.exceptions import (
     ConfigurationError,
     GuardrailBlockedError,
 )
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 from t0_agents.stream.events import DoneEvent
 from t0_agents.testing import MockGateway
@@ -58,13 +59,13 @@ def _json_agent(
     *,
     t0: MockGateway,
     tool_provider: ToolProvider | None = None,
+    json_mode: str = "strict",
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
         "name": "extractor",
         "function_name": "extract_customer_info",
-        "function_kind": "json",
-        "json_mode": "strict",
+        "output": JsonOutput(json_mode=cast(Any, json_mode)),
     }
     defaults.update(config_overrides)
     config = AgentConfig(**defaults)
@@ -208,8 +209,7 @@ class TestToolModeCheck:
             AgentConfig(
                 name="extractor",
                 function_name="extract_customer_info",
-                function_kind="json",
-                json_mode="tool",
+                output=JsonOutput(json_mode="tool"),
             ),
             t0=cast(AsyncTensorZeroGateway, t0),
         )
@@ -234,7 +234,7 @@ class TestStreamGuard:
         agent = _json_agent(t0=t0)
         gen = agent.stream("go")
 
-        with pytest.raises(ConfigurationError, match="function_kind='json'"):
+        with pytest.raises(ConfigurationError, match=r"does not.*support streaming"):
             await gen.__anext__()
 
     async def test_stream_on_chat_agent_byte_identical(self) -> None:

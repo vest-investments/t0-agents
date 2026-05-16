@@ -1,4 +1,4 @@
-"""Unit tests for :func:`run_structured_inference` and :class:`StructuredOutput`.
+"""Unit tests for :func:`run_structured_inference` and :class:`StructuredInferenceResult`.
 
 Drives :func:`run_structured_inference` through ``MockGateway.script_json``
 — the JSON-flavoured sibling of ``MockGateway.script`` that pops one
@@ -21,7 +21,10 @@ from tensorzero import (
 )
 from tensorzero.types import JsonInferenceOutput
 
-from t0_agents.core.structured import StructuredOutput, run_structured_inference
+from t0_agents.core.structured import (
+    StructuredInferenceResult,
+    run_structured_inference,
+)
 from t0_agents.testing import MockGateway
 
 
@@ -34,7 +37,7 @@ class TestRunStructuredInference:
             function_name="extract",
             user_message="hello",
         )
-        assert isinstance(result, StructuredOutput)
+        assert isinstance(result, StructuredInferenceResult)
         assert result.parsed == {"a": 1}
         assert result.raw == '{"a": 1}'
         assert result.parse_strategy == "strict"

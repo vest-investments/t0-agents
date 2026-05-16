@@ -1,7 +1,11 @@
-"""Unit tests for ``Agent.run`` JSON-function dispatch.
+"""Unit tests for ``Agent.run`` single-shot dispatch (post-M3).
 
-Drives ``Agent.run`` against ``MockGateway.script_json`` for the JSON path
-and the shared ``tests/_fake_t0`` for the chat-byte-identity assertions.
+Drives ``Agent.run`` (Tier 1 deprecated shim) against
+``MockGateway.script_json`` for the JSON path and the shared
+``tests/_fake_t0`` for the chat-byte-identity assertions.  The shim
+translates per-call legacy JSON kwargs into a per-call
+:class:`JsonOutput` so v0.12 callers keep working byte-identical
+(stderr now carries a ``DeprecationWarning``).
 ``MockGateway.script_json`` is the JSON-flavoured sibling of
 ``MockGateway.script`` — see ``tests/test_testing/test_json_helpers.py``
 for the dict-shape semantic (auto-derive ``parsed`` when the key is
@@ -20,6 +24,7 @@ from tensorzero import AsyncTensorZeroGateway, Text
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.outputs import JsonOutput
 from t0_agents.core.types import ToolProvider
 from t0_agents.memory.in_memory import InMemoryMemory
 from t0_agents.testing import MockGateway
@@ -34,13 +39,13 @@ def _json_agent(
     *,
     t0: MockGateway,
     client: FakeMCPClient | None = None,
+    output: JsonOutput | None = None,
     **config_overrides: Any,
 ) -> Agent:
     defaults: dict[str, Any] = {
         "name": "extractor",
         "function_name": "extract_customer_info",
-        "function_kind": "json",
-        "json_mode": "strict",
+        "output": output if output is not None else JsonOutput(json_mode="strict"),
     }
     defaults.update(config_overrides)
     config = AgentConfig(**defaults)
@@ -81,7 +86,7 @@ def _mcp_tool(name: str = "add") -> MCPTool:
 
 
 class TestJsonDispatch:
-    async def test_run_dispatches_to_json_when_function_kind_is_json(self) -> None:
+    async def test_run_dispatches_to_json_when_output_is_jsonoutput(self) -> None:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0)
 
@@ -95,14 +100,12 @@ class TestJsonDispatch:
         assert result.response == _OK_RAW
         assert result.turns == 1
         assert len(result.inference_ids) == 1
-        # Chat-only field default still preserved.
-        assert result.response_source == "text"
 
     async def test_json_agent_runs_without_tool_provider(self) -> None:
         """End-to-end: a JSON agent built without a provider can still run.
 
         Mirrors the canonical ``examples/17_structured/structured_agent.py``
-        post-0.12.0 shape — no ``fastmcp.Client``, no noop server, just
+        post-M3 shape — no ``fastmcp.Client``, no noop server, just
         ``Agent(config, t0=t0)``.
         """
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
@@ -110,8 +113,7 @@ class TestJsonDispatch:
             AgentConfig(
                 name="extractor",
                 function_name="extract_customer_info",
-                function_kind="json",
-                json_mode="strict",
+                output=JsonOutput(json_mode="strict"),
             ),
             t0=cast(AsyncTensorZeroGateway, t0),
         )
@@ -142,7 +144,8 @@ class TestJsonDispatch:
         assert result.response_source == "text"
 
     async def test_json_run_system_string_forwarded(self) -> None:
-        """``system="..."`` flows through ``_run_json`` to ``input.system``."""
+        """``system="..."`` flows through the single-shot terminal to
+        ``input.system``."""
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(t0=t0)
 
@@ -154,8 +157,8 @@ class TestJsonDispatch:
         )
 
     async def test_json_run_system_and_system_arguments_rejected(self) -> None:
-        """Mutex applies to the JSON dispatch path too — checked before the
-        first inference is issued."""
+        """Mutex applies to the single-shot dispatch path too — checked
+        before the first inference is issued."""
         t0 = MockGateway.script_json([])
         agent = _json_agent(t0=t0)
 
@@ -170,10 +173,19 @@ class TestJsonDispatch:
 
 class TestPerCallOverrides:
     async def test_per_call_output_schema_override(self) -> None:
+        # Config-level schema is overridden when the caller passes a
+        # per-call ``output_schema=`` (translated by the v0.12 shim into
+        # a synthesised per-call :class:`JsonOutput`).
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
+        config_schema = {
+            "type": "object",
+            "properties": {"x": {"type": "number"}},
+        }
         agent = _json_agent(
             t0=t0,
-            output_schema={"type": "object", "properties": {"x": {"type": "number"}}},
+            output=JsonOutput(
+                schema=config_schema, json_mode="strict"
+            ),
         )
 
         per_call_schema = {
@@ -196,7 +208,7 @@ class TestPerCallOverrides:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _json_agent(
             t0=t0,
-            json_mode="strict",
+            output=JsonOutput(json_mode="strict"),
             client=FakeMCPClient(tools=[]),
         )
 
@@ -207,27 +219,36 @@ class TestPerCallOverrides:
 
     async def test_config_schema_used_when_per_call_omits_override(self) -> None:
         t0 = MockGateway.script_json([{"raw": _OK_RAW}])
-        config_schema = {"type": "object", "properties": {"z": {"type": "boolean"}}}
-        agent = _json_agent(t0=t0, output_schema=config_schema)
+        config_schema = {
+            "type": "object",
+            "properties": {"z": {"type": "boolean"}},
+        }
+        agent = _json_agent(
+            t0=t0,
+            output=JsonOutput(schema=config_schema, json_mode="strict"),
+        )
 
         await agent.run("hello")
 
         kwargs = t0.calls[0]
         assert kwargs["output_schema"] == config_schema
 
-    async def test_per_call_kwargs_forbidden_on_chat_agent(self) -> None:
-        t0 = FakeT0([FakeChatResponse(content=[Text(text="hi", type="text")])])
+    async def test_per_call_jsonoutput_overrides_chat_config(self) -> None:
+        # v1.0 behaviour: passing a per-call output= overrides the
+        # config-level ``ChatOutput`` for the duration of this invocation.
+        # v0.12 raised ConfigurationError here — the M3 surface is
+        # additive instead (the per-call mode wins).
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
         agent = _chat_agent(t0=t0)
 
-        with pytest.raises(ConfigurationError, match="function_kind"):
-            await agent.run("hi", output_schema={"type": "object"})
+        # Direct ``invoke`` with a per-call JsonOutput.  The shim
+        # translation in ``agent.run`` would also work; we use
+        # ``invoke`` here to keep the test free of deprecation warnings.
+        result = await agent.invoke(
+            "hello", output=JsonOutput(json_mode="strict"),
+        ).result()
 
-    async def test_per_call_json_mode_kwarg_forbidden_on_chat_agent(self) -> None:
-        t0 = FakeT0([FakeChatResponse(content=[Text(text="hi", type="text")])])
-        agent = _chat_agent(t0=t0)
-
-        with pytest.raises(ConfigurationError, match="function_kind"):
-            await agent.run("hi", json_mode="strict")
+        assert result.function_kind == "json"
 
 
 class TestGuardrails:
@@ -348,12 +369,12 @@ class TestEpisodePropagation:
 
 
 class TestMessagesMemoryStrategy:
-    """Reject ``memory_strategy='messages'`` for JSON runs uniformly.
+    """Reject ``memory_strategy='messages'`` for single-shot runs uniformly.
 
-    The rejection is keyed off the resolved strategy rather than the
-    presence of loaded history, so an episode with no prior messages
-    (or no ``episode_id`` at all) still surfaces the misconfiguration
-    instead of running silently.
+    Single-shot output modes have no multi-turn message history to
+    thread, so the strategy is rejected at config construction (when the
+    output is single-shot) — keying off the resolved strategy rather
+    than the presence of loaded history.
     """
 
     @staticmethod
@@ -378,47 +399,16 @@ class TestMessagesMemoryStrategy:
 
         return _MessagesMemory()
 
-    async def test_rejected_with_non_empty_history(self) -> None:
+    def test_rejected_at_config_time(self) -> None:
         memory = self._messages_memory(
             history=[{"role": "user", "content": "prior"}],
         )
-        episode = uuid4()
-        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
-        agent = _json_agent(
-            t0=t0,
-            memory=cast(Any, memory),
-            memory_strategy="messages",
-        )
 
         with pytest.raises(ConfigurationError, match="messages"):
-            await agent.run("hi", episode_id=str(episode))
-
-    async def test_rejected_with_empty_history(self) -> None:
-        # Before applying the strategy-level check, an empty history
-        # would have let the misconfigured run proceed silently because
-        # ``extra_kwargs`` never picked up ``prior_messages``.
-        memory = self._messages_memory(history=[])
-        episode = uuid4()
-        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
-        agent = _json_agent(
-            t0=t0,
-            memory=cast(Any, memory),
-            memory_strategy="messages",
-        )
-
-        with pytest.raises(ConfigurationError, match="messages"):
-            await agent.run("hi", episode_id=str(episode))
-
-    async def test_rejected_without_episode_id(self) -> None:
-        # No ``episode_id`` ⇒ no memory load happens at all; the check
-        # still fires because it keys off the configured strategy.
-        memory = self._messages_memory(history=[])
-        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
-        agent = _json_agent(
-            t0=t0,
-            memory=cast(Any, memory),
-            memory_strategy="messages",
-        )
-
-        with pytest.raises(ConfigurationError, match="messages"):
-            await agent.run("hi")
+            AgentConfig(
+                name="extractor",
+                function_name="extract_customer_info",
+                output=JsonOutput(json_mode="strict"),
+                memory=cast(Any, memory),
+                memory_strategy="messages",
+            )

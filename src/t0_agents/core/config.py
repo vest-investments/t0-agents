@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from tensorzero import ToolChoice
 
 from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.output import OutputMode
+from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.types import Guardrail, MemoryProvider
 
 if TYPE_CHECKING:
@@ -73,23 +72,25 @@ class AgentConfig:
             ``fastmcp.Client`` wrapping an in-process ``FastMCP``
             instance.  The default empty list leaves single-agent
             configurations unaffected.
-        function_kind: Declares the TensorZero function type for
-            dispatch.  ``"chat"`` (the default) preserves v0.9.0
-            behaviour byte-identically.  ``"json"`` marks the function
-            as a single-shot JSON function and routes ``Agent.run``
-            through :func:`run_structured_inference`.
-        output_schema: Optional dynamic schema for JSON functions.
-            Accepts either an inline ``Mapping[str, Any]`` (sent
-            verbatim) or a :class:`~pathlib.Path` (read as JSON at
-            construction time; relative paths resolve against the
-            current working directory — absolute paths recommended).
-            Forbidden when ``function_kind == "chat"``.
-        json_mode: TensorZero ``json_mode`` override for the variant
-            (``"off"``, ``"on"``, ``"strict"``, ``"tool"``).  Required
-            when ``function_kind == "json"``; forbidden when
-            ``function_kind == "chat"`` (TZ guide §11.2 — setting
-            ``json_mode`` on a chat function is a configuration
-            error).
+        output: The :class:`OutputMode` driving inference shape +
+            materialisation + recovery.  Default is :class:`ChatOutput`
+            (the v0.12 chat agent).  Pass
+            :class:`~t0_agents.core.outputs.JsonOutput` for JSON-mode
+            agents, :class:`~t0_agents.core.outputs.StructuredOutput`
+            for Pydantic-validated single-shot inference,
+            :class:`~t0_agents.core.outputs.ToolCallOutput` for the
+            router pattern.  Per-call override is available via
+            :meth:`Agent.invoke` ``output=`` kwarg.
+
+            v1.0 replaced the five v0.12 JSON-only fields
+            (``function_kind``, ``json_mode``, ``output_schema``,
+            ``permissive_json_parsing``, ``max_json_retries``) with this
+            single canonical surface.  Passing any of the legacy kwargs
+            raises ``TypeError`` (Tier 2 removal — contract §2.4).
+        middleware: Override for the materialised middleware chain.
+            ``None`` (default) builds the v0.12-equivalent chain from
+            the kwargs above.  ``[]`` is the explicit "no middleware"
+            opt-out — power users only.
     """
 
     # Identity
@@ -119,12 +120,8 @@ class AgentConfig:
     # Multi-agent composition
     sub_agents: list[Agent] = field(default_factory=list)
 
-    # Structured outputs
-    function_kind: Literal["chat", "json"] = "chat"
-    output_schema: Mapping[str, Any] | Path | None = None
-    json_mode: Literal["off", "on", "strict", "tool"] | None = None
-    permissive_json_parsing: bool = True
-    max_json_retries: int = 2
+    # Output mode (v1.0).  Replaces the five v0.12 JSON-only fields.
+    output: OutputMode[Any] = field(default_factory=ChatOutput)
 
     # Middleware chain (v1.0).  ``None`` (default) materialises the
     # backwards-compatible chain in ``__post_init__`` from
@@ -184,66 +181,32 @@ class AgentConfig:
                         f"instance, got {type(sa).__name__}"
                     )
 
-        # Structured-output validations (contract §3.1 / §5.1)
-        if self.max_json_retries < 0:
+        # Output mode validations (v1.0 — replaces ~80 LoC of v0.12
+        # cross-field validation on function_kind/json_mode/output_schema).
+        if not isinstance(self.output, OutputMode):
             raise ConfigurationError(
-                f"AgentConfig.max_json_retries must be ≥ 0, "
-                f"got {self.max_json_retries}"
+                f"AgentConfig.output must implement the OutputMode protocol "
+                f"(shape_inference + materialize + recover + capability flags), "
+                f"got {type(self.output).__name__}."
             )
-        if self.function_kind == "json":
-            if self.json_mode is None:
-                raise ConfigurationError(
-                    "AgentConfig(function_kind='json') requires json_mode "
-                    "to be one of 'off', 'on', 'strict', or 'tool'. TZ "
-                    "guide §11.2: json_mode is required for json functions."
-                )
-            if self.sub_agents:
-                raise ConfigurationError(
-                    "AgentConfig(function_kind='json') is incompatible with "
-                    "sub_agents. JSON functions are single-shot — sub-agent "
-                    "tools would be unreachable. Compose chat → json "
-                    "manually instead."
-                )
-        else:  # function_kind == "chat"
-            if self.json_mode is not None:
-                raise ConfigurationError(
-                    "AgentConfig(function_kind='chat') forbids json_mode. "
-                    "TZ guide §11.2: setting json_mode on a chat function "
-                    "is a configuration error."
-                )
-            if self.output_schema is not None:
-                raise ConfigurationError(
-                    "AgentConfig(function_kind='chat') forbids output_schema. "
-                    "Set function_kind='json' to use a JSON function."
-                )
-
-        # Resolve output_schema: Path → Mapping at construction time so
-        # downstream code can treat the field as a Mapping.
-        if isinstance(self.output_schema, Path):
-            schema_path = self.output_schema
-            if not schema_path.is_absolute():
-                schema_path = (Path.cwd() / schema_path).resolve()
-            try:
-                schema_text = schema_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise ConfigurationError(
-                    f"AgentConfig.output_schema points at {schema_path!s}, "
-                    f"which could not be read: {exc}"
-                ) from exc
-            try:
-                schema_data = json.loads(schema_text)
-            except json.JSONDecodeError as exc:
-                raise ConfigurationError(
-                    f"AgentConfig.output_schema at {schema_path!s} is not "
-                    f"valid JSON: {exc}"
-                ) from exc
-            if not isinstance(schema_data, dict):
-                raise ConfigurationError(
-                    f"AgentConfig.output_schema at {schema_path!s} must be a "
-                    f"JSON object at the top level, got "
-                    f"{type(schema_data).__name__}."
-                )
-            self.output_schema = schema_data
+        if not self.output.expects_tool_loop and self.sub_agents:
+            raise ConfigurationError(
+                f"AgentConfig.sub_agents is incompatible with "
+                f"output={self.output.name!r} (single-shot mode — sub-agent "
+                f"tools would be unreachable). Use ChatOutput() for the "
+                f"orchestrator, or compose chat → single-shot manually."
+            )
+        if (
+            not self.output.expects_tool_loop
+            and self.memory_strategy == "messages"
+        ):
+            raise ConfigurationError(
+                f"memory_strategy='messages' is incompatible with "
+                f"output={self.output.name!r} (single-shot mode — there is no "
+                f"multi-turn message history to thread). Use "
+                f"memory_strategy='prepended_message' (the default) or "
+                f"'system_template' for single-shot outputs."
+            )
 
         # Materialise the default middleware chain when the caller did
         # not provide one.  ``middleware=[]`` (explicit "no middleware")
@@ -263,8 +226,8 @@ class AgentConfig:
         ``SubAgents`` only when ``self.sub_agents`` is non-empty.
         ``CostTracking`` and ``JsonRetry`` are always present —
         cost-tracking wires :meth:`Run.cost` / :meth:`Run.usage`
-        unconditionally, and ``JsonRetry`` is a no-op placeholder in
-        M2 (M3 activates it).
+        unconditionally, and ``JsonRetry`` activates for any non-chat
+        output mode (M3 wires it through ``ctx.output.recover()``).
 
         **Order invariant (contract §3.2).** ``SubAgentMiddleware`` must
         wrap ``tool_provider`` *inside* ``GuardrailsMiddleware`` so

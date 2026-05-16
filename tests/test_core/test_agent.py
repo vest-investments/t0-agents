@@ -144,30 +144,31 @@ class TestAgent:
         """Chat-mode (the default ``function_kind``) requires a provider.
 
         The constructor must reject the omission eagerly with a message
-        that names ``function_kind`` and points at the JSON-mode escape
-        hatch — otherwise the failure surfaces deep inside ``run_agent``
-        on the first ``Agent.run`` call.
+        that names ``output='chat'`` and points at the single-shot
+        escape hatch — otherwise the failure surfaces deep inside
+        ``run_agent`` on the first ``Agent.run`` call.
         """
         config = AgentConfig(name="a", function_name="f")
-        with pytest.raises(ConfigurationError, match="function_kind='chat'"):
+        with pytest.raises(ConfigurationError, match="output='chat'"):
             Agent(
                 config,
                 t0=cast(AsyncTensorZeroGateway, FakeT0([])),
             )
 
     def test_json_agent_without_tool_provider_constructs(self) -> None:
-        """JSON-mode agents may omit the provider entirely (v0.12.0)."""
+        """Single-shot agents may omit the provider entirely (v1.0)."""
+        from t0_agents.core.outputs import JsonOutput
+
         config = AgentConfig(
             name="extractor",
             function_name="extract",
-            function_kind="json",
-            json_mode="strict",
+            output=JsonOutput(json_mode="strict"),
         )
         agent = Agent(
             config,
             t0=cast(AsyncTensorZeroGateway, FakeT0([])),
         )
-        assert agent.config.function_kind == "json"
+        assert agent.config.output.name == "json"
         # Internal attribute is exposed for the serve/share_client check;
         # documenting the contract here keeps that coupling deliberate.
         assert agent._tool_provider is None

@@ -224,8 +224,8 @@ class StreamingAgentLoop:
 
             if not tool_calls_collected:
                 text, response_source = _final_text(assistant_blocks)
-                result = AgentResult(
-                    response=text,
+                result: AgentResult[str] = AgentResult(
+                    value=text,
                     episode_id=episode_id,
                     inference_ids=list(inference_ids),
                     turns=turn + 1,

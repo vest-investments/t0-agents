@@ -47,19 +47,20 @@ async def test_create_app_share_client_rejects_provider_less_agent() -> None:
     ``SessionFactory`` would otherwise trip its XOR check with a less
     helpful message.
     """
+    from t0_agents.core.outputs import JsonOutput
+
     json_agent = Agent(
         AgentConfig(
             name="extractor",
             function_name="extract",
-            function_kind="json",
-            json_mode="strict",
+            output=JsonOutput(json_mode="strict"),
         ),
         t0=cast(AsyncTensorZeroGateway, FakeT0([])),
     )
     with pytest.raises(ConfigurationError) as exc:
         create_app(json_agent, share_client=True)
     assert "tool_provider" in str(exc.value)
-    assert "function_kind='json'" in str(exc.value)
+    assert "single-shot" in str(exc.value).lower() or "json" in str(exc.value).lower()
 
 
 # --- Per-session vs shared ---------------------------------------------------

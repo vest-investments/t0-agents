@@ -30,7 +30,7 @@ from tensorzero import (
 )
 from tensorzero.types import JsonInferenceOutput
 
-from t0_agents import Agent, AgentConfig
+from t0_agents import Agent, AgentConfig, JsonOutput
 
 
 def _fake_json_response(
@@ -74,10 +74,11 @@ def _make_agent(t0: ScriptedGateway) -> Agent:
     config = AgentConfig(
         name="recovery-demo",
         function_name="extract_customer_info",
-        function_kind="json",
-        json_mode="strict",
-        permissive_json_parsing=True,
-        max_json_retries=2,
+        output=JsonOutput(
+            json_mode="strict",
+            permissive=True,
+            max_retries=2,
+        ),
     )
     return Agent(config, t0=cast(AsyncTensorZeroGateway, t0))
 
@@ -124,7 +125,7 @@ async def main() -> None:
             [_fake_json_response(raw=r, parsed=p) for r, p in script]
         )
         agent = _make_agent(gateway)
-        result = await agent.run("Tell me about a famous engineer.")
+        result = await agent.invoke("Tell me about a famous engineer.").result()
         rows.append(
             {
                 "scenario": label,
