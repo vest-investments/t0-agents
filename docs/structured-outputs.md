@@ -4,7 +4,7 @@ TensorZero distinguishes two function types — `chat` and `json`. This page doc
 
 The chat-path surface is byte-identical to v0.9.0; everything below is additive for callers who opt into JSON output.
 
-> **v1.0 (M3) surface.**  v1.0 replaces the v0.12 `AgentConfig(function_kind="json", json_mode="strict", output_schema=S, permissive_json_parsing=True, max_json_retries=2)` cluster with a single canonical field:
+> **v1.0 migration.**  v1.0 replaces the v0.12 `AgentConfig(function_kind="json", json_mode="strict", output_schema=S, permissive_json_parsing=True, max_json_retries=2)` cluster with a single canonical field:
 >
 > ```python
 > from t0_agents import AgentConfig, JsonOutput
@@ -20,7 +20,9 @@ The chat-path surface is byte-identical to v0.9.0; everything below is additive 
 > )
 > ```
 >
-> For Pydantic-validated extraction, use `output=StructuredOutput(MyPydanticModel)` (requires `pip install 't0-agents[pydantic]'`).  The 5 legacy v0.12 kwargs raise `TypeError` if passed.  Read-side `AgentResult.{parsed, parse_strategy, json_parse_attempts, function_kind, response}` properties continue to work (Tier 0 — preserved via `@property` aliases over the new `AgentResult[T].value` field).  The `Agent.run` shim still accepts per-call `agent.run(msg, output_schema=..., json_mode=..., max_json_retries=...)` for Tier 1 byte-identity and translates them into a synthesised per-call `JsonOutput`.
+> The 5 legacy v0.12 kwargs raise `TypeError` if passed.  Read-side `AgentResult.{parsed, parse_strategy, json_parse_attempts, function_kind, response}` properties continue to work (Tier 0 — preserved via `@property` aliases over the new `AgentResult[T].value` field).  The `Agent.run` shim still accepts per-call `agent.run(msg, output_schema=..., json_mode=..., max_json_retries=...)` for Tier 1 byte-identity and translates them into a synthesised per-call `JsonOutput`.
+>
+> **Canonical surface.**  [`docs/output-modes.md`](output-modes.md) is the v1.0 narrative for the full `OutputMode[T]` polymorphism (chat / JSON / Pydantic / tool-call / streaming + custom modes).  This page remains the reference for the legacy `run_structured_inference()` helper, the recovery ladder, and the `json_mode` provider matrix.  For the migration walkthrough see [`docs/migration-v0.12-to-v1.0.md`](migration-v0.12-to-v1.0.md).
 
 ## What are JSON functions?
 
