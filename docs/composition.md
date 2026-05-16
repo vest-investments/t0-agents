@@ -33,8 +33,12 @@ the problem.
 ## The `Composable[Input, T]` protocol
 
 ```python
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
+
 from t0_agents import Run
+
+Input = TypeVar("Input", contravariant=True)
+T = TypeVar("T", covariant=True)
 
 
 @runtime_checkable
@@ -110,7 +114,7 @@ final = await ensemble.invoke("Is this a phishing email?").result()
 first sub-Run fails; the reducer sees `list[AgentResult[T]]`.
 `error_policy="continue"` collects every settled state; the reducer
 sees `list[AgentResult[T] | BaseException]` and decides how to
-handle the failures (Q8 resolution).
+handle the failures.
 
 ### `race` — first-completed wins
 
@@ -190,7 +194,7 @@ result = await triage.invoke({"category": "technical", "text": "..."}).result()
 ```
 
 The router is **synchronous** — `Callable[[Input], str]` — operating
-on the raw input before any inference fires (Q9 resolution).  For
+on the raw input before any inference fires.  For
 LLM-driven routing compose explicitly:
 `sequential(classifier_agent, conditional(router=lambda r: r.value.label, routes=...))`.
 
@@ -225,15 +229,14 @@ compensations run in **reverse order**: `compensate(N-1)`,
 `compensate(N-2)`, ..., `compensate(0)`.  Each compensation receives
 the **same input** its paired action received — i.e., the chained
 value flowing into `action_N`, not the original `saga.invoke(input)`
-value (M4 D-4).
+value.
 
 > **Compensations must be idempotent.**  A raising compensate logs
 > WARN but does not block earlier compensations in the cascade — so
 > a downstream compensate may end up being invoked twice (once
 > during the failure cascade, once during the retry of the cascade).
 > This is the classical saga constraint; t0-agents does not enforce
-> idempotency at runtime, but the `saga` docstring spells it out
-> (Q10 resolution).
+> idempotency at runtime, but the `saga` docstring spells it out.
 
 ### `retry_chain` — provider escalation
 
@@ -253,7 +256,7 @@ answer = await providers.invoke("Translate to French: hello").result()
 Try nodes in order; if `on_error(exc) -> True` (or no filter
 provided), fall through to the next.  If every node fails,
 `retry_chain` **re-raises the original last exception un-wrapped** —
-distinct from every other topology's `ComposerError` wrapping (M4 D-5).
+distinct from every other topology's `ComposerError` wrapping.
 This is so existing `except RateLimitError` / `except TensorZeroError`
 blocks keep working as users escalate providers.
 
@@ -294,7 +297,7 @@ resource (one per provider, not per agent).
 Agent-level kwargs (`tags`, `episode_id`, `system`,
 `system_arguments`, `prior_messages`, `output`, `middleware`) are
 **not accepted** — passing any raises `TypeError`.  This is
-intentional (M4 D-3): per-topology semantics for those kwargs would
+intentional: per-topology semantics for those kwargs would
 require ad-hoc decisions (`parallel(a, b, c)` with `tags={"tenant":
 "acme"}` — do all three children inherit?  only the first?  none?),
 and the user composes that explicitly today by configuring each
@@ -324,7 +327,7 @@ every sub-Run (asyncio task tree).  Each sub-Run gets up to
 `cancel_timeout` seconds to clean up; overshoot logs a single
 WARN on `t0_agents.compose.topology` per CompositeRun instance and
 lets remaining children dangle best-effort.  The parent transitions
-to `cancelled` regardless (Q3 resolution).
+to `cancelled` regardless.
 
 ```python
 run = topology.invoke(big_query)
@@ -382,8 +385,7 @@ end state.
 `CompositeRun(Run[Any])` is the `Run` subclass produced by every
 Composer.  It inherits the full `Run` surface (`.state`,
 `.episode_id`, `.inference_ids`, `.result()`, `.events()`,
-`.cancel()`, ...), but three methods are deliberately deferred
-(M4 D-2):
+`.cancel()`, ...), but three methods are deliberately deferred:
 
 - **`composite.feedback(...)`** — `NotImplementedError`.  A Composer
   has no single episode id of its own; routing `feedback(metric, value)`
@@ -400,8 +402,7 @@ Composer.  It inherits the full `Run` surface (`.state`,
   `sequential(composer, follow_up_agent)`.
 
 Each `NotImplementedError` message points at the right escape hatch.
-A future minor can ship per-topology semantics if demand
-justifies — recorded in M4 dev-log §2.
+A future minor can ship per-topology semantics if demand justifies.
 
 ---
 

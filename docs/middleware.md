@@ -28,8 +28,9 @@ impossible in v0.12 without forking the library.
 ## The `Middleware` protocol
 
 ```python
-from typing import Protocol, runtime_checkable
-from t0_agents import RunContext, AgentResult
+from typing import Awaitable, Callable, Protocol, runtime_checkable
+
+from t0_agents import AgentResult, RunContext
 
 
 Next = Callable[[RunContext], Awaitable[AgentResult]]
@@ -70,6 +71,9 @@ position.
 ## `RunContext` — the mutable per-Run state
 
 ```python
+from dataclasses import dataclass, field
+
+
 @dataclass
 class RunContext:
     # 1. Identity / request
@@ -166,12 +170,11 @@ the wrap that runs **last** ends up **outermost**, running
 outer wrap — so every tool call (including sub-agent dispatches)
 fires guardrails first.
 
-Re-ordering them is a silent break of the guardrails contract.
-M2 D-1 (in
-[`docs/internal/v1-refactor/logs/milestone-2-dev-log.md`](internal/v1-refactor/logs/milestone-2-dev-log.md))
-records why the spec's example chain (`Memory → Guardrails →
-CostTracking → SubAgents → JsonRetry`) was reversed during
-implementation.
+Re-ordering them is a silent break of the guardrails contract:
+the v0.12 invariant that guardrails fire on sub-agent delegations
+only holds when `SubAgentMiddleware` runs *before* `GuardrailsMiddleware`
+so the latter ends up the outer wrap around the orchestration tool
+provider.
 
 ---
 
@@ -234,7 +237,7 @@ returns the `RunUsage` (or `None` if no inference fired).
 
 When the caller overrides the chain with `middleware=[]`, the tracker
 doesn't run — `run.cost()` returns `0.0` and `run.usage()` returns
-`None`.  This is intentional (M2 D-4): explicit "no middleware"
+`None`.  This is intentional: explicit "no middleware"
 means **no middleware** including cost tracking.
 
 ### `JsonRetryMiddleware`
@@ -290,7 +293,7 @@ config = AgentConfig(name="...", function_name="...", memory=mem)
 config = AgentConfig(name="...", function_name="...", middleware=[])
 ```
 
-**Important trade-off** (M2 D-4): with `middleware=[]`,
+**Important trade-off**: with `middleware=[]`,
 `CostTrackingMiddleware` doesn't run, so `Run.cost()` returns `0.0`
 and `Run.usage()` returns `None`.  Guardrails configured on
 `AgentConfig(guardrails=[...])` are also skipped because the
@@ -403,7 +406,7 @@ mutated state, producing surprising results.  Use the opt-in
 deliberately; the most common consumers are retry/recovery loops
 that own the mutation explicitly.
 
-`JsonRetryMiddleware` uses this opt-in (M3 D-3); see the
+`JsonRetryMiddleware` uses this opt-in; see the
 [`JsonRetryMiddleware`](#jsonretrymiddleware) section for the full
 retry handshake.
 
@@ -417,7 +420,8 @@ The chain order is the contract.  Some patterns and their reasoning:
   `ObservabilityMiddleware` makes sense at position 0 — its span
   encloses every other middleware's work.  `JsonRetryMiddleware` sits
   innermost so memory and guardrails see only the final successful
-  inference (Q13 resolution).
+  inference (a failed retry is not a "real" outcome the outer layers
+  should observe).
 
 - **Tool-provider wrappers come after observers, before terminal.**
   `SubAgentMiddleware` and `GuardrailsMiddleware` both stack

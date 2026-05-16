@@ -139,7 +139,7 @@ buffered events from the start by default.  Pass `replay=False` to
 get only events emitted after the call (relevant when subscribing
 mid-run).
 
-Events are bounded at 10 000 per Run (Q2 resolution); on overflow the
+Events are bounded at 10 000 per Run; on overflow the
 oldest events are dropped, `events_buffer.truncated` flips to `True`,
 and a single `WARNING` is logged via `t0_agents.core._runtime`.
 
@@ -171,7 +171,7 @@ v2 = await original.replay(variant="gpt-4o")
 By default replay mints a **new** `episode_id` so analytics
 distinguishes replays from the original.  Pass
 `replay(episode_id=original.episode_id)` to share the original
-correlation key (Q7 resolution).
+correlation key.
 
 The optional `agent=` weakref defaults to the original via the Run's
 weakref to its Agent; if the original Agent was garbage-collected,
@@ -204,7 +204,7 @@ sees the full history from `run1` onwards.
 > per Run (no intermediate tool turns).  This matches v0.12's
 > `mcp.run_agent` contract for fork seeding and is the safe shape;
 > a richer transcript is queued for a future minor once the
-> middleware chain can record full message history (M1 D-4).
+> middleware chain can record full message history.
 
 `CompositeRun.fork` raises `NotImplementedError` — "extra user turn"
 doesn't map cleanly onto every topology (what does it mean for a
@@ -283,7 +283,7 @@ run and:
 - `run.cost()` returns `0.0`
 - `run.usage()` returns `None`
 
-This is intentional (M2 D-4): `middleware=[]` is an opt-out from
+This is intentional: `middleware=[]` is an opt-out from
 *every* layer including cost tracking; auto-enabling cost tracking
 would violate the override contract.
 
@@ -307,9 +307,9 @@ for msg in run.transcript():
 In v1.0 `transcript()` returns `list(run.input.prior_messages) + [user_msg, assistant_response]`
 — the history the Run was seeded with (via `fork()` or explicit
 `prior_messages=`) plus the boundary user/assistant pair.
-Intermediate tool turns are not captured (M1 D-4 — adding them
+Intermediate tool turns are not captured — adding them
 requires recording inside the middleware chain; queued for a future
-minor).
+minor.
 
 The transcript is what `Run.fork(extra_message)` threads into the
 next invocation's `prior_messages`, so fork chains stay transitive
@@ -330,7 +330,7 @@ The trade-off is that `feedback()` / `replay()` / `fork()` will raise
 That's intentional — sub-Run-level methods are reachable through
 `composite._sub_runs[i]`, and re-invocation of a Composer is
 `composer.invoke(input)`, which is more explicit than `.replay()`
-anyway (M4 D-2).
+anyway.
 
 This is an advanced surface — most users don't need to know it
 exists.  Documented here for completeness so the M4 carry-forward
@@ -354,7 +354,7 @@ in `raises:` blocks pollutes every caller's type-narrowing).  In
 practice, normal failure paths re-raise the original exception
 directly — `RunFailedError` only surfaces in the corner case where
 the drive ends in `failed` state without a captured exception, which
-shouldn't happen in well-formed agents (M1 D-3).
+shouldn't happen in well-formed agents.
 
 ---
 

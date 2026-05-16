@@ -26,7 +26,10 @@ retry, SQLAlchemy row materialisation — without forking the library.
 ## The `OutputMode[T]` protocol
 
 ```python
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
+
+T_co = TypeVar("T_co", covariant=True)
+
 
 @runtime_checkable
 class OutputMode(Protocol[T_co]):
@@ -172,8 +175,8 @@ print(type(result.value))  # <class 'Customer'>  — mypy verifies this via over
 Per-call overloads on `Agent.invoke` narrow `Run[T]` automatically:
 `agent.invoke(msg, output=StructuredOutput(Customer))` returns
 `Run[Customer]`; `await run.result()` returns `AgentResult[Customer]`
-with `result.value: Customer` statically typed (Q12 resolution —
-this is why no `Agent[T]` class-level generic exists in v1.0).
+with `result.value: Customer` statically typed — this is why no
+`Agent[T]` class-level generic exists in v1.0.
 
 `StructuredOutput` lazily imports pydantic at construction time and
 derives the JSON schema via `Model.model_json_schema()`.  Install the
@@ -184,7 +187,7 @@ hint.
 On validation failure the `recover` body builds a field-aware
 corrective hint summarising the `ValidationError` (which fields, what
 went wrong) so the LLM can fix specifically what was broken — this
-is what `OutputDiagnostics.failure_detail` carries (M3 D-2; see
+is what `OutputDiagnostics.failure_detail` carries (see
 [`OutputDiagnostics` below](#outputdiagnostics)).
 
 ### `ToolCallOutput` — the router pattern
@@ -255,8 +258,9 @@ via overload pair: when `output=` is supplied with a
 it's `Run[Any]`.
 
 This per-call narrowing is the v1.0 answer to "how do I get
-`result.value: Customer` mypy-verified?" — Q12 resolution, recorded
-in M3 dev-log §3.
+`result.value: Customer` mypy-verified?" — overload narrowing on
+`Agent.invoke` is the canonical path, rather than a class-level
+`Agent[T]` generic.
 
 ---
 
@@ -323,15 +327,16 @@ class OutputDiagnostics:
     parse_strategy: ParseStrategy   # "strict" | "permissive" | "retry" | "none"
     attempts: list[Attempt]
     raw_text: str | None
-    failure_detail: str | None      # M3 D-2 — non-recovery context
+    failure_detail: str | None      # non-recovery parse-failure context
 ```
 
 The first three fields back the v0.12 read-side properties
 (`result.parse_strategy`, `result.json_parse_attempts`,
 `result.raw_text` if the mode exposes one).
 
-The fourth field — `failure_detail` — is M3 D-2's addition.  When a
-mode's `materialize` reports `parse_strategy="none"`, it can populate
+The fourth field — `failure_detail` — carries non-recovery context
+between `materialize` and `recover`.  When a mode's `materialize`
+reports `parse_strategy="none"`, it can populate
 `failure_detail` with a structured summary the recovery hint can
 incorporate.  `StructuredOutput` uses this to ferry the Pydantic
 `ValidationError` summary from `materialize` to `recover` without
@@ -454,7 +459,7 @@ three methods + the two flags works with the rest of v1.0
 Other realistic third-party patterns the protocol supports:
 
 - **Instructor-style retry** — wrap a Pydantic model with a custom
-  validator and a richer recovery hint that mentions ofield-specific
+  validator and a richer recovery hint that mentions field-specific
   examples; ship as a separate library.
 - **SQLAlchemy row materialiser** — `materialize` constructs an ORM
   instance from the parsed JSON; `recover` adds DB-constraint
@@ -477,7 +482,9 @@ generic.
 
 The projection lives at
 [`src/t0_agents/serve/streaming_routes.py`](../src/t0_agents/serve/streaming_routes.py)
-in `_event_to_json`.  See M3 D-5 for the rationale.
+in `_event_to_json`.  The projection keeps downstream
+`DoneEvent` consumers byte-identical with v0.12 while letting
+`AgentResult` become generic on the Python side.
 
 If you build a third-party server that serialises `AgentResult`, you
 have two choices:

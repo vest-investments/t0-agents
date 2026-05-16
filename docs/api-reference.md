@@ -711,7 +711,7 @@ class OutputMode(Protocol[T_co]):
 | `ChatOutput()` | `str` | `True` | `True` | Default — full tool-call loop. |
 | `JsonOutput(schema=, json_mode=, permissive=, max_retries=)` | `dict[str, Any]` | `False` | `False` | Single-shot JSON with retry. |
 | `StructuredOutput[M](model)` | `M` (Pydantic) | `False` | `False` | Pydantic-validated extraction; `pip install 't0-agents[pydantic]'`. |
-| `ToolCallOutput(tool_choice=)` | `list[ToolCall]` | `True` | `False` | Router pattern — extract tool calls without executing. |
+| `ToolCallOutput(tool_choice=)` | `list[ToolCall]` | `False` | `False` | Router pattern — extract tool calls without executing. |
 | `StreamingOutput(base=ChatOutput())` | delegates | delegates | `True` | Documentation wrapper; `base=JsonOutput(...)` deferred to v1.1. |
 
 ### Helper types
