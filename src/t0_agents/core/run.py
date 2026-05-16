@@ -308,8 +308,17 @@ class Run(Generic[T]):
         if self._state == "cancelled":
             raise RunCancelledError("Run was cancelled before completion")
         if self._state == "failed":
-            assert self._exception is not None
-            raise RunFailedError(self._exception)
+            # Surface the original exception directly so callers can
+            # ``except SpecificError`` with standard Python idioms — same
+            # behaviour as :meth:`events`.  :class:`RunFailedError` stays
+            # in the type system as a defensive fallback for the case
+            # where the drive ended in "failed" state without a captured
+            # exception (shouldn't normally happen).
+            if self._exception is not None:
+                raise self._exception
+            raise RunFailedError(
+                Exception("Run failed with no captured exception"),
+            )
         assert self._result is not None
         return self._result
 
@@ -349,10 +358,10 @@ class Run(Generic[T]):
         # Buffer is now closed.  ``events()`` mirrors v0.12
         # :meth:`Agent.stream` semantics: drive-time failures raise the
         # ORIGINAL exception (``GuardrailBlockedError``,
-        # ``MaxTurnsExceededError``, ...) on the iterator, not the
-        # ``RunFailedError`` wrap that :meth:`result` uses.  Cancellation
-        # surfaces as :class:`RunCancelledError` to give the iterator a
-        # uniform terminal exception.
+        # ``MaxTurnsExceededError``, ...) on the iterator — same
+        # behaviour as :meth:`result`.  Cancellation surfaces as
+        # :class:`RunCancelledError` to give the iterator a uniform
+        # terminal exception.
         if self._state == "failed" and self._exception is not None:
             raise self._exception
         if self._state == "cancelled":

@@ -270,8 +270,8 @@ class Composer(Composable[T], Protocol):
 
 ### §5.2 — New exceptions (additive)
 
-- `RunCancelledError` (M1) — raised from `await run.result()` after `run.cancel()`.
-- `RunFailedError(cause: Exception)` (M1) — wraps the underlying error when `await run.result()` is called on a failed run.
+- `RunCancelledError` (M1) — raised from `await run.result()` (or from a `run.events()` iterator) after `run.cancel()`.
+- `RunFailedError(cause: Exception)` (M1) — **defensive fallback**: raised by `await run.result()` only when the drive ended in `"failed"` state without a captured exception (shouldn't normally happen).  In the normal failure path, `result()` raises the **original** exception (`MaxTurnsExceededError`, `GuardrailBlockedError`, `ValueError`, ...), matching `events()` semantics and v0.12 idioms.  See `logs/milestone-1-dev-log.md` §2 D-3 for the amendment rationale.
 - `ComposerError(node, cause)` (M4) — wraps sub-Run failures with topology context.
 
 ### §5.3 — Error policies

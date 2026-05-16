@@ -2,10 +2,12 @@
 
 Covers the state machine introduced in v1.0 milestone 1: eager vs lazy
 start, the ``pending → running → succeeded/failed/cancelled``
-transitions, ``__await__`` parity with ``result()``, and the two new
-error classes :class:`RunCancelledError` / :class:`RunFailedError`.
-Uses the shared ``FakeT0`` / ``FakeMCPClient`` fakes so the assertions
-exercise the actual orchestration body without docker.
+transitions, ``__await__`` parity with ``result()``, and the new
+:class:`RunCancelledError` exception.  Failed runs raise the original
+captured exception (see :meth:`Run.result`); :class:`RunFailedError`
+is the defensive fallback for the "failed without captured cause" edge
+case.  Uses the shared ``FakeT0`` / ``FakeMCPClient`` fakes so the
+assertions exercise the actual orchestration body without docker.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ from t0_agents import (
     AgentConfig,
     Run,
     RunCancelledError,
-    RunFailedError,
 )
 from t0_agents.core.types import ToolProvider
 from tests._fake_mcp import FakeMCPClient
@@ -149,17 +150,14 @@ class TestCancellation:
 
 
 class TestFailureRouting:
-    async def test_failed_run_raises_run_failed_error_with_cause(
-        self,
-    ) -> None:
+    async def test_failed_run_raises_original_exception(self) -> None:
+        # Surfacing the original exception matches v0.12 idioms and
+        # mirrors ``events()`` behaviour — callers can ``except
+        # SpecificError`` with standard Python patterns.
         agent = _make_agent(t0=FakeT0([RuntimeError("boom")]))
         run = agent.invoke("hi")
-        with pytest.raises(RunFailedError) as exc_info:
+        with pytest.raises(RuntimeError, match="boom"):
             await run.result()
-        # The original cause is preserved on .cause for callers that
-        # need to introspect the underlying error.
-        assert isinstance(exc_info.value.cause, RuntimeError)
-        assert "boom" in str(exc_info.value.cause)
         assert run.state == "failed"
 
     async def test_failed_run_keeps_state_for_repeated_inspection(
@@ -167,12 +165,12 @@ class TestFailureRouting:
     ) -> None:
         agent = _make_agent(t0=FakeT0([RuntimeError("boom")]))
         run = agent.invoke("hi")
-        with pytest.raises(RunFailedError):
+        with pytest.raises(RuntimeError, match="boom"):
             await run.result()
         # State stays "failed" so callers can branch on it; awaiting
         # a second time raises the same exception.
         assert run.state == "failed"
-        with pytest.raises(RunFailedError):
+        with pytest.raises(RuntimeError, match="boom"):
             await run.result()
 
 

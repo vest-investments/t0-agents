@@ -15,7 +15,6 @@ from tensorzero.types import ChatInferenceResponse, JsonInferenceResponse
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
-    RunFailedError,
     T0AgentsFatalError,
 )
 from t0_agents.core.run import Run, build_run_input
@@ -409,25 +408,16 @@ class Agent:
             DeprecationWarning,
             stacklevel=2,
         )
-        try:
-            return await self.invoke(
-                user_message,
-                episode_id=episode_id,
-                tags=tags,
-                system_arguments=system_arguments,
-                system=system,
-                output_schema=output_schema,
-                json_mode=json_mode,
-                max_json_retries=max_json_retries,
-            ).result()
-        except RunFailedError as exc:
-            # Preserve v0.12 byte-identity: drive-time failures (e.g.
-            # ``MaxTurnsExceededError``, ``GuardrailBlockedError``, the
-            # async tool_provider check on JSON-tool mode) were raised
-            # directly from ``await agent.run(...)`` in v0.12.  The Run
-            # wraps them in ``RunFailedError``; the shim unwraps so
-            # existing exception-catching callers continue to work.
-            raise exc.cause from None
+        return await self.invoke(
+            user_message,
+            episode_id=episode_id,
+            tags=tags,
+            system_arguments=system_arguments,
+            system=system,
+            output_schema=output_schema,
+            json_mode=json_mode,
+            max_json_retries=max_json_retries,
+        ).result()
 
     async def stream(
         self,

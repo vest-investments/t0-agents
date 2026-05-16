@@ -69,15 +69,39 @@ User decision on 2026-05-15 confirmed option (A).
 
 **Impact on M2+.**  When M3 removes the legacy fields under Tier 2, it should also remove the same three kwargs from `Agent.invoke()` and from `RunInput`.  M3's `OutputMode` materialisation needs to consume the equivalent information from `AgentConfig.output: OutputMode` (the replacement field).  `prior_messages` survives untouched.
 
-### D-2.  Internal callers of `sub_agent.run(...)` continue to call the deprecated shim.
+### D-2.  Internal callers of `agent.run(...)` / `agent.stream(...)` continue to call the deprecated shims.
 
-**What changed.**  Initial implementation rerouted `compose.delegation.agent_as_tool` and `compose.orchestrator._OrchestrationToolProvider` to use `sub_agent.invoke().result()` instead of `sub_agent.run()`.  This silenced the internal `DeprecationWarning` but broke 9 tests in `tests/test_compose/` that mock `sub.run = AsyncMock(...)`.  Cross-cutting checklist §3.2 mandates existing tests stay green unchanged.
+**What changed.**  Initial implementation rerouted four internal call sites to the canonical `agent.invoke(...)`:
 
-**Why.**  Reverted to `sub_agent.run(...)` in both call sites.  Each site emits exactly one `DeprecationWarning` per process (Python's default filter dedups by `(message, category, module, lineno)`), so the internal noise is 2 warnings total per process — acceptable.
+- `compose.delegation.agent_as_tool` (sub-agent dispatch)
+- `compose.orchestrator._OrchestrationToolProvider.call_tool` (sub-agent dispatch)
+- `serve.routes.chat` (HTTP `/chat` endpoint)
+- `serve.streaming_routes.{_sse_event_source, _drive_stream}` (SSE + WebSocket)
 
-**Impact on M2+.**  When M2 / M3 refactor the orchestration, those two internal call sites should switch to `sub_agent.invoke(...).result()` and the two mock-based tests in `tests/test_compose/` should be updated together.  The mock pattern `sub.run = AsyncMock(...)` will need to become `sub.invoke = MagicMock(return_value=AsyncMock(...))` or similar.
+This silenced the internal `DeprecationWarning`s but broke ~9 tests across `tests/test_compose/` (mock pattern `sub.run = AsyncMock(...)`) and ~6 tests across `tests/test_serve/` (subclass-override pattern `class ObservingAgent(Agent): async def run(...)`).  Cross-cutting checklist §3.2 mandates existing tests stay green unchanged.
 
-### D-3.  `Run.transcript()` only captures the boundary user + assistant pair in M1.
+**Why.**  Reverted all four internal sites to `agent.run(...)` / `agent.stream(...)`.  Each site emits exactly one `DeprecationWarning` per process via Python's default filter dedup `(message, category, module, lineno)` — about 4 internal warnings per process, acceptable as transitional noise.
+
+**Impact on M2+.**  When M2 / M3 refactor the orchestration, those four internal call sites should switch to `agent.invoke(...).result()` (chat-path) or `agent.invoke(...).events()` (streaming-path), and the corresponding ~15 tests should be migrated in the same commit:
+
+- `tests/test_compose/test_delegation.py` + `tests/test_compose/test_orchestrator.py`: mock `sub.invoke` returning a mock with an async `.result()` method, instead of mocking `sub.run` directly.
+- `tests/test_serve/test_chat.py` + `tests/test_serve/test_session.py`: subclass `Agent` and override `_execute_chat_legacy` (M1) or the post-M2 middleware-chain entry (e.g. `_drive_chat`), not `run`.  M2 should expose a cleaner extension point for this testing pattern.
+
+### D-3.  `Run.result()` raises the original exception (not `RunFailedError`).
+
+**What changed.**  Contract §5.2 says `RunFailedError(cause)` wraps the underlying error when `await run.result()` is called on a failed run.  Implementation changed this so `result()` raises the original exception directly (matching `events()` semantics).  `RunFailedError` is kept in the type system as a defensive fallback for the "failed state without a captured exception" edge case (shouldn't normally happen).
+
+**Why.**  The original wrap-in-`RunFailedError` design forced every internal user of `invoke().result()` to write `try: ... except RunFailedError as e: raise e.cause` boilerplate to get back to the standard Python `except SpecificError` idiom.  That asymmetry between `result()` and `events()` (events() already raises originals) was inconsistent and uneconomic.  Raising originals on both paths:
+
+- removes the unwrap boilerplate from the `agent.run` shim (now genuinely a 3-line shim);
+- matches v0.12 idioms — `except MaxTurnsExceededError`, `except GuardrailBlockedError`, etc. work directly on Run consumers;
+- aligns `result()` and `events()` failure semantics for a uniform mental model.
+
+`RunCancelledError` stays as the dedicated cancellation exception so callers can distinguish "the run was cancelled" from "the run failed."
+
+**Impact on M2+.**  Contract §5.2 amended (the line `RunFailedError(cause: Exception)` wraps the underlying error → "raised only when the drive completed in `failed` state without a captured exception").  No M2 carry-forward needed — the change is self-contained.
+
+### D-4.  `Run.transcript()` only captures the boundary user + assistant pair in M1.
 
 **What changed.**  Spec §4 lists `Run.transcript() -> list[Message]` without specifying granularity.  M1 implements it as a 2-element list `[user, assistant]` (the original user message + the final response).  Intermediate tool turns are not captured.
 
@@ -85,7 +109,7 @@ User decision on 2026-05-15 confirmed option (A).
 
 **Impact on M2+.**  M2's `Middleware.RunContext` can keep a full transcript field if useful; if so, `Run.transcript()` can switch to reading from there.  M1's `fork()` works correctly with the 2-element transcript for the spec test's use case (`test_fork.py::TestForkContinuation::test_fork_passes_transcript_as_prior_messages`).  Richer transcripts unlock multi-turn fork scenarios.
 
-### D-4.  `Run.cost()` and `Run.usage()` are M1 placeholders.
+### D-5.  `Run.cost()` and `Run.usage()` are M1 placeholders.
 
 **What changed.**  Both methods exist with the spec signatures but return `0.0` and `None` respectively.
 
@@ -93,7 +117,7 @@ User decision on 2026-05-15 confirmed option (A).
 
 **Impact on M2+.**  M2's `CostTrackingMiddleware` accumulates usage on its `RunContext.extras`; `Run.cost()` / `Run.usage()` should read from there.  Update the docstrings when M2 lands.
 
-### D-5.  `_execute_chat_legacy` / `_execute_chat_streaming_legacy` accept a new `prior_messages` kwarg.
+### D-6.  `_execute_chat_legacy` / `_execute_chat_streaming_legacy` accept a new `prior_messages` kwarg.
 
 **What changed.**  Both legacy helpers now accept `prior_messages: list[Mapping[str, Any]] | None = None`.  When non-None, the value overrides whatever the memory strategy would produce (specifically, replaces `extra_kwargs["prior_messages"]`).
 
