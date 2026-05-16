@@ -1,23 +1,38 @@
-# 02 - Basic Agent
+# 01 — Your first agent
 
-Minimal end-to-end example of `run_agent` -- the full agent loop that sends a user query through TensorZero, lets the LLM call MCP tools, and returns a final response.
+A coffee shop concierge with two tools.  You ask one question; the LLM
+picks the right tool order on its own; you get one synthesised answer.
+
+```
+You:    What should I order, and how long will I wait?
+Agent:  Today's specialty is an Ethiopian Yirgacheffe pour-over, and
+        the queue is about a 7-minute wait — good time to grab it.
+```
+
+**Aha! moment:** the LLM decides the order of the two tool calls,
+combines their returns, and never has to be told what to do next.  The
+whole "agent loop" — discover tools → infer → execute → feed back → repeat —
+runs unchanged whether you have two tools or twenty.
 
 ## What it demonstrates
 
-1. Connecting to TensorZero via `AsyncTensorZeroGateway`.
-2. Providing an in-process FastMCP server (with a `get_weather` tool) as the tool backend.
-3. Running the agent loop with `run_agent` and inspecting the result.
+1. Connecting to a TensorZero gateway with `AsyncTensorZeroGateway`.
+2. Hosting an in-process FastMCP server with two tools.
+3. Building an `Agent` declaratively with `AgentConfig`.
+4. `agent.invoke(message)` → `Run[T]` → `await` for the final
+   `AgentResult` — the canonical v1.0 surface.
 
 ## Prerequisites
 
 - Python 3.11+
-- Dependencies installed: `uv sync`
-- `GROQ_API_KEY` set in your environment or in a `.env` file at the project root.
+- `uv sync`
+- `GROQ_API_KEY=...` in `.env` at the project root.
 
 ## Start the gateway
 
 ```bash
-docker compose -f examples/01_first_agent/docker-compose.yml up -d
+docker compose -f examples/01_first_agent/docker-compose.yml \
+    --env-file .env up -d
 ```
 
 ## Run
@@ -34,6 +49,14 @@ docker compose -f examples/01_first_agent/docker-compose.yml down
 
 ## What to observe
 
-- The LLM receives the `get_weather` tool schema and decides to call it.
-- The agent loop executes the tool, feeds the result back, and the LLM produces a natural-language answer.
-- `AgentResult` fields show the episode ID, inference IDs, turn count, and response source.
+- The `Response` line is one natural-language answer that references
+  both `get_specialty_today` and `estimate_wait_minutes`.
+- `Turns: 2` confirms the loop fired one tool-call turn and one
+  final-answer turn.
+- `Episode ID` is the TensorZero-assigned UUID.  Pass it to
+  `agent.invoke(..., episode_id=...)` next time you want continuity
+  (memory, follow-ups), and use it to grep the ClickHouse dashboard.
+
+Once this works, head to [`02_agent_class`](../02_agent_class/) for
+configuration shapes, then [`03_output_modes`](../03_output_modes/)
+for typed JSON / Pydantic extraction.
