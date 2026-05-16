@@ -45,10 +45,10 @@ That shape has three structural limits:
   cancel when the first finishes" needs a uniform handle on each
   agent's invocation — exactly what `Run` provides.
 
-`Run[T]` solves all three, additively.  v0.12's `agent.invoke(...)` is
-preserved as a deprecated shim that emits `DeprecationWarning` once
-per source line and delegates to `agent.invoke(...).result()` —
-existing code keeps working byte-identical until v1.1.
+`Run[T]` solves all three, additively.  The v0.12 `agent.run(...)`
+and `agent.stream(...)` entry points are removed in v1.0; the one-line
+migration to `agent.invoke(...)` / `agent.invoke(...).events()` is in
+[migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ---
 

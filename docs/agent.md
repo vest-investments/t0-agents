@@ -7,9 +7,9 @@ The `Agent` class is the declarative front door of t0-agents. It holds your conf
 > (composable cross-cutting concerns), [Output modes](output-modes.md)
 > (polymorphic output shape), [Composition](composition.md) (nine
 > topology builders for multi-agent orchestration).  The legacy
-> `agent.invoke()` / `agent.invoke().events()` shims keep working (one
-> `DeprecationWarning` per source line); they're removed in v1.1.  The
-> v0.12 → v1.0 migration playbook lives in
+> `agent.run()` / `agent.stream()` entry points were removed in v1.0
+> — use `agent.invoke(...)` and `run.events()` instead.  The v0.12 →
+> v1.0 migration playbook lives in
 > [migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ```

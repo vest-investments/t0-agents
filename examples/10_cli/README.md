@@ -85,7 +85,7 @@ elicitation handler (one handler per `Client`) which shared-Client mode
 cannot give it.
 
 For full streaming + browser elicitation, see
-[`examples/07_streaming/`](../12_streaming_http/), which wires
+[`examples/07_streaming/`](../07_streaming/), which wires
 `client_factory` + `elicitation_client_factory` into `create_app`
 directly.
 
@@ -156,5 +156,5 @@ Smaller models (`gpt-oss-20b`, Llama-3-8B, etc.) occasionally ask "are
 you sure?" in chat before invoking `set_reminder`. The elicitation modal
 still appears, just one turn later. Larger models consistently call the
 tool directly. See
-[`examples/07_streaming/README.md`](../12_streaming_http/README.md)
+[`examples/07_streaming/README.md`](../07_streaming/README.md)
 for the long-form discussion.
