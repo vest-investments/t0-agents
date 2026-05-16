@@ -1,0 +1,20 @@
+# Reserved for milestone dev-logs.
+#
+# As each milestone of the v1.0 refactor runs (via `/v1-milestone <N>`),
+# a corresponding `milestone-<N>-dev-log.md` is written here. Always-write
+# policy: every milestone writes a log, even if there were no deviations
+# from the spec.
+#
+# Read order when planning a milestone:
+#   1. 00-integration-contract.md
+#   2. 01-implementation-plan.md
+#   3. 02-open-questions.md
+#   4. EVERY prior dev-log in this directory, in numerical order
+#   5. The milestone spec for the milestone being implemented
+#
+# The five mandatory sections of each dev-log:
+#   §1 Summary
+#   §2 Deviations from the milestone spec ("No deviations from spec." is acceptable)
+#   §3 Open questions raised or resolved
+#   §4 Carry-forward notes (load-bearing for the next milestone)
+#   §5 Verification (commands run + outcomes, with actual numbers)

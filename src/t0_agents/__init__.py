@@ -15,10 +15,13 @@ from t0_agents.core.exceptions import (
     ConfigurationError,
     GuardrailBlockedError,
     MaxTurnsExceededError,
+    RunCancelledError,
+    RunFailedError,
     SubAgentError,
     T0AgentsError,
     T0AgentsFatalError,
 )
+from t0_agents.core.run import Run, RunInput, RunState
 from t0_agents.core.structured import StructuredOutput, permissive_parse
 from t0_agents.core.types import (
     AgentResult,
@@ -59,6 +62,11 @@ __all__ = [
     "GuardrailLogEntry",
     "MaxTurnsExceededError",
     "MemoryProvider",
+    "Run",
+    "RunCancelledError",
+    "RunFailedError",
+    "RunInput",
+    "RunState",
     "StreamingAgentLoop",
     "StructuredOutput",
     "SubAgentError",

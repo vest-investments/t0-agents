@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+import warnings
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal, cast
 
 from fastmcp import Client
@@ -12,7 +13,12 @@ from tensorzero import AsyncTensorZeroGateway
 from tensorzero.types import ChatInferenceResponse, JsonInferenceResponse
 
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import ConfigurationError, T0AgentsFatalError
+from t0_agents.core.exceptions import (
+    ConfigurationError,
+    RunFailedError,
+    T0AgentsFatalError,
+)
+from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.structured import (
     ParseStrategy,
     StructuredOutput,
@@ -248,6 +254,135 @@ class Agent:
         """
         return None
 
+    # ------------------------------------------------------------------
+    # v1.0 canonical entry point + deprecation shims
+    # ------------------------------------------------------------------
+
+    def invoke(
+        self,
+        user_message: str,
+        *,
+        episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
+        max_json_retries: int | None = None,
+        prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        middleware: Sequence[Any] | None = None,
+        output: Any | None = None,
+        eager: bool = True,
+        context: Mapping[str, Any] | None = None,
+    ) -> Run[Any]:
+        """v1.0 canonical entry point — returns a :class:`Run` handle.
+
+        The single entry point for both chat and JSON agents; the
+        :class:`Run` dispatches the drive mode on first consumer
+        (``result()`` selects the non-streaming chat path or the JSON
+        path; ``events()`` selects the streaming chat path or raises
+        :class:`ConfigurationError` for JSON agents).
+
+        Args:
+            user_message: The user's query as a plain string.
+            episode_id: Existing TensorZero episode id, or ``None`` to
+                let the gateway mint a fresh one.
+            tags: Per-call tags shallow-merged on top of ``config.tags``.
+            system_arguments: Template arguments forwarded as
+                ``input.system``.
+            system: Raw system prompt forwarded as ``input.system``
+                (string form).  Mutually exclusive with
+                ``system_arguments`` and with
+                ``memory_strategy="system_template"``.
+            output_schema: **M1-deprecated** per-call schema override
+                for JSON agents.  Removed in M3 alongside the
+                :class:`AgentConfig` field; use the M3 ``output=``
+                replacement when it lands.
+            json_mode: **M1-deprecated** per-call ``json_mode`` override
+                for JSON agents.  Removed in M3.
+            max_json_retries: **M1-deprecated** per-call retry budget
+                override for JSON agents.  Removed in M3.
+            prior_messages: TensorZero-shape ``{role, content}`` history
+                to seed the inference loop; used by :meth:`Run.fork` to
+                continue from a recorded transcript.  Overrides any
+                ``prior_messages`` the memory strategy would supply.
+            middleware: **M2 placeholder** — stored on the Run, not
+                yet consulted by the orchestration.
+            output: **M3 placeholder** — stored on the Run, not yet
+                consulted by the orchestration.
+            eager: When ``True`` (default), the Run's drive task is
+                scheduled immediately.  ``eager=False`` defers task
+                start to the first consumer of ``result()`` /
+                ``events()`` so callers can queue Runs without firing
+                inference.
+            context: User-supplied metadata dict copied onto the Run.
+
+        Returns:
+            A :class:`Run` whose lifecycle is the canonical v1.0 shape.
+            Awaiting the Run is equivalent to ``await run.result()``.
+
+        Raises:
+            ValueError: When ``system`` is set alongside
+                ``system_arguments`` or alongside
+                ``memory_strategy='system_template'``.
+            ConfigurationError: When per-call ``output_schema`` or
+                ``json_mode`` is passed against a chat agent, or when
+                a JSON agent is configured with
+                ``memory_strategy='messages'``.
+        """
+        # Sync pre-flight so the synchronous-call surface stays
+        # byte-identical with v0.12.  ``Agent.run`` and ``Agent.stream``
+        # raised these eagerly; in v1.0 they surface from the shim's
+        # synchronous ``self.invoke(...)`` call before the Run is even
+        # constructed.
+        self._validate_system_kwargs(system, system_arguments)
+        if self._config.function_kind == "chat" and (
+            output_schema is not None or json_mode is not None
+        ):
+            raise ConfigurationError(
+                "output_schema/json_mode kwargs are only valid when "
+                "AgentConfig.function_kind == 'json'; got function_kind="
+                f"{self._config.function_kind!r}."
+            )
+        if self._config.function_kind == "json":
+            # Mirror ``_execute_json_legacy`` step 0 / step 1 sync
+            # validations so they raise before the Run task spawns
+            # — preserves the v0.12 caller experience (the same
+            # exception is raised from the same await).
+            effective_mode_for_safety = (
+                json_mode if json_mode is not None else self._config.json_mode
+            )
+            self._maybe_warn_anthropic_quirk(effective_mode_for_safety)
+            if self._resolve_memory_strategy() == "messages":
+                raise ConfigurationError(
+                    "memory_strategy='messages' is not supported for "
+                    "function_kind='json' — JSON functions are single-shot. "
+                    "Use memory_strategy='prepended_message' (the default) "
+                    "or 'system_template' instead."
+                )
+
+        input_ = build_run_input(
+            user_message=user_message,
+            function_name=self._config.function_name,
+            function_kind=self._config.function_kind,
+            episode_id=episode_id,
+            tags=tags,
+            system=system,
+            system_arguments=system_arguments,
+            output_schema=output_schema,
+            json_mode=json_mode,
+            max_json_retries=max_json_retries,
+            prior_messages=prior_messages,
+        )
+        return Run(
+            self,
+            input_,
+            eager=eager,
+            context=context,
+            middleware=middleware,
+            output=output,
+        )
+
     async def run(
         self,
         user_message: str,
@@ -260,7 +395,100 @@ class Agent:
         json_mode: Literal["off", "on", "strict", "tool"] | None = None,
         max_json_retries: int | None = None,
     ) -> AgentResult:
-        """Run the agent loop and return the final response.
+        """Deprecated v0.12 entry point — delegates to :meth:`invoke`.
+
+        Emits ``DeprecationWarning`` once per source line (Python's
+        default filter dedups by stacklevel).  Output stays byte-
+        identical to v0.12; the only stderr change is the warning.
+        Removed in v1.1.
+        """
+        warnings.warn(
+            "Agent.run() is deprecated and will be removed in t0-agents 1.1. "
+            "Use `await agent.invoke(msg, ...)` instead — Run is awaitable "
+            "and returns the same AgentResult.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            return await self.invoke(
+                user_message,
+                episode_id=episode_id,
+                tags=tags,
+                system_arguments=system_arguments,
+                system=system,
+                output_schema=output_schema,
+                json_mode=json_mode,
+                max_json_retries=max_json_retries,
+            ).result()
+        except RunFailedError as exc:
+            # Preserve v0.12 byte-identity: drive-time failures (e.g.
+            # ``MaxTurnsExceededError``, ``GuardrailBlockedError``, the
+            # async tool_provider check on JSON-tool mode) were raised
+            # directly from ``await agent.run(...)`` in v0.12.  The Run
+            # wraps them in ``RunFailedError``; the shim unwraps so
+            # existing exception-catching callers continue to work.
+            raise exc.cause from None
+
+    async def stream(
+        self,
+        user_message: str,
+        *,
+        episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Deprecated v0.12 streaming entry point — delegates to :meth:`invoke`.
+
+        Emits ``DeprecationWarning`` once per source line.  Output
+        stays byte-identical to v0.12; the only stderr change is the
+        warning.  Removed in v1.1.
+        """
+        warnings.warn(
+            "Agent.stream() is deprecated and will be removed in t0-agents 1.1. "
+            "Use `async for ev in agent.invoke(msg, ...).events()` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        async for ev in self.invoke(
+            user_message,
+            episode_id=episode_id,
+            tags=tags,
+            system_arguments=system_arguments,
+            system=system,
+        ).events():
+            yield ev
+
+    # ------------------------------------------------------------------
+    # Legacy orchestration bodies (driven by Run in v1.0)
+    # ------------------------------------------------------------------
+
+    async def _execute_chat_legacy(
+        self,
+        *,
+        user_message: str,
+        episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
+        max_json_retries: int | None = None,
+        prior_messages: list[Mapping[str, Any]] | None = None,
+    ) -> AgentResult:
+        """Drive the chat or JSON path for one Run — legacy orchestration body.
+
+        v1.0 internal helper called by :class:`~t0_agents.core.run.Run`.
+        Pre-refactor this was ``Agent.run``; the body is unchanged from
+        v0.12 except that the dispatch entry point is now
+        :meth:`Agent.invoke`.  M2 replaces the inline orchestration
+        (memory + guardrails + sub-agents + cost-tracking) with a
+        middleware chain.
+
+        ``prior_messages`` is new in v1.0: it lets :meth:`Run.fork`
+        thread the original transcript through ``mcp.run_agent``
+        directly, overriding the memory-strategy-derived prior_messages
+        when both are present.
 
         Dispatches on ``config.function_kind``:
 
@@ -375,10 +603,12 @@ class Agent:
         # Structured-output dispatch: JSON functions bypass the tool loop
         # and route to ``run_structured_inference``.  The chat path below
         # is unchanged from v0.9.0 for any caller that does not pass the
-        # new kwargs.
+        # new kwargs.  v1.0 :class:`Run` dispatches to
+        # :meth:`_execute_json_legacy` directly, so this branch is a
+        # safety net for direct callers of the legacy helper.
         if self._config.function_kind == "json":
-            return await self._run_json(
-                user_message,
+            return await self._execute_json_legacy(
+                user_message=user_message,
                 episode_id=episode_id,
                 tags=tags,
                 system_arguments=system_arguments,
@@ -420,6 +650,13 @@ class Agent:
             user_message, memory_records, episode_id=episode_id,
         )
         self._merge_caller_system_arguments(extra_kwargs, system_arguments)
+        if prior_messages is not None:
+            # Explicit caller-provided history (Run.fork) wins over the
+            # memory-strategy-derived prior_messages: fork is by design
+            # the user's explicit intent to continue from this exact
+            # transcript.  Cast to list so run_agent's signature is
+            # honoured (Mapping is structurally compatible at runtime).
+            extra_kwargs["prior_messages"] = list(prior_messages)
 
         # --- 3. Set up guardrails ---
         # Empty-list case: forward the raw tool_provider and leave
@@ -605,16 +842,24 @@ class Agent:
 
         return result
 
-    async def stream(
+    async def _execute_chat_streaming_legacy(
         self,
-        user_message: str,
         *,
+        user_message: str,
         episode_id: str | None = None,
         tags: dict[str, str] | None = None,
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
+        prior_messages: list[Mapping[str, Any]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Streaming analogue of :meth:`run`.
+        """Streaming-chat legacy orchestration body for v1.0 Run.
+
+        Internal helper called by :class:`~t0_agents.core.run.Run` when
+        the first consumer subscribes to ``events()``.  The body is
+        unchanged from v0.12 :meth:`Agent.stream` — only the public
+        entry point has moved to :meth:`Agent.invoke`.  ``prior_messages``
+        is new in v1.0 to let :meth:`Run.fork` thread the original
+        transcript through the streaming runner.
 
         Same lifecycle — memory hydration, guardrail scaffolding, tool
         execution — except the turn loop is driven by
@@ -709,6 +954,10 @@ class Agent:
             user_message, memory_records, episode_id=episode_id,
         )
         self._merge_caller_system_arguments(extra_kwargs, system_arguments)
+        if prior_messages is not None:
+            # Mirrors the chat path: explicit caller history beats the
+            # memory strategy's prior_messages.
+            extra_kwargs["prior_messages"] = list(prior_messages)
 
         # --- 3. Set up guardrails ---
         guard_ctx: GuardrailContext | None = None
@@ -897,19 +1146,24 @@ class Agent:
         if done_result is not None:
             yield DoneEvent(result=done_result)
 
-    async def _run_json(
+    async def _execute_json_legacy(
         self,
-        user_message: str,
         *,
-        episode_id: str | None,
-        tags: dict[str, str] | None,
-        system_arguments: dict[str, Any] | None,
-        system: str | None,
-        output_schema: Mapping[str, Any] | None,
-        json_mode: Literal["off", "on", "strict", "tool"] | None,
+        user_message: str,
+        episode_id: str | None = None,
+        tags: dict[str, str] | None = None,
+        system_arguments: dict[str, Any] | None = None,
+        system: str | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+        json_mode: Literal["off", "on", "strict", "tool"] | None = None,
         max_json_retries: int | None = None,
     ) -> AgentResult:
-        """JSON-function dispatch path for :meth:`run`.
+        """JSON-function dispatch path for the v1.0 Run.
+
+        Internal helper called by :class:`~t0_agents.core.run.Run` when
+        ``agent.config.function_kind == "json"``.  Body unchanged from
+        v0.12 ``Agent._run_json``; only the public entry point moved
+        to :meth:`Agent.invoke`.
 
         Wraps up to ``max_json_retries + 1`` calls to
         :func:`run_structured_inference` in the same memory + run-level

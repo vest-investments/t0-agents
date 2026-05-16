@@ -2,6 +2,8 @@
 
 The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.run(message)` / `.stream(message)` surface that drives the full tool-calling loop. Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
 
+> **v1.0 preview:** the canonical entry point is now `agent.invoke(...)`, which returns a `Run[T]` you can await for the final `AgentResult` *or* iterate for live `AgentEvent`s. `agent.run()` and `agent.stream()` continue to work as deprecated shims (one-time `DeprecationWarning` per call site) and are removed in v1.1.  The new surface and the migration cookbook are documented in `docs/run.md` (full doc lands in M5).
+
 ```
                         ┌──────────────────────────┐
                         │         Agent            │
