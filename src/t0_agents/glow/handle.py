@@ -28,6 +28,7 @@ from t0_agents.core.outputs.json import JsonOutput
 from t0_agents.core.outputs.structured import StructuredOutput
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
+from t0_agents.glow.selectors import Selector
 from t0_agents.stream.events import AgentEvent
 
 __all__ = ["FluentRun"]
@@ -130,7 +131,7 @@ class FluentRun(Generic[T]):
     # Consumption — builds the underlying Run lazily
     # ------------------------------------------------------------------
 
-    def events(self, *selectors: Any) -> AsyncIterator[Any]:
+    def events(self, *selectors: Selector[Any]) -> AsyncIterator[Any]:
         """Iterate the underlying ``Run.events()`` stream, optionally filtered.
 
         Builds the ``Run`` synchronously at call time so subsequent
@@ -144,12 +145,31 @@ class FluentRun(Generic[T]):
         ``True``; the first such selector's ``transform`` is applied to
         the yielded value (first-match-wins, mirroring isinstance
         dispatch ergonomics).
+
+        Each positional argument must be a :class:`~t0_agents.glow.selectors.Selector`
+        instance (typically one of the module-level constants like
+        ``Thought``, ``ToolCall``, ``Text`` — possibly chained with
+        ``.where(...)`` / ``.map(...)``).  Passing the bare event class
+        instead (e.g. ``Thought`` is a ``Selector[ThoughtEvent]``, not
+        ``ThoughtEvent``) raises :class:`TypeError` eagerly with a
+        clear message rather than failing with an opaque
+        ``AttributeError`` mid-stream.
         """
         if self._run is None:
             self._run = self._build(self._chosen_output)
         run = self._run
         if not selectors:
             return run.events()
+        for s in selectors:
+            if not isinstance(s, Selector):
+                raise TypeError(
+                    f"FluentRun.events() expected Selector instances; got "
+                    f"{type(s).__name__!r}.  Did you pass the event class "
+                    f"(e.g. `ThoughtEvent`) instead of the selector "
+                    f"constant (e.g. `Thought`)?  Import selectors from "
+                    f"`t0_agents.glow` and chain with `.where(...)` / "
+                    f"`.map(...)` if you need filters."
+                )
         return _filter_with_selectors(run.events(), selectors)
 
     async def result(self) -> AgentResult[T]:
@@ -194,7 +214,7 @@ class FluentRun(Generic[T]):
 
 async def _filter_with_selectors(
     source: AsyncIterator[AgentEvent],
-    selectors: tuple[Any, ...],
+    selectors: tuple[Selector[Any], ...],
 ) -> AsyncIterator[Any]:
     """Filter + transform an event stream through one or more selectors.
 

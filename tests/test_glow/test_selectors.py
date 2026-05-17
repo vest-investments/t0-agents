@@ -18,6 +18,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
+import pytest
+
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.run import Run
@@ -182,3 +184,17 @@ def test_selector_constructor_defaults_passthrough() -> None:
     assert selector.matches(_THOUGHT_BAR) is True
     assert selector.matches(_TEXT_END) is False
     assert selector.transform(_THOUGHT_FOO) is _THOUGHT_FOO
+
+
+def test_fluent_run_events_rejects_bare_event_class_with_clear_typeerror() -> None:
+    """Passing the event class itself (not a ``Selector``) raises eagerly.
+
+    Common DX trap: ``events(ThoughtEvent)`` looks plausible but
+    would fail with an opaque ``AttributeError`` mid-stream once the
+    filter dispatch tried to call ``.matches`` on the class.  The
+    runtime check in :meth:`FluentRun.events` catches it at call time
+    with a message that names the right alternative.
+    """
+    fr = _make_fluent_run([_THOUGHT_FOO])
+    with pytest.raises(TypeError, match="expected Selector instances"):
+        fr.events(ThoughtEvent)  # type: ignore[arg-type]
