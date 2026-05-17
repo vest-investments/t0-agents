@@ -6,15 +6,19 @@ Pattern lift from FastAPI's ``app = FastAPI()`` followed by
 - The :class:`AsyncTensorZeroGateway` reference threaded into every
   underlying :class:`~t0_agents.core.agent.Agent`.
 - The agent registry (``name -> _AgentSpec``).
-- The :attr:`dependency_overrides` mapping used by M3's
-  ``Depends(...)`` machinery (in M2 it is an empty dict that lives
-  here for forward-compat — ``app.dependency_overrides[provider] = mock``
-  works without raising ``AttributeError`` even though resolution
-  itself lands in M3).
+- The :attr:`dependency_overrides` mapping consulted on every
+  ``Depends(...)`` resolution by :class:`~t0_agents.glow.di.DependencyResolver`.
+- A long-lived in-memory ``fastmcp.FastMCP`` server (``_mcp_server``)
+  and the matching ``fastmcp.Client`` (``_owned_client``).  ``@app.tool``
+  registers user tools on the server; every glow agent is constructed
+  with ``tool_provider=self._owned_client`` so the v1.0 toolless-chat
+  fallback is never reached for glow agents (M2 §4 carry-forward
+  option (b)).
 - The lazy build path: each ``_AgentSpec`` materialises its underlying
   :class:`Agent` on first ``await wrapper(msg)`` *or* eagerly via
-  ``await app.build()`` (recommended in ``main()`` / ``lifespan()`` so
-  configuration errors surface fast).
+  ``await app.build()``.  ``app.lifespan()`` is the recommended entry
+  point — it enters the owned ``Client`` once and exits it cleanly on
+  teardown.
 
 ``App`` does **not** modify any v1.0 primitive — every
 ``@app.agent`` decorator compiles to a normal :class:`Agent` that
@@ -24,14 +28,17 @@ exposes itself on ``wrapper._agent`` for escape-hatch use.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
+from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.types import ToolProvider
 from t0_agents.glow._spec import _AgentSpec
+from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
 
 if TYPE_CHECKING:
@@ -61,22 +68,44 @@ class App:
                 async def tutor(q: str) -> str:
                     \"\"\"An English tutor.\"\"\"
 
-                print(await tutor("Say hi formally in Japanese."))
+                async with app.lifespan():
+                    print(await tutor("Say hi formally in Japanese."))
 
-    Agents are built lazily on first invocation.  Use
-    ``await app.build()`` (or wrap in ``async with app.lifespan():``)
-    to force-construct every registered agent — useful in scenarios
-    where configuration errors should surface eagerly.
+    Agents are built lazily on first invocation, but ``app.lifespan()``
+    (or ``await app.build()`` / ``await app.shutdown()``) is required
+    in any deployment that uses ``@app.tool`` or talks to a real
+    TensorZero gateway — those paths call into the App-owned FastMCP
+    ``Client``, which is connected by :meth:`build` and disconnected by
+    :meth:`shutdown`.
     """
 
     def __init__(self, *, t0: AsyncTensorZeroGateway) -> None:
         self._t0: AsyncTensorZeroGateway = t0
         self._agent_registry: dict[str, _AgentSpec] = {}
         # M3 wires the resolution path; the attribute lives here so
-        # users can install overrides in M2 code without raising
-        # ``AttributeError`` ("app.dependency_overrides[get_db] = mock"
-        # is a no-op in M2 because there are no providers yet).
+        # users can install overrides without raising ``AttributeError``
+        # at any point in the lifecycle.
         self.dependency_overrides: dict[Callable[..., Any], Callable[..., Any]] = {}
+
+        # App-owned FastMCP server + matching Client.  The server starts
+        # empty; ``@app.tool`` registers tools onto it.  Every glow agent
+        # is constructed with ``tool_provider=self._owned_client``, so
+        # the v1.0 toolless-chat fallback at
+        # ``core/agent.py:_resolve_chat_tool_provider`` is never reached
+        # for glow agents (M2 §4 carry-forward option (b)).  The Client
+        # is connected by :meth:`build` (idempotent); :meth:`shutdown`
+        # exits the matching ``__aexit__``.
+        self._mcp_server: FastMCP[Any] = FastMCP("glow-app")
+        self._owned_client: Client[Any] = Client(self._mcp_server)
+        self._exit_stack: AsyncExitStack = AsyncExitStack()
+        self._client_entered: bool = False
+
+        # The :class:`DependencyResolver` instance lives here so it can
+        # consult ``self.dependency_overrides`` directly during
+        # ``@app.tool`` injections.  ``DependencyResolver`` is stateless
+        # beyond the per-call cache it threads through recursive
+        # resolution, so a single instance per ``App`` is safe.
+        self._resolver: DependencyResolver = DependencyResolver()
 
     # ------------------------------------------------------------------
     # Decorator surface — delegates to ``glow.decorators._make_decorator``
@@ -105,6 +134,27 @@ class App:
 
         return _make_decorator(self, name, function_name=function_name)
 
+    def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register ``fn`` as a FastMCP tool on the App-owned server.
+
+        Parameters whose default is a :func:`~t0_agents.glow.di.Depends`
+        sentinel are stripped from the tool's auto-generated JSON
+        Schema and re-injected at call time via the App's
+        :class:`~t0_agents.glow.di.DependencyResolver`.  The tool's
+        docstring becomes the MCP tool description (FastMCP convention).
+
+        Returns the original function unchanged so callers can still
+        invoke it directly outside the MCP loop — though direct calls
+        will not resolve ``Depends`` parameters; the resolution happens
+        only through the MCP transport.
+
+        Construction logic lives in :mod:`t0_agents.glow.decorators`;
+        this method is the typed thin shim that delegates.
+        """
+        from t0_agents.glow.decorators import _make_tool_decorator
+
+        return _make_tool_decorator(self)(fn)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -115,16 +165,30 @@ class App:
         Sync — :class:`Agent.__init__` is sync.  ``async`` is reserved
         for :meth:`build` so M4's MCP-mount machinery can interleave
         ``await FastMCP.mount(...)`` cleanly.
+
+        When ``spec.sub_agent_specs`` is non-empty, depth-first
+        constructs each sub-agent first so the parent's
+        :class:`AgentConfig` can be assembled with the fully-built
+        :class:`Agent` references.  The recursion is finite because
+        the decorator-time check enforces sub-agents register BEFORE
+        their parents.
         """
         if spec.agent is not None:
             return spec.agent
+        sub_agents: list[Agent] = [
+            self._lookup_or_build(sub_spec) for sub_spec in spec.sub_agent_specs
+        ]
+        config_kwargs: dict[str, Any] = {
+            "name": spec.name,
+            "function_name": spec.function_name,
+            "output": spec.output_mode,
+        }
+        if sub_agents:
+            config_kwargs["sub_agents"] = sub_agents
         agent = Agent(
-            AgentConfig(
-                name=spec.name,
-                function_name=spec.function_name,
-                output=spec.output_mode,
-            ),
+            AgentConfig(**config_kwargs),
             t0=self._t0,
+            tool_provider=cast(ToolProvider, self._owned_client),
         )
         spec.agent = agent
         return agent
@@ -156,24 +220,50 @@ class App:
         )
 
     async def build(self) -> None:
-        """Eagerly construct every registered agent.
+        """Eagerly construct every registered agent and connect the Client.
 
-        Recommended in ``main()`` or inside :meth:`lifespan` so
-        configuration errors (forward-ref resolution, invalid
-        ``function_name``, etc.) surface before any user invocation
-        kicks off network traffic.
+        Idempotent — calling :meth:`build` repeatedly enters the
+        owned ``Client`` once (latched on ``_client_entered``) and
+        re-uses the cached :class:`Agent` per spec.  Recommended in
+        ``main()`` or inside :meth:`lifespan` so configuration errors
+        (forward-ref resolution, invalid ``function_name``, MCP
+        connection failures) surface before any user invocation kicks
+        off network traffic.
         """
+        if not self._client_entered:
+            await self._exit_stack.enter_async_context(self._owned_client)
+            self._client_entered = True
         for spec in self._agent_registry.values():
             self._lookup_or_build(spec)
+
+    async def shutdown(self) -> None:
+        """Disconnect the owned Client.  Idempotent.
+
+        Closes the internal :class:`AsyncExitStack`, which exits the
+        ``Client.__aexit__`` registered by :meth:`build`.  Safe to call
+        multiple times — the stack is replaced after each close so a
+        subsequent :meth:`build` re-enters cleanly.  Required after
+        any non-:meth:`lifespan` :meth:`build` to avoid leaking the
+        in-process FastMCP transport task across test boundaries.
+        """
+        if self._client_entered:
+            await self._exit_stack.aclose()
+            self._exit_stack = AsyncExitStack()
+            self._client_entered = False
 
     @asynccontextmanager
     async def lifespan(self) -> AsyncIterator[None]:
         """Async context manager that builds every agent and yields.
 
         Pattern lifted from FastAPI: ``async with app.lifespan(): ...``
-        is the natural place to surface eager construction errors.
-        M4 extends teardown with MCP server unmount; M2 has nothing to
-        clean up on exit.
+        enters the owned Client, eagerly constructs each registered
+        agent, yields control to the caller, then unconditionally
+        disconnects on exit (even if the body raises).  This is the
+        recommended way to use :class:`App` because it makes the
+        Client lifecycle bullet-proof.
         """
         await self.build()
-        yield
+        try:
+            yield
+        finally:
+            await self.shutdown()

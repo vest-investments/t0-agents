@@ -241,6 +241,50 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   (chat function `agent` + JSON-structured function `plan_trip` with a
   schema matching `TripPlan`).  Boot with `docker compose -f
   examples/glow/docker-compose.yml --env-file .env up -d`.
+- **`Depends` + `DependencyResolver` (M3).** `from t0_agents.glow
+  import Depends` provides the FastAPI-style injection sentinel
+  (`provider: Callable`, `use_cache: bool = True`).  The internal
+  `DependencyResolver` walks `inspect.signature(fn)`, recursively
+  resolves provider chains, caches per call when `use_cache=True`,
+  and consults `app.dependency_overrides[provider]` on every call
+  (not snapshotted at registration).  Sync + async + sync-returns-
+  awaitable providers are all supported.
+- **`@app.tool` decorator (M3).** Registers user functions as
+  FastMCP tools on the App-owned in-memory server.  Parameters with a
+  `Depends` default are **stripped** from the auto-generated JSON
+  Schema (so the LLM never sees them) and re-injected at call time
+  via the App's resolver.  Tool docstring becomes the MCP description.
+  `Depends(<glow agent wrapper>)` inside `@app.tool` raises
+  `ConfigurationError` — sub-agent semantics belong on `@app.agent`.
+- **Sub-agents via `Depends(agent_wrapper)` on `@app.agent` (M3).**
+  The signature walk now requires every non-message parameter to
+  declare `Depends(<glow agent wrapper>)`; the provider's spec is
+  added to `AgentConfig.sub_agents` declaratively and the parameter
+  is compiled out of the runtime call signature.  Value-style
+  `Depends(get_db)` on `@app.agent` raises `ConfigurationError`
+  with a pointer to `@app.tool`.  Forward refs are rejected eagerly
+  (register sub-agents BEFORE their orchestrators).
+- **App-owned FastMCP server + Client lifecycle (M3).**
+  `App.__init__` allocates a long-lived in-memory `FastMCP("glow-app")`
+  + `Client`; every glow agent is constructed with
+  `tool_provider=app._owned_client`, so the v1.0 toolless-chat
+  fallback at `core/agent.py:_resolve_chat_tool_provider` is never
+  reached for glow agents (M2 §4 carry-forward option (b)).
+  `app.build()` enters the Client once (idempotent); `app.shutdown()`
+  closes it; `app.lifespan()` does `build → yield → shutdown` in a
+  `try/finally`.  Examples and integration tests are updated to wrap
+  their hot path in `async with app.lifespan():`.
+- **`app.dependency_overrides` is now load-bearing (M3).**  The M2
+  placeholder dict is consulted on every `Depends` resolution.
+  `app.dependency_overrides[get_db] = mock_db` replaces the resolved
+  value at call time without re-instantiating the decorator —
+  FastAPI's testing-ergonomics pattern.
+- **`examples/glow/05_di_tools.py` (M3).**  Runnable demo showing
+  `@app.tool` + `Depends` stripping + `dependency_overrides` over a
+  direct MCP round-trip (no agent / no TZ inference).  Adds a
+  `[functions.orchestrator]` chat function to
+  `examples/glow/config/tensorzero.toml` used by the new integration
+  test `test_orchestrator_with_glow_sub_agents`.
 
 ### Changed
 
