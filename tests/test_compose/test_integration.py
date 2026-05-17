@@ -114,7 +114,7 @@ async def test_two_agent_orchestration_e2e() -> None:
         # input).  Telling each sub-agent exactly which tool to call
         # + capping the output at "one sentence" keeps every JSON
         # tool-call argument bounded.
-        result = await orchestrator.run(
+        result = await orchestrator.invoke(
             "Tell the researcher: call your `lookup_fact` tool with "
             "topic='rlhf' and reply with ONLY that one sentence "
             "(do not add any explanation).  Then tell the writer to "
@@ -182,7 +182,7 @@ async def test_subagent_episode_isolation() -> None:
             tool_provider=cast(ToolProvider, orch_client),
         )
 
-        result = await orchestrator.run(
+        result = await orchestrator.invoke(
             "Tell the researcher: call your `lookup_fact` tool with "
             "topic='rlhf' and reply with ONLY that one sentence.  "
             "Return whatever the researcher gives you verbatim, with "
