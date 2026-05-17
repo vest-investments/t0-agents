@@ -375,13 +375,24 @@ def _make_tool_decorator(app: App) -> Callable[[ToolFn], ToolFn]:
 
         stripped_sig = sig.replace(parameters=public_params)
         # FastMCP's ``Tool.from_function`` reads ``__annotations__`` via
-        # ``get_type_hints`` (`fastmcp/tools/function_parsing.py:198`); the
-        # stripped annotations match the stripped signature exactly so
-        # only public parameters appear in the JSON schema.
-        original_annotations: dict[str, Any] = getattr(fn, "__annotations__", {})
+        # ``get_type_hints`` (`fastmcp/tools/function_parsing.py:198`).
+        # We resolve the user function's hints HERE (using ``fn.__globals__``)
+        # so the wrapper carries actual type objects, not strings.  Without
+        # this step, ``from __future__ import annotations`` in user code
+        # would leave ``fn.__annotations__`` as strings, and FastMCP's
+        # ``get_type_hints(wrapper)`` would try to resolve them against
+        # ``wrapper.__globals__`` (this module's globals) where user-
+        # defined types are NOT in scope.  Resolution is best-effort:
+        # if it fails (rare — usually a deeply-forward-ref'd type), we
+        # fall back to the raw ``__annotations__`` so registration
+        # still proceeds.
+        try:
+            resolved_hints = get_type_hints(fn, include_extras=True)
+        except (NameError, TypeError):
+            resolved_hints = getattr(fn, "__annotations__", {})
         stripped_annotations: dict[str, Any] = {
             ann_name: ann_type
-            for ann_name, ann_type in original_annotations.items()
+            for ann_name, ann_type in resolved_hints.items()
             if ann_name == "return" or ann_name not in depends_params
         }
 

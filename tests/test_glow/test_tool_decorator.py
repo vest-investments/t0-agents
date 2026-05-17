@@ -19,6 +19,7 @@ client):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
@@ -26,6 +27,19 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow import App, Depends
+
+
+@dataclass
+class _OrderRef:
+    """Fixture type used to exercise the resolved-annotations path.
+
+    Lives at module level so :func:`typing.get_type_hints` (which
+    walks ``fn.__globals__``) can resolve it when the user function
+    uses it as a parameter annotation under
+    ``from __future__ import annotations``.
+    """
+
+    id: str
 
 
 def _fake_t0() -> AsyncTensorZeroGateway:
@@ -201,6 +215,45 @@ async def test_tool_docstring_becomes_mcp_description() -> None:
     matches = [t for t in advertised if t.name == "search"]
     assert len(matches) == 1
     assert matches[0].description == "Search the corpus for matches."
+
+
+async def test_tool_resolves_user_defined_types_at_decoration_time() -> None:
+    """``__annotations__`` on the wrapper carry resolved types, not strings.
+
+    With ``from __future__ import annotations`` (the project default),
+    ``fn.__annotations__`` are stringified.  Without resolving them at
+    decoration time, FastMCP's ``Tool.from_function(wrapper)`` would
+    try to evaluate the strings against ``wrapper.__globals__`` —
+    which is :mod:`t0_agents.glow.decorators`, NOT the user module —
+    and user-defined types would fail to resolve.
+
+    This test pins the resolved-at-decoration-time behaviour: the
+    user-defined :class:`_OrderRef` (module level so
+    :func:`typing.get_type_hints` can find it via ``fn.__globals__``)
+    is used as a parameter annotation, and the registered tool's
+    annotations are inspected via the FastMCP server's
+    local-provider components.
+    """
+    app = App(t0=_fake_t0())
+
+    @app.tool
+    async def describe_order(order: _OrderRef) -> str:
+        """Describe an order."""
+        return f"order:{order.id}"
+
+    components = cast(
+        dict[Any, Any],
+        app._mcp_server._local_provider._components,
+    )
+    matches = [
+        c for c in components.values() if getattr(c, "name", None) == "describe_order"
+    ]
+    assert len(matches) == 1
+    tool_fn: Any = getattr(matches[0], "fn", None)
+    assert tool_fn is not None
+    annotations = tool_fn.__annotations__
+    assert annotations["order"] is _OrderRef
+    assert annotations["return"] is str
 
 
 def test_tool_rejects_depends_on_glow_agent_wrapper() -> None:
