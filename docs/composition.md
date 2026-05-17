@@ -2,14 +2,14 @@
 
 `Composer` is the fourth v1.0 abstraction.  Nine built-in topology
 builders take Agents (and other Composers) and stitch them into
-industrial patterns — pipelines, fan-outs, races, ensembles,
+industrial patterns — pipelines, fan-outs, ensembles,
 scatter-gathers, triage routers, sagas, provider escalations,
 state-machine breakers.
 
 Every Composer satisfies the `Composable[Input, T]` protocol, so
 they **nest uniformly** at arbitrary depth.
-`sequential(race(a, b), conditional(routes={...}))` type-checks at
-every layer; `composer.invoke(input)` returns the same `Run[T]`
+`sequential(parallel(a, b), conditional(routes={...}))` type-checks
+at every layer; `composer.invoke(input)` returns the same `Run[T]`
 handle as `agent.invoke(message)` so cancellation, audit, and
 two-channel consumption work end-to-end on a composite.
 
@@ -20,6 +20,15 @@ invoke as a tool.  v1.0 keeps that path (unchanged) and adds the
 construction time, without an LLM in the routing decision.  The
 two paths are orthogonal; pick the one whose decision model fits
 the problem.
+
+> **Deprecation notice (v1.0):** `race(*nodes)` is deprecated and
+> emits `DeprecationWarning`; removal is scheduled for v1.1.  Use
+> `parallel(*nodes, reducer=..., error_policy="continue")` for
+> fan-out + merge, or write
+> `asyncio.wait(..., return_when=FIRST_COMPLETED)` in user code if
+> you genuinely need first-finisher-wins.  See
+> [Advanced / not recommended](#advanced--not-recommended) at the
+> bottom of this page for the rationale.
 
 > Companion reading: [`docs/run.md`](run.md) (the handle that every
 > Composer produces), [`docs/multi-agent.md`](multi-agent.md) (the
@@ -63,13 +72,16 @@ by builder; see [The narrow `Composer.invoke` surface](#the-narrow-composerinvok
 |---|---|---|
 | `sequential(*nodes, chain=None)` | pipeline `A → B → C` | Multi-step processing where each step uses the previous result. |
 | `parallel(*nodes, reducer=None, error_policy="fail_fast")` | fan-out + reducer | N agents on the same input; merge the answers. |
-| `race(*nodes, cancel_others=True)` | first-completed wins | Latency-sensitive — first responder wins, losers cancel. |
 | `consensus(*nodes, merge)` | N propose, merge decides | Voting / quorum for sensitive decisions. |
 | `map_reduce(node, *, reducer, concurrency=None)` | scatter over an iterable | Same agent across many inputs, bounded concurrency. |
 | `conditional(*, router, routes, default=None)` | sync routing on input | Triage to one branch out of N keyed by a sync function. |
 | `saga(*steps)` | pipeline with compensation | Distributed transactions — undo on failure. |
 | `retry_chain(*nodes, on_error=None)` | provider escalation | Primary fails → fall through to backup. |
 | `circuit_breaker(node, *, threshold=5, reset_timeout=30.0)` | state-machine breaker | Stop calling a flaky downstream until it recovers. |
+
+> A ninth builder, `race(*nodes, cancel_others=True)`, ships in v1.0
+> but is **deprecated** — see
+> [Advanced / not recommended](#advanced--not-recommended).
 
 Each builder returns a `Composer` instance whose `.invoke(input)`
 produces a `CompositeRun(Run[Any])`.
@@ -115,20 +127,6 @@ first sub-Run fails; the reducer sees `list[AgentResult[T]]`.
 `error_policy="continue"` collects every settled state; the reducer
 sees `list[AgentResult[T] | BaseException]` and decides how to
 handle the failures.
-
-### `race` — first-completed wins
-
-```python
-from t0_agents import race
-
-fast = race(fast_provider, slow_provider, cancel_others=True)
-result = await fast.invoke("Quick answer please").result()
-```
-
-The first sub-Run to finish wins; the others are cancelled under the
-`cancel_timeout` budget (default 30s, per-instance override on the
-factory or per-call on `.invoke`).  `cancel_others=False` lets the
-losers continue best-effort.
 
 ### `consensus` — N propose, merge decides
 
@@ -544,6 +542,52 @@ the standard pattern.
 These constraints keep the topology composition predictable; the
 extension points are middleware (cross-cutting concerns at the
 sub-Run level) and `AgentConfig.tags=` (TZ-native metadata).
+
+---
+
+## Advanced / not recommended
+
+### `race` — first-completed wins (deprecated)
+
+`race(*nodes, cancel_others=True)` is **deprecated in v1.0** and is
+slated for removal in v1.1.  Calling it now emits a
+`DeprecationWarning`.  The shape is a framework footgun:
+first-finisher-wins discards every loser's work, the losers'
+inferences already burned tokens before the cancel signal arrived,
+and the cancellation cascade itself is best-effort under
+`cancel_timeout` (overshoot logs a WARN and leaves children
+dangling).  Costs are paid; results are thrown away; the contract
+hides that asymmetry from the caller.
+
+**Replace it with one of these:**
+
+- For **fan-out + merge** — the pattern almost every `race` user is
+  reaching for — use
+  `parallel(*nodes, reducer=..., error_policy="continue")`.  Every
+  child runs to terminal state, the reducer decides how to merge
+  (concatenate strings, pick the most confident, majority-vote,
+  …), and you get the full `list[AgentResult[T] | BaseException]`
+  to inspect.  No discarded work, no leaked siblings.
+- For **genuine first-finisher-wins** (rare; mostly tight-latency
+  redundancy probes against quasi-deterministic responders) write
+  `asyncio.wait(..., return_when=FIRST_COMPLETED)` over the leaf
+  coroutines directly in user code.  Skip the Composer surface
+  entirely — `race`'s only added value over the raw `asyncio`
+  primitive was the cancellation cascade, and that turned out to
+  be the part that bites.
+
+```python
+# Deprecated: emits DeprecationWarning
+from t0_agents import race
+
+fast = race(fast_provider, slow_provider, cancel_others=True)
+result = await fast.invoke("Quick answer please").result()
+```
+
+The original semantics — first sub-Run to finish wins, losers
+cancelled under `cancel_timeout`, `cancel_others=False` lets the
+losers continue best-effort — still hold for the rest of v1.0,
+but the warning makes the migration path explicit.
 
 ---
 

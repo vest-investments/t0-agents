@@ -35,6 +35,7 @@ ContextVar and the TZ-native ``tags={"t0_agents.parent_episode_id":
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -263,6 +264,14 @@ def race(
 ) -> RaceComposer:
     """Race children; whoever finishes first (success or failure) is returned.
 
+    **Deprecated since v1.0** — removal scheduled for v1.1.  Use
+    :func:`parallel` with ``reducer=..., error_policy="continue"`` for
+    fan-out + merge, or write
+    ``asyncio.wait(..., return_when=FIRST_COMPLETED)`` over the leaf
+    coroutines in user code if you genuinely need first-finisher-wins.
+    See `docs/composition.md` ("Advanced / not recommended") for the
+    rationale.
+
     With ``cancel_others=True`` (default) the losers receive
     :meth:`Run.cancel` under ``cancel_timeout``.  With
     ``cancel_others=False`` the losers run in the background
@@ -270,6 +279,15 @@ def race(
     the winner failed, the exception is wrapped in
     :class:`ComposerError`.
     """
+    warnings.warn(
+        "`race(...)` is deprecated and will be removed in v1.1; use "
+        "`parallel(*nodes, reducer=..., error_policy='continue')` for "
+        "fan-out + merge or "
+        "`asyncio.wait(..., return_when=FIRST_COMPLETED)` in user code "
+        "for first-finisher-wins.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return RaceComposer(
         children=nodes,
         cancel_others=cancel_others,

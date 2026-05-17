@@ -15,7 +15,9 @@ async def test_race_first_completed_wins() -> None:
     fast = MockComposable(name="fast", value="fast_won", delay=0.01)
     slow = MockComposable(name="slow", value="slow_won", delay=1.0)
 
-    result = await race(fast, slow).invoke("seed", cancel_timeout=1.0).result()
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        composer = race(fast, slow)
+    result = await composer.invoke("seed", cancel_timeout=1.0).result()
     assert result.value == "fast_won"
 
 
@@ -23,7 +25,9 @@ async def test_race_loser_cancelled_when_cancel_others_true() -> None:
     fast = MockComposable(name="fast", value="fast_won", delay=0.01)
     slow = MockComposable(name="slow", value="slow_won", delay=1.0)
 
-    run = race(fast, slow, cancel_others=True).invoke("seed", cancel_timeout=1.0)
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        composer = race(fast, slow, cancel_others=True)
+    run = composer.invoke("seed", cancel_timeout=1.0)
     await run.result()
 
     # The Run sub_runs include both fast (succeeded) and slow (cancelled).
@@ -37,7 +41,9 @@ async def test_race_cancel_others_false_lets_losers_run() -> None:
     fast = MockComposable(name="fast", value="fast_won", delay=0.01)
     slow = MockComposable(name="slow", value="slow_won", delay=0.1)
 
-    run = race(fast, slow, cancel_others=False).invoke("seed")
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        composer = race(fast, slow, cancel_others=False)
+    run = composer.invoke("seed")
     result = await run.result()
     assert result.value == "fast_won"
 
@@ -55,7 +61,8 @@ async def test_race_winner_failure_wraps_as_composer_error() -> None:
     )
     slow_ok = MockComposable(name="slow", value="ok", delay=2.0)
 
-    composer = race(boom_fast, slow_ok)
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        composer = race(boom_fast, slow_ok)
     with pytest.raises(ComposerError) as excinfo:
         await composer.invoke("seed", cancel_timeout=1.0).result()
 
@@ -64,5 +71,7 @@ async def test_race_winner_failure_wraps_as_composer_error() -> None:
 
 
 async def test_race_empty_raises() -> None:
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        composer = race()
     with pytest.raises(ValueError, match=r"race.*at least one"):
-        await race().invoke("seed").result()
+        await composer.invoke("seed").result()
