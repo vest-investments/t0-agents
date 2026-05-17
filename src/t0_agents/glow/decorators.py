@@ -82,17 +82,22 @@ class _AgentWrapper(Generic[P, R]):
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> FluentRun[R]:
         """Invoke the agent with a user message.
 
-        M2 scope: exactly one positional argument (the message);
-        kwargs and additional positionals raise ``TypeError``.  M3
-        replaces this with full signature introspection so
-        ``Depends(...)`` defaults and typed sub-agent injection work.
+        M3 scope: exactly one positional argument (the message);
+        kwargs and additional positionals raise ``TypeError``.
+        Sub-agent ``Depends(agent_wrapper)`` parameters declared on
+        the decorated function are consumed at decoration time and
+        compiled into ``AgentConfig.sub_agents``; the runtime call
+        signature has no slots for them, so the user never passes
+        them through ``__call__``.
         """
         if kwargs:
             raise TypeError(
-                f"@app.agent({self._spec_ref.name!r}) wrapper accepts only a "
-                f"single positional argument (the user message) in M2; "
-                f"keyword arguments will be supported in M3 when Depends() "
-                f"injection lands.  Got: {sorted(kwargs)!r}"
+                f"@app.agent({self._spec_ref.name!r}) wrapper accepts only "
+                f"a single positional argument (the user message).  "
+                f"`Depends(agent)` parameters declared on the decorated "
+                f"function are compiled into the agent's sub_agents at "
+                f"decoration time and must not be passed at call time.  "
+                f"Got kwargs: {sorted(kwargs)!r}"
             )
         if len(args) != 1:
             raise TypeError(
@@ -152,6 +157,8 @@ def _make_decorator(
             ) from exc
         return_type: Any = hints.get("return", str)
 
+        sub_agent_specs = _collect_sub_agent_specs(fn, app, name)
+
         # ``value_transform`` is the M1 carry-forward §4(d) hook: when
         # the return annotation is ``list[BaseModel]``,
         # ``output_mode_from_return_type`` chose a ``StructuredOutput``
@@ -171,11 +178,124 @@ def _make_decorator(
             output_mode=output_mode,
             return_type=return_type,
             value_transform=value_transform,
+            sub_agent_specs=sub_agent_specs,
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)
 
     return decorator
+
+
+def _collect_sub_agent_specs(
+    fn: Callable[..., Any],
+    app: App,
+    agent_name: str,
+) -> list[_AgentSpec]:
+    """Walk ``fn``'s signature and return the sub-agent specs declared via ``Depends``.
+
+    The decoration-time contract for ``@app.agent`` parameters is
+    deliberately narrow at M3:
+
+    * The first positional parameter is the user message; type
+      annotation must be ``str`` (or unannotated, which defaults to
+      ``str``).
+    * Every subsequent parameter MUST have a :func:`Depends` default
+      whose ``provider`` is an :class:`_AgentWrapper` *registered on
+      the same App* (the sub-agent special case).  The parameter is
+      then "compiled out" of the runtime call signature; its provider's
+      ``_spec_ref`` is appended to the returned list.
+
+    Any other shape raises :class:`ConfigurationError`:
+
+    * Value-style ``Depends(get_db)`` on an ``@app.agent`` param:
+      point the user at ``@app.tool`` (the correct surface for tool
+      dependencies at M3).
+    * ``Depends(other_wrapper)`` where ``other_wrapper`` is not in
+      ``app._agent_registry``: order-of-registration mistake; ask
+      the user to register the sub-agent BEFORE the orchestrator.
+    * Missing default, missing annotation, non-``Depends`` default,
+      non-positional kind: structural mismatch with the spec.
+
+    Returns the sub-agent specs in the order their parameters appear
+    on the user function.  Empty list when the function has only a
+    message parameter (the M2 case).
+    """
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    if not params:
+        raise ConfigurationError(
+            f"@app.agent({agent_name!r}): {fn.__module__}.{fn.__qualname__} "
+            f"must declare at least one positional parameter (the user "
+            f"message)."
+        )
+
+    message_param = params[0]
+    if message_param.kind not in (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ):
+        raise ConfigurationError(
+            f"@app.agent({agent_name!r}): the first parameter "
+            f"({message_param.name!r}) must be positional (the user "
+            f"message)."
+        )
+    if message_param.annotation is not inspect.Parameter.empty:
+        # Annotation must be ``str``.  Forward-refs were already
+        # resolved by ``get_type_hints`` in the caller, but we
+        # introspect ``inspect.signature`` here for parameter shape;
+        # the annotation in ``message_param.annotation`` is the raw
+        # (possibly stringified under PEP 563) form.  Accept either
+        # the ``str`` class or the literal string ``"str"`` for the
+        # ``from __future__ import annotations`` case.
+        if message_param.annotation not in (str, "str"):
+            raise ConfigurationError(
+                f"@app.agent({agent_name!r}): the first parameter "
+                f"({message_param.name!r}) must be annotated as ``str`` "
+                f"(the user message); got {message_param.annotation!r}."
+            )
+
+    sub_agent_specs: list[_AgentSpec] = []
+    for param in params[1:]:
+        if param.default is inspect.Parameter.empty:
+            raise ConfigurationError(
+                f"@app.agent({agent_name!r}): parameter {param.name!r} has "
+                f"no default — every parameter beyond the user message must "
+                f"declare ``= Depends(<glow agent wrapper>)`` (the sub-agent "
+                f"special case).  Value-style dependencies belong on "
+                f"``@app.tool`` at M3."
+            )
+        default = param.default
+        if not isinstance(default, _Depends):
+            raise ConfigurationError(
+                f"@app.agent({agent_name!r}): parameter {param.name!r} has a "
+                f"non-Depends default {default!r}.  Every parameter beyond "
+                f"the user message must declare ``= Depends(<glow agent "
+                f"wrapper>)``."
+            )
+
+        provider = default.provider
+        if not isinstance(provider, _AgentWrapper):
+            raise ConfigurationError(
+                f"@app.agent({agent_name!r}): parameter {param.name!r} uses "
+                f"Depends({provider!r}), a value-style provider.  "
+                f"@app.agent only accepts Depends(<glow agent wrapper>) for "
+                f"non-message parameters at M3 (the sub-agent special case); "
+                f"use @app.tool for value-style dependencies."
+            )
+
+        provider_spec = provider._spec_ref
+        if provider_spec not in app._agent_registry.values():
+            raise ConfigurationError(
+                f"@app.agent({agent_name!r}): parameter {param.name!r} uses "
+                f"Depends(<wrapper for {provider_spec.name!r}>), but that "
+                f"wrapper is not registered on this App.  Register the "
+                f"sub-agent with ``@app.agent({provider_spec.name!r})`` "
+                f"BEFORE the orchestrator that depends on it (glow does not "
+                f"support forward references between agents)."
+            )
+        sub_agent_specs.append(provider_spec)
+
+    return sub_agent_specs
 
 
 def _unwrap_wrapper_items(wrapper_value: Any) -> Any:

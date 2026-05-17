@@ -327,7 +327,13 @@ def test_assert_type_of_call_matches_return_annotation() -> None:
 def test_call_rejects_kwargs_and_extra_positionals(
     app_with_fake_agent: App,
 ) -> None:
-    """M2 wrappers accept exactly one positional ``str`` argument."""
+    """M3 wrappers accept exactly one positional ``str`` argument.
+
+    `Depends(agent)` parameters are compiled into ``sub_agents`` at
+    decoration time and have no runtime call-side representation, so
+    kwargs are still rejected — but the error wording points the user
+    at the right place.
+    """
 
     @app_with_fake_agent.agent("tutor")
     async def tutor(q: str) -> str:  # type: ignore[empty-body]
@@ -337,7 +343,202 @@ def test_call_rejects_kwargs_and_extra_positionals(
         tutor()  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="exactly one positional argument"):
         tutor("hi", "bye")  # type: ignore[call-arg]
-    with pytest.raises(TypeError, match="keyword arguments will be supported in M3"):
+    with pytest.raises(TypeError, match=r"Depends.*compiled into"):
         tutor("hi", mode="json")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="expects a str"):
         tutor(123)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# M3 — signature walk and sub-agents-via-Depends
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_via_depends_populates_sub_agent_specs(
+    app_with_fake_agent: App,
+) -> None:
+    """Orchestrator declaring ``Depends(researcher_wrapper)`` records the spec."""
+    from t0_agents.glow import Depends
+
+    @app_with_fake_agent.agent("researcher")
+    async def researcher(q: str) -> str:  # type: ignore[empty-body]
+        """A researcher."""
+
+    @app_with_fake_agent.agent("orchestrator")
+    async def orchestrator(  # type: ignore[empty-body]
+        q: str,
+        research: Any = Depends(researcher),
+    ) -> str:
+        """An orchestrator."""
+
+    spec = orchestrator._spec
+    assert len(spec.sub_agent_specs) == 1
+    assert spec.sub_agent_specs[0] is researcher._spec
+
+
+async def test_subagent_specs_built_depth_first_before_orchestrator(
+    app_with_fake_agent: App,
+) -> None:
+    """``_lookup_or_build`` constructs sub-agents BEFORE the orchestrator.
+
+    AgentConfig's strict ``isinstance(sa, Agent)`` validation
+    (`core/config.py:177`) rejects the test fake, so we cannot
+    inspect the orchestrator's actual ``AgentConfig.sub_agents``.
+    The integration test in commit 5 exercises that wiring against a
+    real :class:`Agent`.  This unit test verifies the depth-first
+    construction ordering via ``spec.agent`` population: when
+    ``_lookup_or_build`` runs for the orchestrator, its sub-agent
+    specs must have ``agent`` already populated.
+    """
+    from t0_agents.glow import Depends
+
+    @app_with_fake_agent.agent("researcher")
+    async def researcher(q: str) -> str:  # type: ignore[empty-body]
+        """A researcher."""
+
+    @app_with_fake_agent.agent("writer")
+    async def writer(q: str) -> str:  # type: ignore[empty-body]
+        """A writer."""
+
+    @app_with_fake_agent.agent("orchestrator")
+    async def orchestrator(  # type: ignore[empty-body]
+        q: str,
+        research: Any = Depends(researcher),
+        write: Any = Depends(writer),
+    ) -> str:
+        """An orchestrator."""
+
+    # Monkey-patch ``AgentConfig.__post_init__`` to skip the strict
+    # ``isinstance(sa, Agent)`` validation for this unit test only —
+    # the real :class:`Agent` path is exercised in commit 5.
+    import t0_agents.core.config as config_mod
+
+    captured_sub_agents: list[Any] = []
+    original_post_init = config_mod.AgentConfig.__post_init__
+
+    def patched_post_init(self: Any) -> None:
+        if self.sub_agents:
+            captured_sub_agents[:] = list(self.sub_agents)
+            self.sub_agents = []
+        original_post_init(self)
+
+    config_mod.AgentConfig.__post_init__ = patched_post_init  # type: ignore[method-assign]
+    try:
+        async with app_with_fake_agent.lifespan():
+            orch_spec = orchestrator._spec
+            assert len(orch_spec.sub_agent_specs) == 2
+            # Sub-agents constructed depth-first.
+            for sub_spec in orch_spec.sub_agent_specs:
+                assert sub_spec.agent is not None
+            # And those constructed instances were what
+            # ``_lookup_or_build`` threaded into ``AgentConfig.sub_agents``.
+            assert {sa for sa in captured_sub_agents} == {
+                sub_spec.agent for sub_spec in orch_spec.sub_agent_specs
+            }
+    finally:
+        config_mod.AgentConfig.__post_init__ = original_post_init  # type: ignore[method-assign]
+
+
+def test_subagent_param_not_in_runtime_call_signature(
+    app_with_fake_agent: App,
+) -> None:
+    """The wrapper still accepts exactly one positional argument."""
+    from t0_agents.glow import Depends
+
+    @app_with_fake_agent.agent("researcher")
+    async def researcher(q: str) -> str:  # type: ignore[empty-body]
+        """A researcher."""
+
+    @app_with_fake_agent.agent("orchestrator")
+    async def orchestrator(  # type: ignore[empty-body]
+        q: str,
+        research: Any = Depends(researcher),
+    ) -> str:
+        """An orchestrator."""
+
+    # Passing the sub-agent param as a kwarg is rejected — sub-agents
+    # are compiled into ``AgentConfig.sub_agents`` at decoration time
+    # and have no runtime call-side slot.
+    with pytest.raises(TypeError, match=r"Depends.*compiled into"):
+        orchestrator("hi", research=researcher)
+
+
+def test_depends_on_unregistered_wrapper_raises_eagerly() -> None:
+    """Using ``Depends(wrapper)`` from a different App raises at decoration."""
+    from t0_agents.glow import Depends
+
+    app_a = App(t0=_fake_t0())
+    app_b = App(t0=_fake_t0())
+
+    @app_a.agent("from_a")
+    async def from_a(q: str) -> str:  # type: ignore[empty-body]
+        """Registered on app_a only."""
+
+    with pytest.raises(ConfigurationError, match="not registered on this App"):
+
+        @app_b.agent("orchestrator")
+        async def _orch(  # type: ignore[empty-body]  # pragma: no cover
+            q: str,
+            other: Any = Depends(from_a),
+        ) -> str:
+            """Tries to depend on an agent from a different App."""
+
+
+def test_value_style_depends_on_agent_raises_with_pointer_to_tool() -> None:
+    """``Depends(get_db)`` on ``@app.agent`` raises with a pointer to ``@app.tool``."""
+    from t0_agents.glow import Depends
+
+    app = App(t0=_fake_t0())
+
+    def get_db() -> str:
+        return "db"
+
+    with pytest.raises(
+        ConfigurationError, match=r"value-style provider.*@app.tool"
+    ):
+
+        @app.agent("orchestrator")
+        async def _orch(  # type: ignore[empty-body]  # pragma: no cover
+            q: str,
+            db: str = Depends(get_db),
+        ) -> str:
+            """Tries value-style Depends on @app.agent."""
+
+
+def test_first_parameter_typed_non_str_raises() -> None:
+    """``@app.agent`` requires the first positional parameter to be ``str``."""
+    app = App(t0=_fake_t0())
+
+    with pytest.raises(ConfigurationError, match="must be annotated as ``str``"):
+
+        @app.agent("orchestrator")
+        async def _orch(q: int) -> str:  # type: ignore[empty-body]  # pragma: no cover
+            """Wrong annotation on the message param."""
+
+
+def test_non_message_param_without_default_raises() -> None:
+    """A non-message parameter without ``Depends`` default raises."""
+    app = App(t0=_fake_t0())
+
+    with pytest.raises(ConfigurationError, match="has no default"):
+
+        @app.agent("orchestrator")
+        async def _orch(  # type: ignore[empty-body]  # pragma: no cover
+            q: str,
+            extra: int,
+        ) -> str:
+            """Extra positional with no default."""
+
+
+def test_non_message_param_with_plain_default_raises() -> None:
+    """A non-message parameter whose default is NOT ``Depends`` raises."""
+    app = App(t0=_fake_t0())
+
+    with pytest.raises(ConfigurationError, match="non-Depends default"):
+
+        @app.agent("orchestrator")
+        async def _orch(  # type: ignore[empty-body]  # pragma: no cover
+            q: str,
+            extra: int = 7,
+        ) -> str:
+            """Extra positional with a plain default."""
