@@ -56,6 +56,23 @@ model = "gpt_oss_20"
 templates.system.path = "functions/extract_entities/system_template.minijinja"
 json_mode = "strict"
 
+# Structured-outputs surface — glow example: trip-planner JSON function
+# used by ``examples/glow/02_structured.py`` and
+# ``tests/test_glow/test_integration.py``.  Schema matches the
+# ``TripPlan(BaseModel)`` defined in the example so the glow decorator's
+# return-type inference picks ``StructuredOutput`` cleanly.  Mirrored
+# from ``examples/glow/config/`` so the root gateway covers every
+# integration test in one boot.
+[functions.plan_trip]
+type = "json"
+output_schema = "functions/plan_trip/output_schema.json"
+
+[functions.plan_trip.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+templates.system.path = "functions/plan_trip/system_template.minijinja"
+json_mode = "strict"
+
 # Metrics for feedback
 [metrics.task_success]
 type = "boolean"

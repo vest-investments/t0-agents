@@ -1557,6 +1557,9 @@ cli = [
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
+glow = [
+    { name = "pydantic" },
+]
 memory-sqlite = [
     { name = "aiosqlite" },
 ]
@@ -1586,6 +1589,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115.0" },
     { name = "fastmcp", specifier = ">=3.2.3" },
     { name = "pydantic", marker = "extra == 'cli'", specifier = ">=2.0" },
+    { name = "pydantic", marker = "extra == 'glow'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'serve'", specifier = ">=2.0" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13.7.0" },
@@ -1596,7 +1600,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'cli'", specifier = ">=0.32.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.32.0" },
 ]
-provides-extras = ["memory-sqlite", "pydantic", "serve", "cli"]
+provides-extras = ["memory-sqlite", "pydantic", "serve", "cli", "glow"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from typing import Any, Literal, TypeVar, cast, overload
 
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.config import AgentConfig
@@ -37,6 +38,27 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TOOL_TIMEOUT: float = 30.0
 
 
+@asynccontextmanager
+async def _resolve_chat_tool_provider(
+    tool_provider: ToolProvider | None,
+) -> AsyncIterator[Client[Any]]:
+    """Yield a usable tool provider for the chat terminals.
+
+    Caller-supplied providers are passed through unchanged (the user
+    owns their lifecycle — typically an already-entered ``fastmcp.Client``).
+    When ``tool_provider`` is ``None``, an ephemeral in-memory
+    ``FastMCP("agent-default")`` wrapped in a ``Client`` is allocated
+    for the duration of the invocation; it advertises zero tools, so
+    :func:`run_agent` sees an empty tool list, the LLM produces a text
+    response, and the loop terminates after the first turn.
+    """
+    if tool_provider is not None:
+        yield cast(Client[Any], tool_provider)
+        return
+    async with Client(FastMCP("agent-default")) as fallback:
+        yield fallback
+
+
 T = TypeVar("T")
 
 
@@ -49,14 +71,17 @@ class Agent:
     gateway and the tool provider (when one is supplied — typically a
     ``fastmcp.Client``).
 
-    The ``tool_provider`` kwarg is **required for chat-mode agents**
-    (``output=ChatOutput()``, the default) because the tool loop calls
-    ``list_tools()`` / ``call_tool()`` on it every turn.  For
-    single-shot agents (``output=JsonOutput(...)``,
-    ``output=StructuredOutput(Model)``, ``output=ToolCallOutput()``) it
-    is **optional**: those agents make one inference call and never
-    dispatch MCP tools, so they can be constructed with just the
-    gateway.
+    The ``tool_provider`` kwarg is **optional for every output mode**.
+    Chat-mode agents (``output=ChatOutput()``, the default) call
+    ``list_tools()`` / ``call_tool()`` on it every turn; when the
+    caller passes ``None``, ``Agent`` allocates an ephemeral in-memory
+    ``FastMCP("agent-default")`` for the invocation that advertises
+    zero tools — so the LLM produces a text response and the loop
+    terminates after the first turn.  This is the "toolless chat"
+    convenience for thin chatbot-style use cases.  Single-shot agents
+    (``output=JsonOutput(...)``, ``output=StructuredOutput(Model)``,
+    ``output=ToolCallOutput()``) never dispatch MCP tools, so the
+    kwarg has always been optional for them.
 
     Cross-cutting concerns (memory, guardrails, cost-tracking, sub-agent
     orchestration, JSON retry) are materialised by
@@ -109,14 +134,6 @@ class Agent:
             raise ConfigurationError(
                 f"tool_provider must implement the ToolProvider protocol "
                 f"(list_tools + call_tool), got {type(tool_provider).__name__}"
-            )
-        if config.output.expects_tool_loop and tool_provider is None:
-            raise ConfigurationError(
-                f"Agent with output={config.output.name!r} requires a "
-                f"tool_provider.  Pass a fastmcp.Client wrapping your tool "
-                f"server, or use a single-shot output mode (JsonOutput, "
-                f"StructuredOutput, ToolCallOutput) that does not need a "
-                f"tool provider."
             )
         if config.memory is not None and not isinstance(config.memory, MemoryProvider):
             raise ConfigurationError(
@@ -338,15 +355,14 @@ class Agent:
 
         Calls :func:`run_agent` with the (possibly memory-injected)
         ``ctx.user_message`` and the (possibly wrapped)
-        ``ctx.tool_provider``.  Memory hydration, guardrail wrapping,
-        sub-agent orchestration, and cost accumulation already happened
-        upstream in the middleware chain — the terminal is now the
-        slim "drive the inference loop" body.
+        ``ctx.tool_provider``.  When ``ctx.tool_provider`` is ``None``
+        the toolless-chat fallback is allocated for the duration of
+        the invocation (see :func:`_resolve_chat_tool_provider`).
+        Memory hydration, guardrail wrapping, sub-agent orchestration,
+        and cost accumulation already happened upstream in the
+        middleware chain — the terminal is now the slim "drive the
+        inference loop" body.
         """
-        tool_provider = ctx.tool_provider
-        assert tool_provider is not None, (
-            "Chat agents require a tool_provider; rejected at Agent.__init__."
-        )
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
@@ -362,23 +378,24 @@ class Agent:
         if ctx.prior_messages is not None:
             extra_kwargs["prior_messages"] = list(ctx.prior_messages)
 
-        return await run_agent(
-            self._t0,
-            cast(Client[Any], tool_provider),
-            ctx.user_message,
-            self._config.function_name,
-            episode_id=ctx.episode_id,
-            max_turns=self._config.max_turns,
-            tool_timeout=tool_timeout,
-            parallel_tools=self._config.parallel_tools,
-            dryrun=self._config.dryrun,
-            tool_choice=self._config.tool_choice,
-            tags=self._merge_tags(ctx.tags),
-            namespace=self._config.namespace,
-            on_inference=ctx.on_inference,
-            system=ctx.system,
-            **extra_kwargs,
-        )
+        async with _resolve_chat_tool_provider(ctx.tool_provider) as tool_provider:
+            return await run_agent(
+                self._t0,
+                tool_provider,
+                ctx.user_message,
+                self._config.function_name,
+                episode_id=ctx.episode_id,
+                max_turns=self._config.max_turns,
+                tool_timeout=tool_timeout,
+                parallel_tools=self._config.parallel_tools,
+                dryrun=self._config.dryrun,
+                tool_choice=self._config.tool_choice,
+                tags=self._merge_tags(ctx.tags),
+                namespace=self._config.namespace,
+                on_inference=ctx.on_inference,
+                system=ctx.system,
+                **extra_kwargs,
+            )
 
     async def _chat_streaming_terminal(
         self, ctx: RunContext
@@ -396,10 +413,6 @@ class Agent:
         modifies it, e.g.  :class:`GuardrailsMiddleware` populating
         ``guardrail_log``) once the chain unwinds.
         """
-        tool_provider = ctx.tool_provider
-        assert tool_provider is not None, (
-            "Chat agents require a tool_provider; rejected at Agent.__init__."
-        )
         tool_timeout = (
             self._config.tool_timeout
             if self._config.tool_timeout is not None
@@ -418,31 +431,32 @@ class Agent:
         run = ctx.run
         assert run is not None, "_chat_streaming_terminal requires a live Run"
 
-        async for event in streamer.stream(
-            self._t0,
-            cast(Client[Any], tool_provider),
-            ctx.user_message,
-            self._config.function_name,
-            episode_id=ctx.episode_id,
-            max_turns=self._config.max_turns,
-            tool_timeout=tool_timeout,
-            parallel_tools=self._config.parallel_tools,
-            dryrun=self._config.dryrun,
-            tool_choice=self._config.tool_choice,
-            tags=self._merge_tags(ctx.tags),
-            namespace=self._config.namespace,
-            on_inference=ctx.on_inference,
-            system=ctx.system,
-            **extra_kwargs,
-        ):
-            if isinstance(event, DoneEvent):
-                done_result = event.result
-                # Don't push the streaming runner's DoneEvent — outer
-                # middlewares may still mutate ``result.guardrail_log``
-                # before the Run driver pushes a synthetic DoneEvent
-                # with the final, populated value.
-                break
-            await run._buffer.put(event)
+        async with _resolve_chat_tool_provider(ctx.tool_provider) as tool_provider:
+            async for event in streamer.stream(
+                self._t0,
+                tool_provider,
+                ctx.user_message,
+                self._config.function_name,
+                episode_id=ctx.episode_id,
+                max_turns=self._config.max_turns,
+                tool_timeout=tool_timeout,
+                parallel_tools=self._config.parallel_tools,
+                dryrun=self._config.dryrun,
+                tool_choice=self._config.tool_choice,
+                tags=self._merge_tags(ctx.tags),
+                namespace=self._config.namespace,
+                on_inference=ctx.on_inference,
+                system=ctx.system,
+                **extra_kwargs,
+            ):
+                if isinstance(event, DoneEvent):
+                    done_result = event.result
+                    # Don't push the streaming runner's DoneEvent — outer
+                    # middlewares may still mutate ``result.guardrail_log``
+                    # before the Run driver pushes a synthetic DoneEvent
+                    # with the final, populated value.
+                    break
+                await run._buffer.put(event)
 
         if done_result is None:
             raise RuntimeError(

@@ -199,8 +199,65 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   escape hatch for the full `AgentResult[T]`. `.json(A).json(B)` is
   last-wins (second override on an already-overridden FluentRun logs
   DEBUG). M1 ignores `*selectors`; selector filtering lands in M2.
+- **`App` + `@app.agent` decorator landed (M2).** `from t0_agents.glow
+  import App` exposes the registry+lifecycle class; `@app.agent("name",
+  *, function_name="agent")` walks the function signature at decoration
+  time, picks the `OutputMode` from the return annotation, uses the
+  docstring as the system prompt, and registers an internal
+  `_AgentSpec`.  The returned callable preserves the original
+  parameters via `ParamSpec`, so `mypy`-strict callers see
+  `tutor("hi")` typed as `FluentRun[str]` and `await tutor("hi")` as
+  `str`.  Forward-ref failures and duplicate names raise
+  `ConfigurationError` eagerly at decoration time.  The wrapper
+  exposes `._agent` (None pre-build) and `._spec` for escape-hatch
+  access.  `App.build()` and `app.lifespan()` are the eager
+  construction hooks.  M2 scope: kwargs and extra positionals on the
+  wrapper raise `TypeError`; full signature walking lands with M3's
+  `Depends`.
+- **Event selectors (M2).** `from t0_agents.glow import Thought,
+  ToolCall, Text, ToolResult, TurnEnd, Done, Error` — seven
+  module-level `Selector[E]` instances covering the v1.0 `AgentEvent`
+  union.  `.where(pred)` AND-chains predicates and `.map(fn)` replaces
+  the transform; both return *new* selectors so the constants stay
+  immutable.  `FluentRun.events(*selectors)` filters with first-match-
+  wins semantics; empty selectors preserve the M1 yield-every-event
+  contract.  `Text` defaults to `TextEndEvent` (whole-text variant)
+  per the spec — token-by-token delta filtering remains reachable
+  through `Selector(TextDeltaEvent).where(...)`.
+- **`FluentRun(value_transform=...)` (M2).** New keyword-only
+  constructor argument that maps `AgentResult.value` through a callable
+  when no per-call override is active.  Honors M1 carry-forward
+  §4(d): `list[BaseModel]` return annotations now unwrap the synthetic
+  `<Inner>List` wrapper so `await agent(...)` returns `list[Inner]`
+  directly, matching the user's annotation.  Per-call overrides
+  (`.text` / `.json` / `.as_`) reset the transform via the existing
+  `_spawn` path (deliberate opt-out).
+- **`[glow]` pip extra (M2).** `pip install t0-agents[glow]` materialises
+  `pydantic>=2.0` (FastAPI precedent — the glow surface uses pydantic
+  heavily for type introspection).
+- **Two runnable examples (M2).** `examples/glow/01_hello.py` and
+  `examples/glow/02_structured.py` ship with a self-contained
+  TensorZero gateway configuration under `examples/glow/config/`
+  (chat function `agent` + JSON-structured function `plan_trip` with a
+  schema matching `TripPlan`).  Boot with `docker compose -f
+  examples/glow/docker-compose.yml --env-file .env up -d`.
 
 ### Changed
+
+- **`Agent.__init__` accepts `tool_provider=None` for chat-mode
+  agents.** v1.0 originally rejected chat configs (`output=ChatOutput()`,
+  the default) constructed without a tool provider; that rule is
+  relaxed so `Agent(config, t0=t0)` works for every output mode.
+  When chat-mode is selected and the caller passes `None`, the chat
+  terminals allocate an ephemeral `Client(FastMCP("agent-default"))`
+  for the duration of each invocation — the in-memory MCP server
+  advertises zero tools, so `run_agent` sees an empty tool list, the
+  LLM produces a text response, and the loop terminates after the
+  first turn.  This is the "toolless chat" convenience for thin
+  chatbot-style use cases.  Single-shot output modes (`JsonOutput`,
+  `StructuredOutput`, `ToolCallOutput`) were already tolerant of
+  `tool_provider=None`.  The `mcp/` standalone-submodule invariant is
+  preserved (no change to `mcp/loop.run_agent`'s signature).
 
 - **`Agent` internals** refactored to a middleware pipeline.
   `core/agent.py` shrinks from ~1670 LoC (v0.12) to ~870 LoC.

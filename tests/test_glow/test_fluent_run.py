@@ -65,7 +65,7 @@ class _FakeRun:
         # Empty stream — exercises the iterator wiring without coupling
         # the FluentRun tests to the real EventBuffer / drive task.
         if False:  # pragma: no cover - generator-shape marker
-            yield  # type: ignore[unreachable]
+            yield
 
 
 def _make_build(

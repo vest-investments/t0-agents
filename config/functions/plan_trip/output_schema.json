@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "destinations": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Ordered list of destinations the trip will visit."
+    },
+    "cost_usd": {
+      "type": "number",
+      "description": "Total realistic estimated cost in USD."
+    }
+  },
+  "required": ["destinations", "cost_usd"],
+  "additionalProperties": false
+}

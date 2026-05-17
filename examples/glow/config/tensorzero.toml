@@ -1,0 +1,52 @@
+# TensorZero gateway configuration for the t0-agents.glow examples.
+#
+# Two functions:
+#
+# 1. `agent` (chat) — drives `examples/glow/01_hello.py`'s hello-world.
+#    Identical shape to `examples/02_agent_class/config/tensorzero.toml`
+#    so the chat path uses the same model and variant as the canonical
+#    Agent-class demo.
+#
+# 2. `plan_trip` (json, schema-validated) — drives
+#    `examples/glow/02_structured.py`'s structured output.  The schema
+#    matches the `TripPlan(BaseModel)` defined in the example so the
+#    glow decorator's return-type inference picks `StructuredOutput`.
+#
+# Both functions route through the same `groq_model` so a single
+# `docker compose up -d` against this directory suffices.  Docs:
+# https://www.tensorzero.com/docs/gateway/configuration.
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+[models.groq_model]
+routing = ["groq"]
+
+[models.groq_model.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+# ---------------------------------------------------------------------------
+# Chat function — used by 01_hello.py
+# ---------------------------------------------------------------------------
+
+[functions.agent]
+type = "chat"
+
+[functions.agent.variants.default]
+type = "chat_completion"
+model = "groq_model"
+
+# ---------------------------------------------------------------------------
+# JSON-structured function — used by 02_structured.py
+# ---------------------------------------------------------------------------
+
+[functions.plan_trip]
+type = "json"
+output_schema = "functions/plan_trip/output_schema.json"
+
+[functions.plan_trip.variants.default]
+type = "chat_completion"
+model = "groq_model"
+templates.system.path = "functions/plan_trip/system_template.minijinja"
+json_mode = "strict"
