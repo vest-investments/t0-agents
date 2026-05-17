@@ -207,7 +207,13 @@ def test_wrapper_underscore_spec_exposes_underlying_spec(
 async def test_app_build_constructs_every_registered_agent_once(
     app_with_fake_agent: App,
 ) -> None:
-    """``await app.build()`` is idempotent; subsequent invokes reuse."""
+    """``await app.build()`` is idempotent; subsequent invokes reuse.
+
+    Wraps the test body in ``async with app.lifespan():`` so M3's
+    App-owned ``Client`` is connected at ``build()`` and cleanly
+    disconnected on exit (otherwise the in-process FastMCP transport
+    task lingers across tests and trips asyncio resource warnings).
+    """
 
     @app_with_fake_agent.agent("a")
     async def a(q: str) -> str:  # type: ignore[empty-body]
@@ -218,17 +224,17 @@ async def test_app_build_constructs_every_registered_agent_once(
         """B."""
 
     assert _FakeAgent.construct_count == 0
-    await app_with_fake_agent.build()
-    assert _FakeAgent.construct_count == 2
+    async with app_with_fake_agent.lifespan():
+        assert _FakeAgent.construct_count == 2
 
-    # Subsequent invokes do NOT construct again (cache on spec.agent).
-    await a("hi")
-    await b("hi")
-    assert _FakeAgent.construct_count == 2
+        # Subsequent invokes do NOT construct again (cache on spec.agent).
+        await a("hi")
+        await b("hi")
+        assert _FakeAgent.construct_count == 2
 
-    # Calling build() again is also a no-op.
-    await app_with_fake_agent.build()
-    assert _FakeAgent.construct_count == 2
+        # Calling build() again is also a no-op.
+        await app_with_fake_agent.build()
+        assert _FakeAgent.construct_count == 2
 
 
 def test_duplicate_agent_name_raises_configuration_error() -> None:

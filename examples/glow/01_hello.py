@@ -38,8 +38,9 @@ async def main() -> None:
         async def tutor(query: str) -> str:  # type: ignore[empty-body]
             """An English tutor that explains grammar like you're 12."""
 
-        response = await tutor("How do I say hello in formal Japanese?")
-        print(f"\nResponse: {response}")
+        async with app.lifespan():
+            response = await tutor("How do I say hello in formal Japanese?")
+            print(f"\nResponse: {response}")
 
     print("\nSUCCESS: hello-world ran end-to-end.")
 

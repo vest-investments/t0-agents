@@ -42,9 +42,10 @@ async def main() -> None:
         async def plan(query: str) -> TripPlan:  # type: ignore[empty-body]
             """Plan trips with realistic budgets."""
 
-        trip = await plan("3 days in Japan under $2000")
-        print(f"\nDestinations: {trip.destinations}")
-        print(f"Estimated cost (USD): {trip.cost_usd}")
+        async with app.lifespan():
+            trip = await plan("3 days in Japan under $2000")
+            print(f"\nDestinations: {trip.destinations}")
+            print(f"Estimated cost (USD): {trip.cost_usd}")
 
     print("\nSUCCESS: structured-output ran end-to-end.")
 

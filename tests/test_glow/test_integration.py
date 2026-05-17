@@ -37,11 +37,11 @@ class _TripPlan(BaseModel):
 
 
 async def test_hello_world_chat_agent_runs_end_to_end() -> None:
-    """Chat agent without tool_provider returns a non-empty text response.
+    """Chat agent returns a non-empty text response under ``lifespan()``.
 
-    Exercises the M2 + core-unlock end-to-end path: ``@app.agent``
-    registers, the wrapper compiles to ``Agent(..., t0=t0)``, the
-    toolless-chat fallback allocates an empty ``Client(FastMCP)``,
+    Exercises the M2 + M3 end-to-end path: ``@app.agent`` registers,
+    the wrapper compiles to ``Agent(t0=t0, tool_provider=app._owned_client)``,
+    ``app.lifespan()`` connects the App-owned FastMCP client (M3),
     and the LLM produces text that flows back through ``FluentRun``.
     """
     async with await _gateway_factory() as t0:
@@ -51,7 +51,8 @@ async def test_hello_world_chat_agent_runs_end_to_end() -> None:
         async def tutor(query: str) -> str:  # type: ignore[empty-body]
             """An English tutor that explains grammar like you're 12."""
 
-        response = await tutor("Say the word hello.")
+        async with app.lifespan():
+            response = await tutor("Say the word hello.")
 
     assert isinstance(response, str)
     assert response.strip() != ""
@@ -72,7 +73,8 @@ async def test_structured_output_returns_pydantic_instance() -> None:
         async def plan(query: str) -> _TripPlan:  # type: ignore[empty-body]
             """Plan trips with realistic budgets."""
 
-        trip = await plan("3 days in Japan under $2000")
+        async with app.lifespan():
+            trip = await plan("3 days in Japan under $2000")
 
     assert isinstance(trip, _TripPlan)
     assert len(trip.destinations) > 0
