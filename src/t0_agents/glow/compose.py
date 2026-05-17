@@ -161,10 +161,24 @@ def _default_merge(results: list[Any]) -> Any:
 class _DefaultMergeMarker:
     """Sentinel passed to :class:`ComposerError` when the default
     reducer fails because every branch errored.  Carries a stable
-    ``repr`` so logs are readable; not part of the public surface."""
+    ``repr`` so logs are readable; not part of the public surface.
+
+    Implements the :class:`Composable` Protocol's ``invoke`` method as a
+    raising stub so any middleware or error-handling code that happens
+    to introspect ``ComposerError.node.invoke(...)`` gets a clear
+    ``NotImplementedError`` instead of an ``AttributeError`` — the
+    marker is a topology placeholder, not a runnable node.
+    """
 
     def __repr__(self) -> str:
         return "<compose-default-merge>"
+
+    def invoke(self, input: Any, /, **kwargs: Any) -> Run[Any]:
+        raise NotImplementedError(
+            "_DefaultMergeMarker is a sentinel placeholder used as "
+            "`ComposerError.node` when compose(set/frozenset)'s default "
+            "reducer ran out of successes; it is not a runnable node."
+        )
 
 
 def _unwrap_node(node: Any) -> Composable[Any, Any]:
