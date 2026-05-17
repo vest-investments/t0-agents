@@ -11,6 +11,7 @@ only.
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -18,10 +19,12 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.compose.builtins import ParallelComposer, SequentialComposer
 from t0_agents.compose.topology import Composer, ComposerError
+from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.outputs.tool_call import ToolCallOutput
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow import App, compose
-from t0_agents.glow.compose import _default_merge
+from t0_agents.glow.compose import _default_merge, _LLMRoutedComposer
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -189,11 +192,13 @@ def test_compose_list_with_string_node_raises_typeerror() -> None:
         compose(["string-not-an-agent"])
 
 
-def test_compose_dict_raises_not_implemented_until_next_commit() -> None:
-    # commit 3 lands the LLM-routed dispatch; until then the dict branch
-    # signals that the surface is the right one but the implementation
-    # hasn't shipped yet.
-    with pytest.raises(NotImplementedError, match="LLM-routed dispatch"):
+def test_compose_empty_dict_raises_configuration_error() -> None:
+    with pytest.raises(ConfigurationError, match="routes cannot be empty"):
+        compose({})
+
+
+def test_compose_dict_with_non_composable_value_raises_typeerror() -> None:
+    with pytest.raises(TypeError, match="not a Composable"):
         compose({"k": object()})
 
 
@@ -244,3 +249,93 @@ def test_compose_unwraps_glow_wrapper_to_underlying_agent(app: App) -> None:
     # Build was triggered lazily by compose() unwrap.
     assert _FakeAgent.construct_count == 1
     assert isinstance(result.children[0], _FakeAgent)
+
+
+# ---------------------------------------------------------------------------
+# LLM-routed dict composer construction
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def app_with_config_aware_fake(monkeypatch: pytest.MonkeyPatch) -> App:
+    """``App`` whose Agent constructor is the stub on BOTH the
+    ``glow.app`` and ``glow.compose`` import sites.
+
+    The dict-route classifier is built by
+    ``glow.compose._make_router_agent`` (not by the App), so the patch
+    has to land on the ``compose`` module's ``Agent`` symbol too — the
+    integration test exercises a real ``ToolCallOutput`` Agent against a
+    live gateway; the unit test only needs the construction shape.
+
+    The double-patch goes through ``importlib.import_module`` because
+    ``t0_agents.glow.__init__`` re-exports ``compose`` as a function,
+    which shadows the submodule on attribute access from the parent
+    package — monkeypatch's dotted-path resolver would otherwise land
+    on the function instead of the module.
+    """
+    _FakeAgent.construct_count = 0
+    monkeypatch.setattr("t0_agents.glow.app.Agent", _FakeAgent)
+    compose_module = importlib.import_module("t0_agents.glow.compose")
+    monkeypatch.setattr(compose_module, "Agent", _FakeAgent)
+    return App(t0=_fake_t0())
+
+
+def test_compose_dict_returns_llm_routed_composer(
+    app_with_config_aware_fake: App,
+) -> None:
+    @app_with_config_aware_fake.agent("math")
+    async def math_route(q: str) -> str:  # type: ignore[empty-body]
+        """Math route."""
+
+    @app_with_config_aware_fake.agent("code")
+    async def code_route(q: str) -> str:  # type: ignore[empty-body]
+        """Code route."""
+
+    result = compose({"math": math_route, "code": code_route})
+    assert isinstance(result, _LLMRoutedComposer)
+    assert set(result.routes) == {"math", "code"}
+    # Classifier inherits the leaf Agent's function_name (the M2/M3
+    # default ``agent`` chat function in glow).
+    assert result.classifier.config.function_name == "agent"
+    # Classifier uses ToolCallOutput with tool_choice="required".
+    assert isinstance(result.classifier.config.output, ToolCallOutput)
+    assert result.classifier.config.output.tool_choice == "required"
+
+
+def test_compose_dict_no_reachable_agent_raises_configuration_error() -> None:
+    """A composer-only route graph with no leaf ``Agent`` cannot supply
+    ``t0`` / ``function_name`` to the synthetic classifier; we surface
+    that mismatch at compose() time, not on first invocation."""
+
+    class _BareComposer(Composer):
+        """Composer with no children that satisfies neither Agent nor
+        the v1.0 builtin shapes — exercises the no-leaf path."""
+
+        name: str = "bare"
+
+        @property
+        def children(self) -> tuple[Composer, ...]:
+            return ()
+
+    with pytest.raises(ConfigurationError, match="no Agent is reachable"):
+        compose({"k": _BareComposer()})
+
+
+def test_compose_dict_unwraps_glow_wrappers(
+    app_with_config_aware_fake: App,
+) -> None:
+    @app_with_config_aware_fake.agent("a")
+    async def a(q: str) -> str:  # type: ignore[empty-body]
+        """A."""
+
+    @app_with_config_aware_fake.agent("b")
+    async def b(q: str) -> str:  # type: ignore[empty-body]
+        """B."""
+
+    result = compose({"a": a, "b": b})
+    assert isinstance(result, _LLMRoutedComposer)
+    # Routes are unwrapped Agent (the fake stub), not wrappers.
+    assert all(
+        isinstance(route, _FakeAgent) for route in result.routes.values()
+    )
+
