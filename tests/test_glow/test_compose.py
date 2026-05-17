@@ -295,11 +295,13 @@ def test_compose_dict_returns_llm_routed_composer(
     assert isinstance(result, _LLMRoutedComposer)
     assert set(result.routes) == {"math", "code"}
     # Classifier inherits the leaf Agent's function_name (the M2/M3
-    # default ``agent`` chat function in glow).
-    assert result.classifier.config.function_name == "agent"
+    # default ``agent`` chat function in glow).  The classifier itself
+    # is built per-invocation (concurrency-safety) — the spec/config
+    # is what the composer stores at construction time.
+    assert result.classifier_config.function_name == "agent"
     # Classifier uses ToolCallOutput with tool_choice="required".
-    assert isinstance(result.classifier.config.output, ToolCallOutput)
-    assert result.classifier.config.output.tool_choice == "required"
+    assert isinstance(result.classifier_config.output, ToolCallOutput)
+    assert result.classifier_config.output.tool_choice == "required"
 
 
 def test_compose_dict_no_reachable_agent_raises_configuration_error() -> None:

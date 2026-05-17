@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from fastmcp import Client, FastMCP
+from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.compose.builtins import parallel, sequential
 from t0_agents.compose.topology import (
@@ -251,27 +252,32 @@ class _LLMRoutedComposer(Composer):
     (``ToolCallOutput.expects_tool_loop=False``); we read the picked
     name and dispatch.  The tool bodies never execute.
 
-    The classifier's :class:`Client` is entered per-invocation through an
-    ``async with`` block inside the driver — entries are cheap (the
-    FastMCP server is in-memory) and this keeps the Composer stateless
-    across invocations (concurrency-safe; no shared transport state).
+    **Concurrency model:** every invocation builds a fresh
+    :class:`Client` over the shared :class:`FastMCP` server and a
+    fresh classifier :class:`Agent` configured with that Client as its
+    ``tool_provider``.  Both objects are cheap to construct (sync, no
+    I/O — see ``core/agent.py`` ``Agent.__init__``); this avoids the
+    lifecycle race a shared ``async with classifier_client:`` would
+    create — two concurrent invocations on the same composer would
+    otherwise have the first to exit the context tear down the
+    transport task the other is still using.  The FastMCP server itself
+    is safe to share read-only because its tool list is immutable
+    after construction.
     """
 
     routes: dict[str, Composable[Any, Any]]
-    classifier: Agent
-    classifier_client: Client[Any]
+    classifier_server: FastMCP[Any]
+    classifier_config: AgentConfig
+    classifier_t0: AsyncTensorZeroGateway
     name: str = "llm_routed"
     cancel_timeout: float = DEFAULT_CANCEL_TIMEOUT
 
     @property
     def children(self) -> tuple[Composable[Any, Any], ...]:
-        # Introspection helper — used by tests and by any caller that
-        # wants to walk the graph (``_find_leaf_agent`` etc.).  Order is
-        # classifier first, then routes in dict-insertion order.
-        return (
-            cast(Composable[Any, Any], self.classifier),
-            *self.routes.values(),
-        )
+        # The classifier is constructed per-invocation, so it is not a
+        # stable child of the composer; expose only the routes for
+        # graph-walking purposes (``_find_leaf_agent`` etc.).
+        return tuple(self.routes.values())
 
     def invoke(  # type: ignore[override]
         self,
@@ -287,13 +293,20 @@ class _LLMRoutedComposer(Composer):
         )
 
         async def _driver(composite: CompositeRun) -> AgentResult[Any]:
-            # Enter the classifier's Client per-invocation — fastmcp's
-            # in-memory transport is cheap and a fresh entry keeps the
-            # composer stateless.  The Agent stored at construction
-            # already references this Client as its ``tool_provider``,
-            # so entering the context is sufficient — no rewiring needed.
-            async with self.classifier_client:
-                cls_run = self.classifier.invoke(input, system=_ROUTER_SYSTEM_PROMPT)
+            # Build a fresh ``Client`` and ``Agent`` per invocation so
+            # the composer is concurrency-safe.  Two concurrent
+            # ``router.invoke(...)`` calls each own their own transport
+            # task; whichever finishes first cannot tear down the
+            # transport the other is still using.  Construction is
+            # cheap (sync, no I/O).
+            client: Client[Any] = Client(self.classifier_server)
+            classifier = Agent(
+                self.classifier_config,
+                t0=self.classifier_t0,
+                tool_provider=cast(ToolProvider, client),
+            )
+            async with client:
+                cls_run = classifier.invoke(input, system=_ROUTER_SYSTEM_PROMPT)
                 composite._sub_runs.append(cls_run)
                 cls_result = await cls_run.result()
 
@@ -346,30 +359,35 @@ def _llm_routed(routes: dict[str, Any]) -> _LLMRoutedComposer:
     unwrapped: dict[str, Composable[Any, Any]] = {
         key: _unwrap_node(value) for key, value in routes.items()
     }
-    classifier_client, classifier = _make_router_agent(
-        list(unwrapped), unwrapped,
-    )
+    server, config, t0 = _make_router_classifier(list(unwrapped), unwrapped)
     return _LLMRoutedComposer(
         routes=unwrapped,
-        classifier=classifier,
-        classifier_client=classifier_client,
+        classifier_server=server,
+        classifier_config=config,
+        classifier_t0=t0,
     )
 
 
-def _make_router_agent(
+def _make_router_classifier(
     keys: list[str],
     unwrapped_routes: dict[str, Composable[Any, Any]],
-) -> tuple[Client[Any], Agent]:
-    """Construct the synthetic classifier ``Agent`` for the LLM router.
+) -> tuple[FastMCP[Any], AgentConfig, AsyncTensorZeroGateway]:
+    """Build the synthetic-classifier ingredients for the LLM router.
 
-    Builds a glow-private :class:`FastMCP` server holding one no-op tool
-    per route key (the tool body never executes; we only need the LLM
-    to *pick* one).  Wraps the server in a :class:`Client`, configures
-    an :class:`Agent` with ``ToolCallOutput(tool_choice="required")`` so
-    the inference is forced to emit a tool call, and inherits
-    ``function_name`` from the first leaf Agent reachable through the
-    routes.  Returns the ``(client, agent)`` pair; the client is entered
-    per-invocation by :class:`_LLMRoutedComposer`.
+    Returns the ``(server, config, t0)`` triple ``_LLMRoutedComposer``
+    needs to construct a fresh ``Client`` + ``Agent`` per invocation
+    (concurrency-safety, see the class docstring).  The server is
+    built once and shared read-only across invocations; the config and
+    the gateway reference are immutable.
+
+    The server holds one no-op tool per route key (the tool body never
+    executes; the LLM picks one, ``ToolCallOutput.expects_tool_loop ==
+    False`` terminates the loop, glow reads ``value[0].name``).  The
+    config carries ``ToolCallOutput(tool_choice="required")`` so the
+    inference is forced to emit a tool call.  ``function_name`` and
+    ``t0`` are inherited from the first leaf :class:`Agent` reachable
+    through the routes (``ConfigurationError`` if none — the
+    classifier needs *some* anchor to a real TZ function and gateway).
     """
     leaf = _find_leaf_agent(unwrapped_routes.values())
     if leaf is None:
@@ -384,18 +402,12 @@ def _make_router_agent(
     for key in keys:
         server.add_tool(_make_route_tool(key))
 
-    client: Client[Any] = Client(server)
-
-    classifier = Agent(
-        AgentConfig(
-            name=f"_glow_router_{secrets.token_hex(4)}",
-            function_name=leaf.config.function_name,
-            output=ToolCallOutput(tool_choice="required"),
-        ),
-        t0=leaf._t0,
-        tool_provider=cast(ToolProvider, client),
+    config = AgentConfig(
+        name=f"_glow_router_{secrets.token_hex(4)}",
+        function_name=leaf.config.function_name,
+        output=ToolCallOutput(tool_choice="required"),
     )
-    return client, classifier
+    return server, config, leaf._t0
 
 
 def _make_route_tool(key: str) -> Callable[..., Any]:
