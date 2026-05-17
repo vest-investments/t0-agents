@@ -17,4 +17,6 @@ the implementation roadmap.
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from t0_agents.glow.handle import FluentRun
+
+__all__ = ["FluentRun"]
