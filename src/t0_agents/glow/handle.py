@@ -61,11 +61,22 @@ class FluentRun(Generic[T]):
         self,
         build: Callable[[OutputMode[Any]], Run[Any]],
         default_output: OutputMode[T],
+        *,
+        value_transform: Callable[[Any], T] | None = None,
     ) -> None:
         self._build: Callable[[OutputMode[Any]], Run[Any]] = build
         self._chosen_output: OutputMode[Any] = default_output
         self._has_override: bool = False
         self._run: Run[Any] | None = None
+        # ``value_transform`` is applied to ``AgentResult.value`` when the
+        # default ``OutputMode`` is in effect (i.e. the user did not call
+        # a per-call override).  Decorator-driven path: ``@app.agent``
+        # passes ``lambda v: v.items`` when the function's return type is
+        # ``list[BaseModel]`` (M1 synthesises a single-field wrapper model
+        # whose ``items: list[T]`` is the actual user-visible payload).
+        # Per-call overrides (.text / .json / .as_) deliberately reset
+        # the transform — the user has opted out of the default shape.
+        self._value_transform: Callable[[Any], T] | None = value_transform
 
     # ------------------------------------------------------------------
     # Fluent overrides — every override returns a fresh ``FluentRun``
@@ -140,10 +151,28 @@ class FluentRun(Generic[T]):
         ``cost()`` / ``usage()``, or the diagnostics envelope.  The
         Pythonic fast path is plain ``await fluent_run``, which returns
         the unwrapped ``.value`` directly.
+
+        If a ``value_transform`` was installed at construction time and
+        the user has not applied a per-call override (.text / .json /
+        .as_), the returned :class:`AgentResult` has ``value`` replaced
+        with ``value_transform(original.value)``.  Everything else
+        (``episode_id``, ``inference_ids``, ``turns``, etc.) is
+        preserved.
         """
         if self._run is None:
             self._run = self._build(self._chosen_output)
-        return cast(AgentResult[T], await self._run.result())
+        raw = await self._run.result()
+        if self._value_transform is None:
+            return cast(AgentResult[T], raw)
+        return AgentResult(
+            value=self._value_transform(raw.value),
+            episode_id=raw.episode_id,
+            inference_ids=list(raw.inference_ids),
+            turns=raw.turns,
+            response_source=raw.response_source,
+            guardrail_log=list(raw.guardrail_log),
+            diagnostics=raw.diagnostics,
+        )
 
     def __await__(self) -> Generator[Any, None, T]:
         """``await fluent_run`` returns the unwrapped ``.value`` of type ``T``."""

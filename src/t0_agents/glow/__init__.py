@@ -17,6 +17,7 @@ the implementation roadmap.
 
 from __future__ import annotations
 
+from t0_agents.glow.app import App
 from t0_agents.glow.handle import FluentRun
 
-__all__ = ["FluentRun"]
+__all__ = ["App", "FluentRun"]

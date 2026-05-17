@@ -62,7 +62,7 @@ def test_parameterised_dict_yields_json_output() -> None:
 
 
 def test_pydantic_model_yields_structured_output() -> None:
-    def fn() -> _Item:  # noqa: RUF100
+    def fn() -> _Item:  # type: ignore[empty-body]  # noqa: RUF100
         ...
 
     out = output_mode_from_return_type(fn)
@@ -71,7 +71,7 @@ def test_pydantic_model_yields_structured_output() -> None:
 
 
 def test_list_of_pydantic_wraps_with_synthetic_model() -> None:
-    def fn() -> list[_Item]:
+    def fn() -> list[_Item]:  # type: ignore[empty-body]
         ...
 
     out = output_mode_from_return_type(fn)
@@ -108,7 +108,7 @@ def test_forward_ref_to_same_module_class_resolves() -> None:
     # `from __future__ import annotations` already turns every
     # annotation into a string at runtime, so a bare `_Other` IS the
     # forward-ref form get_type_hints must resolve.
-    def fn() -> _Other:
+    def fn() -> _Other:  # type: ignore[empty-body]
         ...
 
     out = output_mode_from_return_type(fn)
