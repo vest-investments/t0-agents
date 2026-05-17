@@ -183,9 +183,22 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   primitives (FastAPI-style decorators, type-hint-driven OutputMode
   inference, fluent `Run` wrapper, native-collection composition,
   typed MCP). Public API is **unstable**; ships as the future
-  `t0-agents[glow]` extra. Currently empty (`__all__ = []`); the
-  implementation roadmap and DX design live on the experimental
-  branch.
+  `t0-agents[glow]` extra. The implementation roadmap and DX design
+  live on the experimental branch.
+- **Output-mode inference from return-type hints**
+  (`t0_agents.glow.output_inference`, internal). `str` /
+  `dict[*]` / `BaseModel` / `list[BaseModel]` / `Optional[*]` /
+  `T | None` map to `ChatOutput`, `JsonOutput`,
+  `StructuredOutput(M)`, and a synthetic-wrapper `StructuredOutput`
+  respectively. Forward-ref failures raise `ConfigurationError` at
+  registration time so M2's `@app.agent` surfaces them eagerly.
+- **`FluentRun[T]` lazy invocation wrapper**
+  (`from t0_agents.glow import FluentRun`). Defers `OutputMode`
+  selection until `__await__`; exposes `.text()`, `.json()`,
+  `.json(M)`, `.as_(mode)`, `.events(*selectors)`, and a `.result()`
+  escape hatch for the full `AgentResult[T]`. `.json(A).json(B)` is
+  last-wins (second override on an already-overridden FluentRun logs
+  DEBUG). M1 ignores `*selectors`; selector filtering lands in M2.
 
 ### Changed
 
