@@ -88,11 +88,23 @@ The milestone landed as eight commits on `experimental/glow`, in order:
 | 5 | `717293d` | `feat(glow): Annotated[T, Guardrail(...)] extraction + regex_guardrail` |
 | 6 | `eff570b` | `feat(glow): 04_composition + 06_mcp_typing examples` |
 | 7 | `c711499` | `chore(glow): document M4 in CHANGELOG` |
-| 8 | (this commit) | `docs(glow): milestone-4 dev-log` |
+| 8 | `cbced3b` | `docs(glow): milestone-4 dev-log` |
+| 9 | `37b27ed` | `test(glow): hoist regex guardrail to module scope for forward-ref resolution` |
 
-In the 14-commit roadmap from the plan file these correspond to
-commits 8, 9, 10, 11, plus the supporting precursor (peel order fix),
-the examples chore, the CHANGELOG entry, and this always-write log.
+Commit 9 is a follow-on test-side fix: the M4 acceptance run against
+the live gateway surfaced a forward-ref failure on
+``test_regex_guardrail_on_return_annotation_blocks_response`` because
+the guardrail instance lived in an enclosing-function local rather
+than module scope (same root cause as the MCP unit-test hoists in
+commit 4).  Pattern matches the M3 ``fix(glow): make Depends defaults
+pass mypy strict`` follow-on — surfaced after the feature commit by
+running the broader gate, split rather than amended for honest
+history.
+
+In the 14-commit roadmap from the plan file commits 1-8 above
+correspond to commits 8, 9, 10, 11, plus the supporting precursor
+(peel order fix), the examples chore, the CHANGELOG entry, and this
+always-write log; commit 9 is the post-write fix-up.
 
 ### Tests
 
@@ -256,7 +268,46 @@ registrations.  Real-world deployments wanting per-agent isolation
 construct multiple `App` instances.  Tutorial / `docs/glow/limitations.md`
 should mention this prominently in M5.
 
-### 3.3 — Resolved questions from prior dev-logs
+### 3.3 — LLM-router classifier requires a model that honors ``tool_choice="required"``
+
+The first live run of the two ``test_llm_routed_dict_composer_*``
+integration tests against the user's gateway
+(``openai/gpt-oss-20b`` via Groq, configured in
+``examples/glow/config/tensorzero.toml`` for the ``agent`` function)
+returned a 502 ``"All variants failed with errors: default: All model
+providers failed"``.  Diagnosis: the classifier ``Agent`` runs with
+``ToolCallOutput(tool_choice="required")`` and a synthetic FastMCP
+server holding N no-op tools — the model must emit a tool call and
+nothing else.  ``openai/gpt-oss-20b`` does support tool calls (the
+M3 ``orchestrator`` integration test passes against the same model
+using ``<name>_ask`` sub-agent tools), but evidently not the
+"required" mode with arbitrary synthetic tool schemas.  The M3 path
+uses ``tool_choice="auto"`` implicitly via the chat function, so it
+isn't tripped by the same limitation.
+
+This is **not** an M4 code bug — the dispatcher and the classifier
+agent build correctly, and the two unit tests for the dispatch shape
+(``test_compose_dict_returns_llm_routed_composer``,
+``test_compose_dict_unwraps_glow_wrappers``) pass without
+``tool_choice="required"`` being exercised.  The integration tests
+exercise the end-to-end LLM-driven path, which requires a model
+capable of honoring the directive.
+
+**Resolution for the user:** swap the ``model`` block in
+``examples/glow/config/tensorzero.toml`` to a model with strong
+tool-use support — Claude 4.5/4.6 Sonnet, GPT-4o, GPT-5, or
+Gemini-2.5-pro all work — and re-run the integration suite.  The
+``[models.groq_model]`` / ``[functions.agent.variants.default]``
+blocks can both point at any TZ-supported provider; the test code
+needs no edits.
+
+**Carry-forward:** M5's tutorial should document this prerequisite
+prominently in ``docs/glow/getting-started.md`` under the dict-router
+section — "the synthetic classifier uses
+``ToolCallOutput(tool_choice='required')``; pick a model that honors
+forced tool choice".  Listed in §4 below.
+
+### 3.4 — Resolved questions from prior dev-logs
 
 - **M1 §3.1 (peel order for `Annotated[Optional[T], m]`)** — resolved.
   Commit 1 (`fd50b1c`) replaces the single-pass peel with
@@ -302,11 +353,22 @@ should mention this prominently in M5.
 - **`examples/glow/03_streaming.py` is still pending.**  M2 dev-log
   noted this; M4 didn't address it.  M5 polish should ship it
   alongside the cookbook.
-- **Verify integration tests pass against a live gateway.**  The M4
-  integration suite (6 tests; 3 inherited + 3 new) was validated to
-  collect cleanly but not yet run live by Claude.  The user must
-  `docker compose up -d` + `uv run pytest -m integration -q` before
-  pushing the M4 PR (per the M4 user manual checklist).
+- **Document the LLM-router model-capability requirement.**  The
+  synthetic classifier uses ``ToolCallOutput(tool_choice="required")``;
+  weaker open-source models (``gpt-oss-20b`` is the example we hit)
+  return a provider error in the live integration tests.  M5's
+  ``docs/glow/getting-started.md`` must note: "the dict-router needs
+  a model that honors ``tool_choice="required"`` with arbitrary
+  synthetic tools — Claude Sonnet/Opus, GPT-4o/5, or Gemini-2.5-pro
+  are known to work".  See §3.3 for the diagnosis.
+- **Verify integration tests pass against a capable live gateway.**
+  The 6 integration tests collect cleanly.  Three (the M2/M3
+  inherited cases + the regex guardrail) pass against
+  ``openai/gpt-oss-20b``.  The two LLM-router tests require a
+  ``tool_choice="required"``-capable model in the gateway config
+  before they pass.  The user must `docker compose up -d` against a
+  config pointing at such a model + `uv run pytest -m integration -q`
+  before pushing the M4 PR.
 
 ### Post-M5
 
