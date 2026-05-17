@@ -2,7 +2,7 @@
 
 Requires ``docker compose up -d`` from the repo root with
 ``GROQ_API_KEY`` populated in ``.env``.  Confirms that
-``Agent.stream(...)`` on a JSON-flavoured agent raises
+``Run.events()`` on a JSON-flavoured agent raises
 :class:`ConfigurationError` at the first ``__anext__`` — no provider
 round-trip, no SSE setup, just a fail-fast guard.
 """
