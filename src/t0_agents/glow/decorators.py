@@ -47,6 +47,7 @@ from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow._typing import _is_list_of_pydantic
 from t0_agents.glow.app import App
 from t0_agents.glow.di import _Depends
+from t0_agents.glow.guardrails_typing import _extract_guardrails
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import _extract_mcp_specs, _is_mcp_parameter
 from t0_agents.glow.output_inference import output_mode_from_return_type
@@ -182,6 +183,13 @@ def _make_decorator(
         for mcp_spec in _extract_mcp_specs(fn, hints):
             app._mcp_specs.append(mcp_spec)
 
+        # M4: harvest ``Annotated[T, Guardrail(...)]`` metadata from the
+        # decorated function's parameter and return annotations.  The
+        # collected guardrails are folded into the per-agent spec, then
+        # into ``AgentConfig.guardrails`` on first build, where the
+        # existing v1.0 ``GuardrailsMiddleware`` picks them up.
+        guardrails = _extract_guardrails(fn, hints)
+
         # ``value_transform`` is the M1 carry-forward §4(d) hook: when
         # the return annotation is ``list[BaseModel]``,
         # ``output_mode_from_return_type`` chose a ``StructuredOutput``
@@ -202,6 +210,7 @@ def _make_decorator(
             return_type=return_type,
             value_transform=value_transform,
             sub_agent_specs=sub_agent_specs,
+            guardrails=guardrails,
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)

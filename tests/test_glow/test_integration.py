@@ -14,13 +14,14 @@ case).
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
 from pydantic import BaseModel
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App, Depends, compose
+from t0_agents.core.exceptions import GuardrailBlockedError
+from t0_agents.glow import App, Depends, compose, regex_guardrail
 
 pytestmark = pytest.mark.integration
 
@@ -211,3 +212,30 @@ async def test_llm_routed_dict_composer_supports_composer_routes() -> None:
     # raising ``ComposerError`` for an unknown route key.
     assert isinstance(text, str)
     assert text.strip() != ""
+
+
+async def test_regex_guardrail_on_return_annotation_blocks_response() -> None:
+    """``Annotated[str, regex_guardrail(...)]`` on the return type blocks
+    the response when the regex matches the LLM's output.
+
+    The system prompt instructs the LLM to include the placeholder
+    SSN ``123-45-6789`` verbatim; the guardrail's ``after_run`` hook
+    matches the SSN pattern and raises :class:`GuardrailBlockedError`
+    via the existing v1.0 ``GuardrailsMiddleware``.
+    """
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        no_ssn = regex_guardrail(
+            r"\b\d{3}-\d{2}-\d{4}\b",
+            "Response contains an SSN-shaped value",
+        )
+
+        @app.agent("support")
+        async def support(query: str) -> Annotated[str, no_ssn]:  # type: ignore[empty-body]
+            """Return ONLY the literal placeholder SSN ``123-45-6789``
+            with no other text."""
+
+        with pytest.raises(GuardrailBlockedError, match="SSN"):
+            async with app.lifespan():
+                await support("Please return the placeholder SSN now.")

@@ -213,6 +213,12 @@ class App:
         }
         if sub_agents:
             config_kwargs["sub_agents"] = sub_agents
+        if spec.guardrails:
+            # M4: feed harvested ``Annotated[T, Guardrail(...)]`` metadata
+            # into the v1.0 ``AgentConfig.guardrails`` field so the
+            # existing ``GuardrailsMiddleware`` picks them up at runtime
+            # without further glow plumbing.
+            config_kwargs["guardrails"] = spec.guardrails
         agent = Agent(
             AgentConfig(**config_kwargs),
             t0=self._t0,
