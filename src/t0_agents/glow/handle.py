@@ -130,19 +130,27 @@ class FluentRun(Generic[T]):
     # Consumption — builds the underlying Run lazily
     # ------------------------------------------------------------------
 
-    def events(self, *selectors: Any) -> AsyncIterator[AgentEvent]:
-        """Iterate the underlying ``Run.events()`` stream.
+    def events(self, *selectors: Any) -> AsyncIterator[Any]:
+        """Iterate the underlying ``Run.events()`` stream, optionally filtered.
 
         Builds the ``Run`` synchronously at call time so subsequent
         ``__await__`` joins the same cached buffer (standard
-        first-consumer-wins semantics).  M1 ignores ``*selectors``;
-        M2 wraps the stream with the selector filter/map/where machinery
-        defined in :mod:`t0_agents.glow.selectors`.
+        first-consumer-wins semantics).
+
+        When no selectors are passed, yields every :class:`AgentEvent`
+        from the underlying stream (matches the v1.0 ``Run.events()``
+        contract).  When one or more selectors are passed, an event
+        passes if **any** selector's :meth:`Selector.matches` returns
+        ``True``; the first such selector's ``transform`` is applied to
+        the yielded value (first-match-wins, mirroring isinstance
+        dispatch ergonomics).
         """
-        del selectors  # M1 stub — M2 layers selector dispatch on top.
         if self._run is None:
             self._run = self._build(self._chosen_output)
-        return self._run.events()
+        run = self._run
+        if not selectors:
+            return run.events()
+        return _filter_with_selectors(run.events(), selectors)
 
     async def result(self) -> AgentResult[T]:
         """Await the full :class:`AgentResult`.
@@ -182,3 +190,27 @@ class FluentRun(Generic[T]):
             return result.value
 
         return _unwrap().__await__()
+
+
+async def _filter_with_selectors(
+    source: AsyncIterator[AgentEvent],
+    selectors: tuple[Any, ...],
+) -> AsyncIterator[Any]:
+    """Filter + transform an event stream through one or more selectors.
+
+    First-match-wins semantics: every event is tried against the
+    selectors in order; the first whose :meth:`Selector.matches`
+    returns ``True`` has its :attr:`transform` applied to the event,
+    and the result is yielded.  Events matching no selector are
+    skipped silently.  This mirrors how :func:`isinstance`-style
+    dispatch works in vanilla Python.
+
+    Kept as a module-level coroutine generator (rather than nested
+    inside :meth:`FluentRun.events`) so it can be unit-tested directly
+    against a fake stream without ``FluentRun`` plumbing.
+    """
+    async for event in source:
+        for selector in selectors:
+            if selector.matches(event):
+                yield selector.transform(event)
+                break
