@@ -103,12 +103,20 @@ def _stringify_result_value(value: Any) -> str:
     text without forcing the user to write a custom predicate.  Errors
     in JSON encoding fall back to ``repr`` — the worst case is the
     regex misses a hit; we never want the stringifier itself to raise.
+
+    Catches the broad ``Exception`` because ``json.dumps`` can surface
+    ``TypeError`` (default), ``ValueError`` (NaN / inf without
+    ``allow_nan=False`` workarounds), ``OverflowError`` (circular
+    references), and ``RecursionError`` (deeply nested structures).
+    A guardrail's stringifier must never crash the run — the docstring
+    contract is "best-effort string for regex matching", and ``repr()``
+    always succeeds.
     """
     if isinstance(value, str):
         return value
     try:
         return json.dumps(value, default=str)
-    except (TypeError, ValueError):
+    except Exception:
         return repr(value)
 
 
