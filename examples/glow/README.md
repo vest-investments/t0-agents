@@ -14,11 +14,15 @@ A self-contained TensorZero gateway boots from this directory:
 docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
 ```
 
-Two TZ functions are pre-configured under `config/`:
+Three TZ functions are pre-configured under `config/`:
 
-- `agent` — chat (used by `01_hello.py`).
+- `agent` — chat (used by `01_hello.py`; also reused by the
+  glow-integration test's researcher / writer sub-agents).
 - `plan_trip` — JSON-structured (used by `02_structured.py`); schema
   matches the `TripPlan(BaseModel)` defined in the example.
+- `orchestrator` — chat (used by the M3 integration test
+  `test_orchestrator_with_glow_sub_agents` and forthcoming
+  orchestrator-style examples).
 
 Once the gateway is up, run any example as
 `uv run python examples/glow/<name>.py`. Each prints a `SUCCESS:`
