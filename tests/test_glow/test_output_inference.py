@@ -10,7 +10,7 @@ forward-ref-missing → ``ConfigurationError``, missing-annotation →
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 import pytest
 from pydantic import BaseModel
@@ -139,3 +139,60 @@ def test_no_annotation_returns_chat_with_debug_log(
         and "no return annotation" in record.message
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# Iterative peel coverage (M1 §3.1 carry-forward).  These four cases all need
+# both ``Annotated`` and ``Optional`` to peel in either order; the previous
+# single-pass implementation handled only one ordering.
+# ---------------------------------------------------------------------------
+
+
+class _Marker:
+    """Inert ``Annotated`` metadata used to exercise the iterative peel —
+    cannot be confused with a ``Guardrail`` or ``MCPServer`` because it
+    deliberately doesn't satisfy any glow protocol."""
+
+
+def test_annotated_optional_pydantic_resolves_to_structured() -> None:
+    # Annotated outer, Optional inner — the case the previous peel order
+    # silently fell through to ChatOutput.
+    def fn() -> Annotated[Optional[_Item], _Marker()]:  # noqa: UP045
+        ...
+
+    out = output_mode_from_return_type(fn)
+    assert isinstance(out, StructuredOutput)
+    assert out.model is _Item
+
+
+def test_optional_annotated_pydantic_resolves_to_structured() -> None:
+    # Mirror case (Annotated inner, Optional outer) — already worked under
+    # the M1 single-pass peel; kept as a regression guard.
+    def fn() -> Optional[Annotated[_Item, _Marker()]]:  # noqa: UP045
+        ...
+
+    out = output_mode_from_return_type(fn)
+    assert isinstance(out, StructuredOutput)
+    assert out.model is _Item
+
+
+def test_optional_annotated_optional_dict_resolves_to_json() -> None:
+    # Three-layer nest (Optional outside, Annotated middle, Optional inside)
+    # — exercises the convergence loop, not just one extra peel.
+    def fn() -> Optional[Annotated[Optional[dict[str, Any]], _Marker()]]:  # noqa: UP045
+        ...
+
+    assert isinstance(output_mode_from_return_type(fn), JsonOutput)
+
+
+def test_annotated_optional_list_of_pydantic_resolves_to_wrapper() -> None:
+    # Combines the M2 ``list[BaseModel]`` synthetic wrapper with the
+    # Annotated[Optional[...]] peel ordering — both surfaces must compose.
+    def fn() -> Annotated[Optional[list[_Item]], _Marker()]:  # noqa: UP045
+        ...
+
+    out = output_mode_from_return_type(fn)
+    assert isinstance(out, StructuredOutput)
+    wrapper = out.model
+    assert issubclass(wrapper, BaseModel)
+    assert wrapper.model_fields["items"].annotation == list[_Item]

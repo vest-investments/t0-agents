@@ -23,8 +23,7 @@ from t0_agents.glow._typing import (
     _is_dict_alias,
     _is_list_of_pydantic,
     _is_pydantic_model,
-    _strip_annotated,
-    _unwrap_optional,
+    _peel_to_core,
     _wrap_list_model,
 )
 
@@ -74,7 +73,10 @@ def output_mode_from_return_type(fn: Callable[..., Any]) -> OutputMode[Any]:
         )
         return ChatOutput()
 
-    rt = _strip_annotated(_unwrap_optional(hints["return"]))
+    # Iterative peel: handles ``Annotated[Optional[T], meta]``,
+    # ``Optional[Annotated[T, meta]]``, and deeper nesting equally
+    # (resolves M1 §3.1 carry-forward).
+    rt = _peel_to_core(hints["return"])
 
     if rt is str or rt is type(None):
         return ChatOutput()
