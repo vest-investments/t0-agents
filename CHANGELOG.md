@@ -176,6 +176,17 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   cross-link at `docs/composition.md` (the orthogonal code-driven
   path).
 
+#### Experimental — `t0_agents.glow`
+
+- **`t0_agents.glow` sub-package scaffolded** on the
+  `experimental/glow` branch. Purely additive Pythonic skin over v1.0
+  primitives (FastAPI-style decorators, type-hint-driven OutputMode
+  inference, fluent `Run` wrapper, native-collection composition,
+  typed MCP). Public API is **unstable**; ships as the future
+  `t0-agents[glow]` extra. Currently empty (`__all__ = []`); the
+  implementation roadmap and DX design live on the experimental
+  branch.
+
 ### Changed
 
 - **`Agent` internals** refactored to a middleware pipeline.
