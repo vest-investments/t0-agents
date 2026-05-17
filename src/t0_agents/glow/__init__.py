@@ -18,6 +18,7 @@ the implementation roadmap.
 from __future__ import annotations
 
 from t0_agents.glow.app import App
+from t0_agents.glow.compose import compose
 from t0_agents.glow.di import Depends
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.selectors import (
@@ -43,4 +44,5 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "TurnEnd",
+    "compose",
 ]
