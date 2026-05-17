@@ -285,6 +285,92 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `[functions.orchestrator]` chat function to
   `examples/glow/config/tensorzero.toml` used by the new integration
   test `test_orchestrator_with_glow_sub_agents`.
+- **`compose(spec, *, merge=None)` native-collection dispatcher (M4).**
+  `from t0_agents.glow import compose` ships the FastAPI-style
+  composition shortcut over the v1.0 `Composable` protocol.
+  `list`/`tuple` → `sequential(*spec)`; `set`/`frozenset` →
+  `parallel(*spec, reducer=merge or _default_merge,
+  error_policy="continue")` (anchored on M0 — the `race()` deprecation
+  warning literally points at this exact factory call); `dict[str,
+  Composable]` → an LLM-routed dispatch composer.  Glow `@app.agent`
+  wrappers, raw `Agent`s, and nested `Composer`s all pass through
+  ``_unwrap_node`` so the v1.0 composer factories see the underlying
+  types they expect; nested `compose(compose(...))` works for free
+  (the "stackable by contract" promise from the plan file).  The
+  default merge concatenates string values with `\n---\n`; mixed-type
+  ensembles raise `TypeError` until a `merge=` is supplied; the
+  all-failures path raises `ComposerError`.
+- **`_LLMRoutedComposer` — `dict[str, Composable]` dispatch (M4).**
+  Custom `Composer` subclass: a glow-private `FastMCP("glow-router-…")`
+  server holds one no-op tool per route key; a synthetic classifier
+  `Agent` runs with `ToolCallOutput(tool_choice="required")` (the
+  loop terminates after the first inference because
+  `expects_tool_loop=False`); the picked tool name is the route key;
+  the corresponding `routes[key]` is invoked with the ORIGINAL user
+  query.  The `additional_tools` plumbing in
+  `mcp/adapter.convert_tools` + `mcp/loop` surfaces the synthetic
+  tools to TZ at inference time — zero TZ config changes required.
+  ``function_name`` and ``t0`` are inherited from the first leaf
+  `Agent` reachable through the routes (``ConfigurationError`` if
+  none).
+- **Typed MCP integration via `MCPServer` (M4).**  `from t0_agents.glow
+  import MCPServer` exports a dual-personality base class:
+  - Class form (canonical): `class GithubMCP(MCPServer, url="...",
+    namespace="github"): ...` records an `MCPServerSpec` on the class
+    via `__init_subclass__`.
+  - Annotated form: `Annotated[Any, MCPServer(url="...")]` carries
+    the spec as Annotated metadata.
+  `App.__init__` accepts `servers=list[type[MCPServer]] | None` (the
+  M2 §4 D1 placeholder is now live); `@app.agent` parameter walks
+  via `_extract_mcp_specs` append discovered specs to
+  `app._mcp_specs`.  `App.build()` mounts every spec onto the
+  long-lived `glow-app` composed FastMCP BEFORE entering the owned
+  Client — `FastMCP.mount(server)` for in-memory `FastMCP` instances,
+  `FastMCP.mount(create_proxy(url))` for URL-based remotes (HTTP,
+  SSE, or any `ClientTransport` `create_proxy` accepts).  Per-agent
+  MCP subsets are deferred — every glow agent on a given App sees
+  every mounted MCP server.
+- **`Annotated[T, Guardrail(...)]` extraction (M4).**  `@app.agent`
+  parameter and return annotations are walked at registration time;
+  every `Annotated` metadata entry satisfying the runtime-checkable
+  v1.0 `Guardrail` Protocol is harvested and folded into
+  `AgentConfig.guardrails` on first build.  The runtime path
+  (`GuardrailsMiddleware`) is unchanged.  `_AgentSpec` grows a
+  `guardrails: list[Guardrail]` slot for the harvested set.
+- **`regex_guardrail(pattern, message, *, phase="after_run")` (M4).**
+  Glow-private convenience factory in `glow/guardrails_typing.py`.
+  Returns a concrete class satisfying the v1.0 `Guardrail` Protocol:
+  `phase="after_run"` (default) scans `result.value` (strings pass
+  through, non-strings are JSON-encoded via `json.dumps(default=str)`);
+  `phase="before_run"` scans `ctx.user_message`.  Hits raise
+  `GuardrailBlockedError` with the supplied message.  Carry-forward:
+  migrate to `src/t0_agents/guardrails/regex.py` post-M5 so every
+  Agent consumer benefits (currently glow-only).
+- **Iterative `Annotated`/`Optional` peel in `output_inference` (M4).**
+  Resolves the M1 §3.1 carry-forward: the previous single-pass
+  `_strip_annotated(_unwrap_optional(rt))` handled
+  `Optional[Annotated[T, m]]` but not the mirror case
+  `Annotated[Optional[T], m]` — guardrails on the return type
+  produce exactly that shape.  Replaced with `_peel_to_core(rt)` —
+  an iterative `while changed:` loop that converges on the inner
+  type regardless of nesting depth.  Both pre-existing
+  `cast(OutputMode[Any], StructuredOutput(...))` sites in
+  `output_inference.py` are preserved (M1 §4 carry-forward
+  unaffected).
+- **`examples/glow/04_composition.py` (M4).**  Runnable demo: a
+  three-agent ensemble (`compose({optimist, pessimist}, merge=fn)`)
+  plus the composer-in-composer case feeding the ensemble into a
+  summarizer (`compose([compose({...}, merge=fn), summarizer])`).
+  Reuses the existing `[functions.agent]` chat function — no new TZ
+  config.
+- **`examples/glow/06_mcp_typing.py` (M4).**  Runnable demo: in-memory
+  `FastMCP` math server, `class MathMCP(MCPServer, server=...)`,
+  `App(servers=[MathMCP])`, end-to-end verification that
+  `app._owned_client.list_tools()` returns the namespaced tool
+  followed by a live agent call.  Commented-out HTTP variant points
+  at the `create_proxy(url)` path for remote MCP servers.
+- **Public glow `__all__` grows to 14 entries (M4).**  Adds
+  `compose`, `MCPServer`, `regex_guardrail`.
 
 ### Changed
 
