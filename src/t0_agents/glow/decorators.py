@@ -29,7 +29,17 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, ParamSpec, TypeVar, cast, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Generic,
+    ParamSpec,
+    TypeVar,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.exceptions import ConfigurationError
@@ -157,7 +167,7 @@ def _make_decorator(
             ) from exc
         return_type: Any = hints.get("return", str)
 
-        sub_agent_specs = _collect_sub_agent_specs(fn, app, name)
+        sub_agent_specs = _collect_sub_agent_specs(fn, app, name, hints)
 
         # ``value_transform`` is the M1 carry-forward §4(d) hook: when
         # the return annotation is ``list[BaseModel]``,
@@ -190,6 +200,7 @@ def _collect_sub_agent_specs(
     fn: Callable[..., Any],
     app: App,
     agent_name: str,
+    hints: dict[str, Any],
 ) -> list[_AgentSpec]:
     """Walk ``fn``'s signature and return the sub-agent specs declared via ``Depends``.
 
@@ -197,8 +208,10 @@ def _collect_sub_agent_specs(
     deliberately narrow at M3:
 
     * The first positional parameter is the user message; type
-      annotation must be ``str`` (or unannotated, which defaults to
-      ``str``).
+      annotation must be ``str`` (or ``Annotated[str, ...]`` — the
+      Annotated wrapper is peeled before comparison so M4's
+      guardrail-on-message pattern lands cleanly without rewriting
+      this check).
     * Every subsequent parameter MUST have a :func:`Depends` default
       whose ``provider`` is an :class:`_AgentWrapper` *registered on
       the same App* (the sub-agent special case).  The parameter is
@@ -215,6 +228,12 @@ def _collect_sub_agent_specs(
       the user to register the sub-agent BEFORE the orchestrator.
     * Missing default, missing annotation, non-``Depends`` default,
       non-positional kind: structural mismatch with the spec.
+
+    ``hints`` is the already-resolved
+    :func:`typing.get_type_hints(fn, include_extras=True)` map from
+    ``_make_decorator``; passing it down avoids a second resolve and
+    means ``Annotated`` wrappers + string forward-refs are already
+    materialised when we inspect the message parameter's type.
 
     Returns the sub-agent specs in the order their parameters appear
     on the user function.  Empty list when the function has only a
@@ -239,19 +258,21 @@ def _collect_sub_agent_specs(
             f"({message_param.name!r}) must be positional (the user "
             f"message)."
         )
-    if message_param.annotation is not inspect.Parameter.empty:
-        # Annotation must be ``str``.  Forward-refs were already
-        # resolved by ``get_type_hints`` in the caller, but we
-        # introspect ``inspect.signature`` here for parameter shape;
-        # the annotation in ``message_param.annotation`` is the raw
-        # (possibly stringified under PEP 563) form.  Accept either
-        # the ``str`` class or the literal string ``"str"`` for the
-        # ``from __future__ import annotations`` case.
-        if message_param.annotation not in (str, "str"):
+    if message_param.name in hints:
+        # ``hints`` was resolved with ``include_extras=True``, so an
+        # ``Annotated[str, ...]`` parameter survives as a real
+        # ``_AnnotatedAlias`` here.  Peel one layer of ``Annotated`` —
+        # the underlying type must be ``str``.  This makes M4's
+        # ``Annotated[T, Guardrail(...)]`` pattern compatible at the
+        # message position without revisiting this check.
+        message_hint: Any = hints[message_param.name]
+        if get_origin(message_hint) is Annotated:
+            message_hint = get_args(message_hint)[0]
+        if message_hint is not str:
             raise ConfigurationError(
                 f"@app.agent({agent_name!r}): the first parameter "
                 f"({message_param.name!r}) must be annotated as ``str`` "
-                f"(the user message); got {message_param.annotation!r}."
+                f"(the user message); got {message_hint!r}."
             )
 
     sub_agent_specs: list[_AgentSpec] = []

@@ -25,7 +25,7 @@ Ten cases (no TZ gateway), covering:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any, ClassVar, assert_type, cast
+from typing import Annotated, Any, ClassVar, assert_type, cast
 
 import pytest
 from pydantic import BaseModel
@@ -514,6 +514,25 @@ def test_first_parameter_typed_non_str_raises() -> None:
         @app.agent("orchestrator")
         async def _orch(q: int) -> str:  # type: ignore[empty-body]  # pragma: no cover
             """Wrong annotation on the message param."""
+
+
+def test_first_parameter_annotated_str_is_accepted() -> None:
+    """``Annotated[str, <meta>]`` on the message param is accepted.
+
+    Forward-compat with M4's guardrail-on-message pattern (plan
+    Example 9): ``Annotated[str, Guardrail.short]`` should land cleanly
+    without rewriting the signature walk.  The Annotated wrapper is
+    peeled to ``str`` and accepted; the metadata payload is ignored
+    at M3 (M4 will extract guardrails from it).
+    """
+    app = App(t0=_fake_t0())
+
+    # No exception means the decorator accepted the annotation.
+    @app.agent("orchestrator")
+    async def orch(q: Annotated[str, "short"]) -> str:  # type: ignore[empty-body]
+        """Accepts an Annotated[str, ...] message."""
+
+    assert "orchestrator" in app._agent_registry
 
 
 def test_non_message_param_without_default_raises() -> None:
