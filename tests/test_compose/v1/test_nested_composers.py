@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from t0_agents import conditional, consensus, race, sequential
+from t0_agents import conditional, consensus, parallel, sequential
 from tests.test_compose.v1._helpers import MockComposable
 
 
@@ -28,10 +28,11 @@ async def test_three_level_nest_resolves_through_layers() -> None:
         routes={"happy": happy_path, "sad": sad_path},
     )
 
-    composer = sequential(race(fast, slow), router)
+    composer = sequential(parallel(fast, slow, error_policy="continue"), router)
     result = await composer.invoke("seed", cancel_timeout=1.0).result()
 
-    # The router saw "fast_won" → "happy" → consensus → "happy".
+    # The router saw the JSON-encoded list ['fast_won', 'slow_won'] —
+    # "won" matches → "happy" → consensus → "happy".
     assert result.value == "happy"
 
 
@@ -56,7 +57,10 @@ async def test_nested_composer_satisfies_composable_protocol() -> None:
     """A nested Composer can itself be a child of another Composer."""
     from t0_agents.compose.topology import Composable, Composer
 
-    inner = race(MockComposable(name="a"), MockComposable(name="b"))
+    inner = parallel(
+        MockComposable(name="a"), MockComposable(name="b"),
+        error_policy="continue",
+    )
     assert isinstance(inner, Composer)
     assert isinstance(inner, Composable)
 
