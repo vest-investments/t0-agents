@@ -23,9 +23,10 @@ the problem.
 
 > **Deprecation notice (v1.0):** `race(*nodes)` is deprecated and
 > emits `DeprecationWarning`; removal is scheduled for v1.1.  Use
-> `parallel(*, reducer=..., error_policy="continue")` for fan-out
-> + merge, or write `asyncio.wait(return_when=FIRST_COMPLETED)` in
-> user code if you genuinely need first-finisher-wins.  See
+> `parallel(*nodes, reducer=..., error_policy="continue")` for
+> fan-out + merge, or write
+> `asyncio.wait(..., return_when=FIRST_COMPLETED)` in user code if
+> you genuinely need first-finisher-wins.  See
 > [Advanced / not recommended](#advanced--not-recommended) at the
 > bottom of this page for the rationale.
 

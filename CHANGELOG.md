@@ -230,8 +230,8 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
 - **`race(*nodes)` composer** — emits `DeprecationWarning`; removal
   scheduled for v1.1.  Use `parallel(*nodes, reducer=...,
   error_policy="continue")` for fan-out + merge, or write
-  `asyncio.wait(return_when=FIRST_COMPLETED)` in user code if you
-  need first-finisher-wins.  See
+  `asyncio.wait(..., return_when=FIRST_COMPLETED)` in user code if
+  you need first-finisher-wins.  See
   [`docs/composition.md`](docs/composition.md#advanced--not-recommended)
   for the rationale.
 

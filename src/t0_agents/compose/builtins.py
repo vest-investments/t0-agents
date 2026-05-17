@@ -266,10 +266,10 @@ def race(
 
     **Deprecated since v1.0** — removal scheduled for v1.1.  Use
     :func:`parallel` with ``reducer=..., error_policy="continue"`` for
-    fan-out + merge, or write ``asyncio.wait(return_when=FIRST_COMPLETED)``
-    over the leaf coroutines in user code if you genuinely need
-    first-finisher-wins.  See
-    `docs/composition.md` ("Advanced / not recommended") for the
+    fan-out + merge, or write
+    ``asyncio.wait(..., return_when=FIRST_COMPLETED)`` over the leaf
+    coroutines in user code if you genuinely need first-finisher-wins.
+    See `docs/composition.md` ("Advanced / not recommended") for the
     rationale.
 
     With ``cancel_others=True`` (default) the losers receive
@@ -281,9 +281,10 @@ def race(
     """
     warnings.warn(
         "`race(...)` is deprecated and will be removed in v1.1; use "
-        "`parallel(*, reducer=..., error_policy='continue')` for "
-        "fan-out + merge or `asyncio.wait(return_when=FIRST_COMPLETED)` "
-        "in user code for first-finisher-wins.",
+        "`parallel(*nodes, reducer=..., error_policy='continue')` for "
+        "fan-out + merge or "
+        "`asyncio.wait(..., return_when=FIRST_COMPLETED)` in user code "
+        "for first-finisher-wins.",
         DeprecationWarning,
         stacklevel=2,
     )
