@@ -30,7 +30,7 @@ def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
 
 
 async def test_agent_remembers_across_runs(mcp_client: Client[Any]) -> None:
-    """Two successive Agent.run() calls; second recalls the first."""
+    """Two successive ``agent.invoke()`` calls; second recalls the first."""
     with tempfile.NamedTemporaryFile(suffix=".db") as tmp:
         mem = SqliteMemory(tmp.name)
         config = AgentConfig(

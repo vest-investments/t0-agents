@@ -212,7 +212,7 @@ class TestAgent:
         assert call["namespace"] == "staging"
 
     async def test_episode_id_plumbing(self) -> None:
-        """episode_id from Agent.run() reaches t0.inference on first call."""
+        """episode_id from ``agent.invoke()`` reaches t0.inference on first call."""
         ep = str(uuid4())
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)
@@ -221,7 +221,7 @@ class TestAgent:
         assert t0.calls[0]["episode_id"] == ep
 
     async def test_max_turns_exceeded_propagates(self) -> None:
-        """MaxTurnsExceededError from run_agent bubbles through Agent.run()."""
+        """MaxTurnsExceededError from run_agent bubbles through ``agent.invoke()``."""
         from fastmcp.client.client import CallToolResult
 
         t0 = FakeT0([
@@ -391,7 +391,7 @@ class TestAgent:
         assert client.call_tool_invocations[0][2] == 99.0
 
     async def test_concurrent_runs_serial(self) -> None:
-        """Two sequential .run() calls produce independent results."""
+        """Two sequential ``invoke()`` calls produce independent results."""
         ep1 = uuid4()
         ep2 = uuid4()
         t0 = FakeT0([

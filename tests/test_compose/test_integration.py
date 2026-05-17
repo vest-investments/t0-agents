@@ -132,10 +132,10 @@ async def test_two_agent_orchestration_e2e() -> None:
 async def test_subagent_episode_isolation() -> None:
     """Sub-agent's AgentResult.episode_id differs from orchestrator's.
 
-    Each ``Agent.run`` defaults to its own fresh episode; the parent
-    correlation happens via the ``t0_agents.parent_episode_id`` tag,
-    not by reusing episode ids.  We assert isolation by having a spy
-    sub-agent record its own episode id on every delegation and then
+    Each ``agent.invoke(...)`` defaults to its own fresh episode; the
+    parent correlation happens via the ``t0_agents.parent_episode_id``
+    tag, not by reusing episode ids.  We assert isolation by having a
+    spy sub-agent record its own episode id on every delegation and then
     comparing against the orchestrator's.
     """
     researcher_server = _build_researcher_server()

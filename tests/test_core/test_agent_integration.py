@@ -27,7 +27,7 @@ def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
 
 
 async def test_agent_run_end_to_end(mcp_client: Client[Any]) -> None:
-    """Agent.run() works end-to-end against the live gateway."""
+    """``Agent.invoke()`` works end-to-end against the live gateway."""
     config = AgentConfig(
         name="integration-test",
         function_name="agent",

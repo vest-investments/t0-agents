@@ -246,7 +246,7 @@ async def test_assembler_tool_args_non_object() -> None:
 
 
 async def test_assembler_json_chunk_emits_error() -> None:
-    """JsonChunk is out of scope for Agent.stream()."""
+    """JsonChunk is out of scope for ``Run.events()``."""
     from tensorzero.types import JsonChunk
 
     async def _gen() -> AsyncIterator[Any]:

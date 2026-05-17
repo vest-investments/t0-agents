@@ -2,7 +2,7 @@
 
 A fatal marker raised from inside ``mcp_client.call_tool`` must NOT be
 caught by the belt-and-braces ``except Exception`` clause and stringified
-into a ToolResult — it must propagate to the caller so ``Agent.run()``
+into a ToolResult — it must propagate to the caller so ``agent.invoke()``
 can surface the policy violation.
 """
 

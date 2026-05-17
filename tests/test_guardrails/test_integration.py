@@ -84,7 +84,7 @@ async def test_max_tool_calls_zero_aborts_through_live_loop() -> None:
     Chosen over ``max_cost`` for the fatal-propagation path because the
     cap is deterministic regardless of provider cost reporting.  Proves
     the end-to-end propagation through ``_execute_single_tool_call``'s
-    new ``T0AgentsFatalError`` branch and out of ``Agent.run()``.
+    new ``T0AgentsFatalError`` branch and out of ``agent.invoke()``.
     """
     client: Client[Any] = Client(mcp)
     config = AgentConfig(
