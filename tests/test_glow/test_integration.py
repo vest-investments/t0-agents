@@ -39,6 +39,18 @@ class _TripPlan(BaseModel):
     cost_usd: float
 
 
+# Module-level guardrail instance so the ``Annotated[str, _NO_SSN]``
+# return annotation on the test's inner ``@app.agent``-decorated
+# function resolves through ``get_type_hints(fn, ...)``, which walks
+# ``fn.__globals__`` only.  An enclosing-test local would be invisible
+# to that walk (the same pattern that motivates the module-level MCP
+# subclasses in ``test_mcp_typing.py``).
+_NO_SSN = regex_guardrail(
+    r"\b\d{3}-\d{2}-\d{4}\b",
+    "Response contains an SSN-shaped value",
+)
+
+
 async def test_hello_world_chat_agent_runs_end_to_end() -> None:
     """Chat agent returns a non-empty text response under ``lifespan()``.
 
@@ -226,13 +238,8 @@ async def test_regex_guardrail_on_return_annotation_blocks_response() -> None:
     async with await _gateway_factory() as t0:
         app = App(t0=t0)
 
-        no_ssn = regex_guardrail(
-            r"\b\d{3}-\d{2}-\d{4}\b",
-            "Response contains an SSN-shaped value",
-        )
-
         @app.agent("support")
-        async def support(query: str) -> Annotated[str, no_ssn]:  # type: ignore[empty-body]
+        async def support(query: str) -> Annotated[str, _NO_SSN]:  # type: ignore[empty-body]
             """Return ONLY the literal placeholder SSN ``123-45-6789``
             with no other text."""
 
