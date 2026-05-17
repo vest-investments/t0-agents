@@ -48,6 +48,7 @@ from t0_agents.glow._typing import _is_list_of_pydantic
 from t0_agents.glow.app import App
 from t0_agents.glow.di import _Depends
 from t0_agents.glow.handle import FluentRun
+from t0_agents.glow.mcp_typing import _extract_mcp_specs, _is_mcp_parameter
 from t0_agents.glow.output_inference import output_mode_from_return_type
 
 __all__ = ["_AgentWrapper", "_make_tool_decorator"]
@@ -169,6 +170,18 @@ def _make_decorator(
 
         sub_agent_specs = _collect_sub_agent_specs(fn, app, name, hints)
 
+        # M4: harvest any MCPServer specs reachable through the
+        # decorated function's parameter annotations and append them
+        # to the App's spec list.  The actual ``FastMCP.mount`` happens
+        # in ``app.build()`` BEFORE the owned client is entered; the
+        # decorator only records the spec.  Forward-ref failures inside
+        # ``_extract_mcp_specs`` are silently no-ops there — but
+        # ``get_type_hints`` above already raised for the same case if
+        # the failure is fatal, so we never reach here with an
+        # unresolved annotation that ``_extract_mcp_specs`` cares about.
+        for mcp_spec in _extract_mcp_specs(fn, hints):
+            app._mcp_specs.append(mcp_spec)
+
         # ``value_transform`` is the M1 carry-forward §4(d) hook: when
         # the return annotation is ``list[BaseModel]``,
         # ``output_mode_from_return_type`` chose a ``StructuredOutput``
@@ -277,6 +290,14 @@ def _collect_sub_agent_specs(
 
     sub_agent_specs: list[_AgentSpec] = []
     for param in params[1:]:
+        # M4: MCP-typed parameters are pure decoration metadata (the
+        # spec is harvested separately by ``_extract_mcp_specs``); they
+        # have no runtime binding and no default, so we skip them here
+        # rather than demanding a ``Depends`` default.  The wrapper's
+        # ``__call__`` continues to accept only the user message — the
+        # MCP parameter slot is never populated at invocation.
+        if _is_mcp_parameter(hints.get(param.name)):
+            continue
         if param.default is inspect.Parameter.empty:
             raise ConfigurationError(
                 f"@app.agent({agent_name!r}): parameter {param.name!r} has "

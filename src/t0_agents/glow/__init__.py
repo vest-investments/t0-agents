@@ -21,6 +21,7 @@ from t0_agents.glow.app import App
 from t0_agents.glow.compose import compose
 from t0_agents.glow.di import Depends
 from t0_agents.glow.handle import FluentRun
+from t0_agents.glow.mcp_typing import MCPServer
 from t0_agents.glow.selectors import (
     Done,
     Error,
@@ -38,6 +39,7 @@ __all__ = [
     "Done",
     "Error",
     "FluentRun",
+    "MCPServer",
     "Selector",
     "Text",
     "Thought",
