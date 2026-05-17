@@ -36,10 +36,16 @@ from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow._typing import _is_list_of_pydantic
 from t0_agents.glow.app import App
+from t0_agents.glow.di import _Depends
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.output_inference import output_mode_from_return_type
 
-__all__ = ["_AgentWrapper"]
+__all__ = ["_AgentWrapper", "_make_tool_decorator"]
+
+# ``ToolFn`` is the public-facing tool function type — async callable
+# returning the tool's result.  FastMCP introspects ``__signature__``
+# and ``__annotations__``, so we constrain to ``Callable[..., Any]``.
+ToolFn = Callable[..., Awaitable[Any]] | Callable[..., Any]
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -180,3 +186,85 @@ def _unwrap_wrapper_items(wrapper_value: Any) -> Any:
     introspect the spec.
     """
     return wrapper_value.items
+
+
+# ---------------------------------------------------------------------------
+# ``@app.tool`` decorator
+# ---------------------------------------------------------------------------
+
+
+def _make_tool_decorator(app: App) -> Callable[[ToolFn], ToolFn]:
+    """Return the decorator returned by :meth:`App.tool`.
+
+    The decorator registers a FastMCP tool on ``app._mcp_server``.
+    User functions may declare ``Depends(provider)`` defaults on
+    parameters that should be injected by glow at call time; those
+    parameters are **stripped** from the signature FastMCP introspects
+    (so the tool's JSON Schema does not advertise them to the LLM),
+    and a per-tool async wrapper resolves them via
+    :class:`~t0_agents.glow.di.DependencyResolver` before invoking the
+    user function.
+
+    ``Depends(agent_wrapper)`` is rejected at decoration time — that
+    sentinel is reserved for ``@app.agent``'s sub-agent special case
+    and has no defined runtime behaviour inside a tool (a tool running
+    inside the MCP server task that re-entered the agent loop would
+    surface complex re-entrance semantics with marginal benefit).
+    """
+
+    def decorator(fn: ToolFn) -> ToolFn:
+        sig = inspect.signature(fn)
+        depends_params: dict[str, _Depends] = {}
+        public_params: list[inspect.Parameter] = []
+        for name, param in sig.parameters.items():
+            default = param.default
+            if isinstance(default, _Depends):
+                if isinstance(default.provider, _AgentWrapper):
+                    raise ConfigurationError(
+                        f"@app.tool({fn.__name__!r}): parameter {name!r} uses "
+                        f"Depends(<glow agent wrapper>), but Depends(agent) is "
+                        f"reserved for @app.agent's sub-agent special case.  "
+                        f"Use @app.agent for orchestrator-with-sub-agents "
+                        f"patterns, or pick a value-style provider for the "
+                        f"tool dependency."
+                    )
+                depends_params[name] = default
+            else:
+                public_params.append(param)
+
+        stripped_sig = sig.replace(parameters=public_params)
+        # FastMCP's ``Tool.from_function`` reads ``__annotations__`` via
+        # ``get_type_hints`` (`fastmcp/tools/function_parsing.py:198`); the
+        # stripped annotations match the stripped signature exactly so
+        # only public parameters appear in the JSON schema.
+        original_annotations: dict[str, Any] = getattr(fn, "__annotations__", {})
+        stripped_annotations: dict[str, Any] = {
+            ann_name: ann_type
+            for ann_name, ann_type in original_annotations.items()
+            if ann_name == "return" or ann_name not in depends_params
+        }
+
+        async def wrapper(**call_kwargs: Any) -> Any:
+            resolved = await app._resolver.resolve(fn, app)
+            merged = {**call_kwargs, **resolved}
+            result = fn(**merged)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        wrapper.__name__ = fn.__name__
+        wrapper.__qualname__ = fn.__qualname__
+        wrapper.__doc__ = fn.__doc__
+        wrapper.__module__ = fn.__module__
+        wrapper.__signature__ = stripped_sig  # type: ignore[attr-defined]
+        wrapper.__annotations__ = stripped_annotations
+
+        # ``FastMCP.add_tool`` accepts ``Tool | Callable[..., Any]``; the
+        # callable branch goes through ``Tool.from_function``, which
+        # introspects ``wrapper.__signature__`` to build the JSON schema.
+        # Strict mypy can't see the Tool branch (no FastMCP stubs +
+        # no @overload), so we pick the callable side explicitly.
+        app._mcp_server.add_tool(cast(Callable[..., Any], wrapper))
+        return fn
+
+    return decorator

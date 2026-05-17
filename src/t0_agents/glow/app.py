@@ -134,6 +134,27 @@ class App:
 
         return _make_decorator(self, name, function_name=function_name)
 
+    def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Register ``fn`` as a FastMCP tool on the App-owned server.
+
+        Parameters whose default is a :func:`~t0_agents.glow.di.Depends`
+        sentinel are stripped from the tool's auto-generated JSON
+        Schema and re-injected at call time via the App's
+        :class:`~t0_agents.glow.di.DependencyResolver`.  The tool's
+        docstring becomes the MCP tool description (FastMCP convention).
+
+        Returns the original function unchanged so callers can still
+        invoke it directly outside the MCP loop — though direct calls
+        will not resolve ``Depends`` parameters; the resolution happens
+        only through the MCP transport.
+
+        Construction logic lives in :mod:`t0_agents.glow.decorators`;
+        this method is the typed thin shim that delegates.
+        """
+        from t0_agents.glow.decorators import _make_tool_decorator
+
+        return _make_tool_decorator(self)(fn)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
