@@ -35,28 +35,55 @@ __all__ = ["DependencyResolver", "Depends"]
 
 
 @dataclass(frozen=True, slots=True)
-class Depends:
-    """Sentinel default marking a parameter for dependency injection.
+class _Depends:
+    """Internal sentinel default backing the public :func:`Depends`.
 
     ``provider`` is the callable that produces the value.  Sync and
     async providers are both supported; the resolver dispatches on
     :func:`inspect.iscoroutinefunction` plus :func:`inspect.isawaitable`
     so factories returning awaitables also work.
 
-    When ``use_cache`` is ``True`` (the default), the same ``Depends``
-    *instance* resolved twice in one call returns the cached value.
-    The cache is keyed by :func:`id` of the ``Depends`` instance, so
-    two distinct ``Depends(get_db)`` literals are cached separately;
-    callers wanting cross-parameter reuse must share a single
-    module-level instance (the FastAPI idiom).
+    When ``use_cache`` is ``True`` (the default), the same instance
+    resolved twice in one call returns the cached value.  The cache is
+    keyed by :func:`id` of the sentinel instance, so two distinct
+    ``Depends(get_db)`` literals are cached separately; callers wanting
+    cross-parameter reuse must share a single module-level instance
+    (the FastAPI idiom).
 
     ``app.dependency_overrides[provider] = mock_provider`` replaces
     the resolved provider at call time (not at registration), so
     tests can swap dependencies without re-instantiating the decorator.
+
+    End users construct sentinel instances via :func:`Depends`; mypy
+    sees that callable as returning :class:`Any`, so a typed parameter
+    default ``db: DB = Depends(get_db)`` does not trip the
+    ``[assignment]`` check.  ``isinstance(x, _Depends)`` is the runtime
+    discriminator used by the resolver and the decorator-side signature
+    walks; the bare name ``_Depends`` stays internal so the public
+    surface presents :func:`Depends` as a value-constructor, not a
+    class.
     """
 
     provider: Callable[..., Any]
     use_cache: bool = True
+
+
+if TYPE_CHECKING:
+    # Static-check view: ``Depends`` is a callable returning ``Any`` so
+    # a typed parameter default — ``db: DB = Depends(get_db)`` — is
+    # accepted by mypy strict.  FastAPI uses the same trick.
+    def Depends(  # noqa: N802 — public name mirrors FastAPI convention.
+        provider: Callable[..., Any],
+        *,
+        use_cache: bool = True,
+    ) -> Any: ...
+else:
+    # Runtime view: ``Depends`` IS the dataclass class, so
+    # ``Depends(get_db)`` constructs a sentinel instance and
+    # ``isinstance(x, Depends)`` works for external callers that
+    # introspect (we still prefer ``isinstance(x, _Depends)`` inside
+    # this package — both are the same object at runtime).
+    Depends = _Depends
 
 
 class DependencyResolver:
@@ -93,14 +120,14 @@ class DependencyResolver:
         resolved: dict[str, Any] = {}
         for name, param in sig.parameters.items():
             default = param.default
-            if not isinstance(default, Depends):
+            if not isinstance(default, _Depends):
                 continue
             resolved[name] = await self._resolve_one(default, app, call_cache)
         return resolved
 
     async def _resolve_one(
         self,
-        dep: Depends,
+        dep: _Depends,
         app: App,
         call_cache: dict[int, Any],
     ) -> Any:

@@ -43,7 +43,7 @@ async def test_single_depends_resolves_and_threads_value() -> None:
     def get_db() -> dict[str, str]:
         return {"name": "real_db"}
 
-    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...  # type: ignore[empty-body]
+    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...
 
     resolved = await resolver.resolve(use_db, app)
     assert resolved == {"db": {"name": "real_db"}}
@@ -60,7 +60,7 @@ async def test_nested_depends_resolves_recursively() -> None:
     def get_db(settings: dict[str, str] = Depends(get_settings)) -> dict[str, str]:
         return {"url": settings["db_url"]}
 
-    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...  # type: ignore[empty-body]
+    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...
 
     resolved = await resolver.resolve(use_db, app)
     assert resolved == {"db": {"url": "sqlite:///:memory:"}}
@@ -88,7 +88,7 @@ async def test_use_cache_default_dedupes_within_one_call() -> None:
     async def use_two_db_params(
         a: dict[str, Any] = shared_dep,
         b: dict[str, Any] = shared_dep,
-    ) -> None: ...  # type: ignore[empty-body]
+    ) -> None: ...
 
     resolved = await resolver.resolve(use_two_db_params, app)
     assert call_count == 1
@@ -113,7 +113,7 @@ async def test_use_cache_false_invokes_provider_fresh() -> None:
     async def use_two_db_params(
         a: dict[str, Any] = shared_dep,
         b: dict[str, Any] = shared_dep,
-    ) -> None: ...  # type: ignore[empty-body]
+    ) -> None: ...
 
     resolved = await resolver.resolve(use_two_db_params, app)
     assert call_count == 2
@@ -134,7 +134,7 @@ async def test_dependency_overrides_replaces_provider_at_call_time() -> None:
     def get_db() -> dict[str, str]:
         return {"name": "real_db"}
 
-    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...  # type: ignore[empty-body]
+    async def use_db(db: dict[str, str] = Depends(get_db)) -> None: ...
 
     # Real path first.
     resolved = await resolver.resolve(use_db, app)
@@ -183,7 +183,7 @@ async def test_async_and_sync_providers_both_work() -> None:
         a: str = Depends(sync_provider),
         b: str = Depends(async_provider),
         c: str = Depends(sync_returns_awaitable),
-    ) -> None: ...  # type: ignore[empty-body]
+    ) -> None: ...
 
     resolved = await resolver.resolve(consumer, app)
     assert resolved == {"a": "sync", "b": "async", "c": "sync-returns-awaitable"}
@@ -203,7 +203,7 @@ async def test_non_depends_parameters_are_left_untouched() -> None:
         user_message: str,
         order_id: int,
         db: str = Depends(get_db),
-    ) -> None: ...  # type: ignore[empty-body]
+    ) -> None: ...
 
     resolved = await resolver.resolve(mixed, app)
     assert resolved == {"db": "db"}
