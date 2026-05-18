@@ -4,9 +4,11 @@
 Protocol implementation that blocks a run when :func:`re.search` matches:
 
 - ``phase="after_run"`` (default) scans :attr:`AgentResult.value`.  String
-  values are tested directly; non-string values are JSON-encoded via
-  :func:`json.dumps` (with ``default=str``) so dicts and Pydantic models
-  are matched against their serialised representation.
+  values are tested directly; dicts are JSON-encoded via
+  :func:`json.dumps` (with ``default=str``); Pydantic v2 models are
+  unwrapped through :meth:`model_dump` first so the regex matches
+  against the actual JSON payload rather than the model's
+  ``__str__``.
 - ``phase="before_run"`` scans :attr:`GuardrailContext.user_message` — the
   user's original query, before any inference or tool call.
 
@@ -108,6 +110,21 @@ def _stringify_result_value(value: Any) -> str:
     in JSON encoding fall back to :func:`repr` — the worst case is the
     regex misses a hit; we never want the stringifier itself to raise.
 
+    Pydantic v2 models are unwrapped via ``model_dump()`` before JSON
+    encoding so the regex sees the field payload
+    (``'{"ssn": "123-45-6789"}'``) rather than the model's ``__str__``
+    (``"Model(ssn='123-45-6789')"``).  Without the unwrap,
+    ``json.dumps(model, default=str)`` would call ``str(model)`` on
+    the model itself and a regex anchored on JSON quoting would miss.
+    The check is duck-typed on a callable ``model_dump`` attribute, so
+    any object exposing the same interface (Pydantic, attrs-style,
+    custom dataclasses with a manually defined ``model_dump``)
+    benefits.  Pydantic v1's ``.dict()`` is intentionally NOT a
+    fallback because the project requires v2 (see ``pyproject.toml``)
+    and a generic ``hasattr(value, "dict")`` test would collide with
+    unrelated third-party objects whose ``.dict()`` method means
+    something different.
+
     Catches the broad :class:`Exception` because :func:`json.dumps` can
     surface :class:`TypeError` (default), :class:`ValueError` (NaN / inf
     without ``allow_nan=False`` workarounds), :class:`OverflowError`
@@ -119,6 +136,9 @@ def _stringify_result_value(value: Any) -> str:
     if isinstance(value, str):
         return value
     try:
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            value = model_dump()
         return json.dumps(value, default=str)
     except Exception:
         return repr(value)

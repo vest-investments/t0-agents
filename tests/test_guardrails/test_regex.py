@@ -69,6 +69,21 @@ class TestRegexGuardrail:
         with pytest.raises(GuardrailBlockedError):
             await guard.after_run(_ctx(), _result({"ssn": "123-45-6789"}))
 
+    async def test_after_run_scans_pydantic_model_via_model_dump(self) -> None:
+        """A Pydantic v2 model must be unwrapped via ``model_dump``
+        before JSON-encoding; ``json.dumps(model, default=str)`` alone
+        would emit the model's ``__str__`` (``"Model(field='...')"``)
+        instead of standard JSON quoting, breaking patterns that
+        anchor on JSON syntax."""
+        from pydantic import BaseModel
+
+        class Record(BaseModel):
+            ssn: str
+
+        guard = regex_guardrail(r'"ssn":\s*"\d{3}-\d{2}-\d{4}"', "no SSN")
+        with pytest.raises(GuardrailBlockedError):
+            await guard.after_run(_ctx(), _result(Record(ssn="123-45-6789")))
+
     async def test_before_run_blocks_user_message_match(self) -> None:
         guard = regex_guardrail(SSN_PATTERN, "no SSN", phase="before_run")
         with pytest.raises(GuardrailBlockedError):
