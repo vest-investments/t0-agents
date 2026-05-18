@@ -34,7 +34,7 @@ banner on completion.
 |----|-----------------------|-----------|---------------------------------------------------------|
 | 01 | `01_hello.py`         | M2        | 4-line hello-world: `@app.agent` + docstring system prompt + `-> str` |
 | 02 | `02_structured.py`    | M2        | Return type → `StructuredOutput`: `await plan(q)` is a `TripPlan` instance |
-| 03 | `03_streaming.py`     | M2+       | `FluentRun.events()` with selectors (coming in M3 work) |
+| 03 | `03_streaming.py`     | M5        | `FluentRun.events()` with `Thought` + `ToolCall.map()` + `Text` selectors |
 | 04 | `04_composition.py`   | M4        | `compose([...])`, `compose({...})`, `compose({a, b})`   |
 | 05 | `05_di_tools.py`      | M3        | `@app.tool` + `Depends` injection                       |
 | 06 | `06_mcp_typing.py`    | M4        | `MCPServer` class + `Annotated` MCP injection           |
