@@ -141,9 +141,20 @@ async for event in tutor("Explain present perfect").events(
 ```
 
 `Text` defaults to `TextEndEvent` (the completion marker for one
-text block) — for token-by-token streaming, use
-`Selector(TextDeltaEvent).map(lambda e: e.delta)` instead.  Passing
-no selectors yields every `AgentEvent` (parity with
+text block).  For token-by-token streaming, build a selector for
+`TextDeltaEvent` directly and map it to the delta string:
+
+```python
+from t0_agents.glow import Selector
+from t0_agents.stream.events import TextDeltaEvent
+
+async for delta in tutor("Explain present perfect").events(
+    Selector(TextDeltaEvent).map(lambda e: e.delta),
+):
+    print(delta, end="", flush=True)
+```
+
+Passing no selectors yields every `AgentEvent` (parity with
 `Run.events()`).  Glow only supports streaming for chat-flavoured
 output modes; the [v1.0 chat-only constraint](../streaming.md) carries
 through.  Demo: [`03_streaming.py`](../../examples/glow/03_streaming.py).
