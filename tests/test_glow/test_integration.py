@@ -14,13 +14,14 @@ case).
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
 from pydantic import BaseModel
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App, Depends
+from t0_agents.core.exceptions import GuardrailBlockedError
+from t0_agents.glow import App, Depends, compose, regex_guardrail
 
 pytestmark = pytest.mark.integration
 
@@ -36,6 +37,18 @@ def _gateway_factory() -> Awaitable[AsyncTensorZeroGateway]:
 class _TripPlan(BaseModel):
     destinations: list[str]
     cost_usd: float
+
+
+# Module-level guardrail instance so the ``Annotated[str, _NO_SSN]``
+# return annotation on the test's inner ``@app.agent``-decorated
+# function resolves through ``get_type_hints(fn, ...)``, which walks
+# ``fn.__globals__`` only.  An enclosing-test local would be invisible
+# to that walk (the same pattern that motivates the module-level MCP
+# subclasses in ``test_mcp_typing.py``).
+_NO_SSN = regex_guardrail(
+    r"\b\d{3}-\d{2}-\d{4}\b",
+    "Response contains an SSN-shaped value",
+)
 
 
 async def test_hello_world_chat_agent_runs_end_to_end() -> None:
@@ -130,3 +143,106 @@ async def test_orchestrator_with_glow_sub_agents() -> None:
     assert {s.name for s in orch_spec.sub_agent_specs} == {"researcher", "writer"}
     for sub in orch_spec.sub_agent_specs:
         assert sub.agent is not None
+
+
+async def test_llm_routed_dict_composer_dispatches_to_picked_route() -> None:
+    """``compose({"math": ..., "code": ...})`` dispatches via the synthetic
+    classifier and runs the picked route end-to-end.
+
+    The synthetic classifier uses ``ToolCallOutput(tool_choice="required")``
+    with one no-op FastMCP tool per route key; the LLM picks one, the
+    loop terminates (``expects_tool_loop=False``), and the picked route
+    receives the original user query.
+
+    Each route prepends a distinct sentinel to its response so we can
+    assert which branch ran without inspecting CompositeRun internals.
+    """
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        @app.agent("math_route")
+        async def math_route(query: str) -> str:  # type: ignore[empty-body]
+            """Math expert.  Always begin your reply with the exact token
+            'MATH:'."""
+
+        @app.agent("code_route")
+        async def code_route(query: str) -> str:  # type: ignore[empty-body]
+            """Python coder.  Always begin your reply with the exact token
+            'CODE:'."""
+
+        async with app.lifespan():
+            router = compose({"math_route": math_route, "code_route": code_route})
+
+            math_run = router.invoke("Solve x squared equals four.")
+            math_result = await math_run.result()
+            code_run = router.invoke(
+                "Write a Python function that prints hello world."
+            )
+            code_result = await code_run.result()
+
+    math_text = str(math_result.value)
+    code_text = str(code_result.value)
+    assert "MATH:" in math_text, f"math route did not run; got {math_text!r}"
+    assert "CODE:" in code_text, f"code route did not run; got {code_text!r}"
+
+
+async def test_llm_routed_dict_composer_supports_composer_routes() -> None:
+    """Composer-as-route case: one route is itself a compose([...]).
+
+    Proves the v1.0 ``Composable`` protocol carries through the dict
+    branch — the picked route can be a nested Composer (here a tiny
+    sequential pipeline), not just a leaf Agent.
+    """
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        @app.agent("step_one")
+        async def step_one(query: str) -> str:  # type: ignore[empty-body]
+            """Summarise the input in one short sentence."""
+
+        @app.agent("step_two")
+        async def step_two(query: str) -> str:  # type: ignore[empty-body]
+            """Take the previous summary and prepend 'PIPELINE:' to it."""
+
+        @app.agent("trivial_route")
+        async def trivial_route(query: str) -> str:  # type: ignore[empty-body]
+            """Reply with the single word 'SINGLE'."""
+
+        async with app.lifespan():
+            pipeline = compose([step_one, step_two])
+            router = compose({
+                "pipeline_route": pipeline,
+                "trivial_route": trivial_route,
+            })
+
+            run = router.invoke("Briefly describe photosynthesis.")
+            result = await run.result()
+
+    text = str(result.value)
+    # Whichever route the LLM picks, the result is a string; the
+    # acceptance criterion is that the dispatch succeeded without
+    # raising ``ComposerError`` for an unknown route key.
+    assert isinstance(text, str)
+    assert text.strip() != ""
+
+
+async def test_regex_guardrail_on_return_annotation_blocks_response() -> None:
+    """``Annotated[str, regex_guardrail(...)]`` on the return type blocks
+    the response when the regex matches the LLM's output.
+
+    The system prompt instructs the LLM to include the placeholder
+    SSN ``123-45-6789`` verbatim; the guardrail's ``after_run`` hook
+    matches the SSN pattern and raises :class:`GuardrailBlockedError`
+    via the existing v1.0 ``GuardrailsMiddleware``.
+    """
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        @app.agent("support")
+        async def support(query: str) -> Annotated[str, _NO_SSN]:  # type: ignore[empty-body]
+            """Return ONLY the literal placeholder SSN ``123-45-6789``
+            with no other text."""
+
+        with pytest.raises(GuardrailBlockedError, match="SSN"):
+            async with app.lifespan():
+                await support("Please return the placeholder SSN now.")

@@ -43,6 +43,24 @@ def _unwrap_optional(tp: Any) -> Any:
     return tp
 
 
+def _peel_to_core(tp: Any) -> Any:
+    """Iteratively strip ``Annotated[...]`` and ``Optional[...]`` wrappers.
+
+    Resolves the M1 §3.1 carry-forward: a single composition of
+    :func:`_strip_annotated` and :func:`_unwrap_optional` only handles one
+    ordering — ``Optional[Annotated[T, m]]`` works under ``strip(unwrap(...))``
+    but ``Annotated[Optional[T], m]`` does not (the ``Annotated`` wrapper
+    hides the ``Union`` from ``_unwrap_optional`` on the first pass).
+    Looping until convergence handles every nesting shape including
+    ``Optional[Annotated[Optional[T], m]]``.
+    """
+    while True:
+        peeled = _strip_annotated(_unwrap_optional(tp))
+        if peeled is tp:
+            return tp
+        tp = peeled
+
+
 def _is_dict_alias(tp: Any) -> bool:
     """Match ``dict``, ``dict[K, V]``, and ``Mapping[K, V]``."""
     if tp is dict:

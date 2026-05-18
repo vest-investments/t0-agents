@@ -32,14 +32,17 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 
 from fastmcp import Client, FastMCP
+from fastmcp.server import create_proxy
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
 from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
+from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
 
 if TYPE_CHECKING:
     from t0_agents.glow.decorators import _AgentWrapper
@@ -79,7 +82,12 @@ class App:
     :meth:`shutdown`.
     """
 
-    def __init__(self, *, t0: AsyncTensorZeroGateway) -> None:
+    def __init__(
+        self,
+        *,
+        t0: AsyncTensorZeroGateway,
+        servers: list[type[MCPServer]] | None = None,
+    ) -> None:
         self._t0: AsyncTensorZeroGateway = t0
         self._agent_registry: dict[str, _AgentSpec] = {}
         # M3 wires the resolution path; the attribute lives here so
@@ -106,6 +114,26 @@ class App:
         # beyond the per-call cache it threads through recursive
         # resolution, so a single instance per ``App`` is safe.
         self._resolver: DependencyResolver = DependencyResolver()
+
+        # M4: typed-MCP integration.  Specs discovered via the ``servers=``
+        # kwarg are seeded first; ``@app.agent`` registration appends more
+        # specs harvested from parameter annotations (``Annotated`` and
+        # subclass forms).  Each spec is mounted onto ``_mcp_server`` in
+        # :meth:`build` BEFORE entering ``_owned_client``, so mounted
+        # tools appear on the first ``list_tools()`` call.  The list is
+        # not deduplicated here because the same :class:`MCPServerSpec`
+        # instance could legitimately appear from multiple sources
+        # (e.g. ``servers=[GithubMCP]`` plus a decorator-side reference
+        # to the same class) — ``FastMCP.mount`` is idempotent on
+        # identical mounts and namespacing keeps tool names collision-free.
+        self._mcp_specs: list[MCPServerSpec] = []
+        for server_cls in servers or []:
+            if not (isinstance(server_cls, type) and issubclass(server_cls, MCPServer)):
+                raise ConfigurationError(
+                    f"App(servers=...): every entry must be a subclass of "
+                    f"MCPServer; got {server_cls!r}."
+                )
+            self._mcp_specs.append(server_cls._mcp_spec)
 
     # ------------------------------------------------------------------
     # Decorator surface — delegates to ``glow.decorators._make_decorator``
@@ -185,6 +213,12 @@ class App:
         }
         if sub_agents:
             config_kwargs["sub_agents"] = sub_agents
+        if spec.guardrails:
+            # M4: feed harvested ``Annotated[T, Guardrail(...)]`` metadata
+            # into the v1.0 ``AgentConfig.guardrails`` field so the
+            # existing ``GuardrailsMiddleware`` picks them up at runtime
+            # without further glow plumbing.
+            config_kwargs["guardrails"] = spec.guardrails
         agent = Agent(
             AgentConfig(**config_kwargs),
             t0=self._t0,
@@ -231,10 +265,30 @@ class App:
         off network traffic.
         """
         if not self._client_entered:
+            # M4: mount every typed MCP server BEFORE entering the
+            # client so the mounted tools surface on the first
+            # ``list_tools()`` call.  ``FastMCP.mount`` is sync and
+            # immediate — no client re-entry required.  ``url``-based
+            # specs are wrapped via ``create_proxy`` (FastMCP's
+            # canonical bridge from a URL / Client / Transport into a
+            # mountable ``FastMCP`` instance); in-memory ``server``
+            # specs are mounted directly (the ``examples/14_multi_server``
+            # pattern).
+            for mcp_spec in self._mcp_specs:
+                backend: FastMCP[Any]
+                if mcp_spec.server is not None:
+                    backend = mcp_spec.server
+                else:
+                    # ``mcp_spec.url`` is guaranteed non-None when
+                    # ``mcp_spec.server`` is None — MCPServer's
+                    # ``__init__`` / ``__init_subclass__`` enforces
+                    # the xor.
+                    backend = create_proxy(mcp_spec.url)  # type: ignore[arg-type]
+                self._mcp_server.mount(backend, namespace=mcp_spec.namespace)
             await self._exit_stack.enter_async_context(self._owned_client)
             self._client_entered = True
-        for spec in self._agent_registry.values():
-            self._lookup_or_build(spec)
+        for agent_spec in self._agent_registry.values():
+            self._lookup_or_build(agent_spec)
 
     async def shutdown(self) -> None:
         """Disconnect the owned Client.  Idempotent.
