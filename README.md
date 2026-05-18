@@ -241,6 +241,26 @@ picks up the tension the previous one left open.  Start at
 
 Runnable examples for every chapter live under [`examples/`](examples/).
 
+## Experimental: `t0_agents.glow`
+
+A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
+`OutputMode[T]`, `Composer` — lives on the
+[`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
+branch.  Where the base API takes ~25 lines to wire an agent, glow takes
+four: a function with a docstring (the system prompt) and a return-type
+annotation (the `OutputMode`), decorated with `@app.agent`.  The same
+surface adds `compose([a, b, c])` / `compose({a, b}, merge=fn)` / dict-routed
+composition over native Python collections, FastAPI-style `Depends`
+injection for tools and sub-agents, and typed MCP declarations via class-
+based or `Annotated[...]` metadata.
+
+The tutorial walks every public symbol — see
+[`docs/glow/getting-started.md`](docs/glow/getting-started.md) on the
+experimental branch.  Public API is **unstable** and may change before
+v1.1; six runnable examples ship under
+[`examples/glow/`](examples/glow/).  Install with the extra
+(`pip install 't0-agents[glow]'`).
+
 ## Requirements
 
 - Python 3.11, 3.12, or 3.13
