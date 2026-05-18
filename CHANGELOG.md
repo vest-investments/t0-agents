@@ -133,6 +133,23 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `parent_episode_id` correlation through to children for
   ClickHouse reconstruction of nested runs.
 
+#### Guardrails — regex content blocker
+
+- **`regex_guardrail(pattern, message, *, phase="after_run")`** —
+  new built-in factory at `t0_agents.guardrails.regex`, re-exported
+  from `t0_agents.guardrails`.  Blocks a run when
+  `re.search(pattern, ...)` matches: `phase="after_run"` (default)
+  scans `AgentResult.value` (string values directly, everything
+  else JSON-encoded via `json.dumps(default=str)`); `phase="before_run"`
+  scans `GuardrailContext.user_message`.  Raises
+  `GuardrailBlockedError(message)` on a hit, which
+  `GuardrailsMiddleware` propagates as a hard abort.  Pre-compiled
+  `re.Pattern` accepted in lieu of a source string.  Originally
+  introduced inside the experimental glow surface (v1.0 M4);
+  promoted to the canonical namespace in M5 so every `Agent` consumer
+  benefits.  `t0_agents.glow` keeps re-exporting it for the
+  `Annotated[T, Guardrail(...)]` typed-metadata pattern.
+
 #### Documentation
 
 - **`docs/run.md`** — canonical user-facing guide for the `Run`
