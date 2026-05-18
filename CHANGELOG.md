@@ -388,6 +388,51 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   at the `create_proxy(url)` path for remote MCP servers.
 - **Public glow `__all__` grows to 14 entries (M4).**  Adds
   `compose`, `MCPServer`, `regex_guardrail`.
+- **`examples/glow/03_streaming.py` (M5).**  Runnable demo of
+  `FluentRun.events(*selectors)`: a chat agent + a `@app.tool`
+  weather lookup + a live `async for` loop driving three
+  selectors at once (`Thought`, `ToolCall.map(...)`, `Text`).
+  Reuses the existing `[functions.agent]` chat function — no new
+  TZ config.  Closes the M2 §4 (M5) carry-forward.
+- **`docs/glow/getting-started.md` (M5).**  Canonical user-facing
+  tutorial.  14 sections cover every public glow symbol plus the
+  load-bearing callouts inherited from M0–M4:
+  toolless-chat, "Composers and agents are the same thing", sets
+  and merging, `race` deprecation, the dict-router model-capability
+  requirement, `Depends` + sub-agents-via-`Depends(agent)`, typed
+  MCP, `Annotated[T, Guardrail(...)]`, and the
+  `app.lifespan()`-as-entry-point recommendation.
+- **`docs/glow/limitations.md` (M5).**  Known limitations of the
+  glow surface: no streaming JSON, no `AsyncIterator` tools, no
+  per-agent MCP subsets, the LLM-router model-capability
+  requirement, the `[glow]` extra's hard pydantic dep, the
+  `_AgentWrapper.__call__` ParamSpec dual-personality, the
+  `05_di_tools.py` agent-uses-tool example gap, and the `race()`
+  deprecation cross-link.
+- **`docs/internals/glow/comparison.md` (M5).**  Reproducible
+  line-count comparison vs `examples/02_agent_class/basic.py`.  Raw
+  `wc -l` posts 24.6% reduction; the code-only methodology (strip
+  blanks, `#`-prefixed comments, leading module docstring) posts
+  42.1% reduction, clearing the spec's ≥40% acceptance target.
+  Embeds the Python snippet that produces the table.
+- **Top-level `README.md` points at the glow tutorial (M5).**  A
+  small "Experimental: `t0_agents.glow`" section sits between the
+  Documentation reading-path and the Requirements block; flags
+  unstable status; links to `docs/glow/getting-started.md` and the
+  `experimental/glow` branch; mentions the `[glow]` install extra.
+- **`regex_guardrail` migrated to v1.0 core, re-exported from
+  glow (M5).**  The factory now lives at
+  `src/t0_agents/guardrails/regex.py` and is re-exported by
+  `t0_agents.guardrails`; the glow module collapses its body to a
+  one-line `from t0_agents.guardrails import regex_guardrail` so
+  the `Annotated[T, regex_guardrail(...)]` typed-metadata pattern
+  keeps working.  The migration adds a new v1.0 `### Added` entry
+  earlier in this changelog (`#### Guardrails — regex content
+  blocker`); the 9 regex-direct-hook tests previously in
+  `tests/test_glow/test_guardrails_typing.py` are now at
+  `tests/test_guardrails/test_regex.py` (10 tests including a new
+  precompiled-pattern path).  Closes the M4 §4 (M5) carry-forward.
+  Analogous to the M2 D5 toolless-chat unlock.
 
 ### Changed
 
