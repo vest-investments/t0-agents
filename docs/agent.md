@@ -2,16 +2,20 @@
 
 The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.invoke(message)` surface that returns a `Run[T]` handle (awaitable for the final `AgentResult`, iterable for live `AgentEvent`s). Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
 
+> **Prefer the four-line decorator path?** Start at
+> [`docs/glow/`](glow/index.md) — this page documents the canonical
+> surface glow compiles down to.
+>
 > **v1.0 surface — read these three pages first:**
 > [Run](run.md) (the invocation handle), [Middleware](middleware.md)
 > (composable cross-cutting concerns), [Output modes](output-modes.md)
 > (polymorphic output shape).  Multi-agent topologies are built
 > directly from these primitives — see [Multi-Agent](multi-agent.md)
 > and the runnable examples under
-> [`examples/12_concurrency/`](../examples/12_concurrency/).  The legacy
-> `agent.run()` / `agent.stream()` entry points were removed in v1.0
-> — use `agent.invoke(...)` and `run.events()` instead.  The v0.12 →
-> v1.0 migration playbook lives in
+> [`examples/agent/12_concurrency/`](../examples/agent/12_concurrency/).
+> The legacy `agent.run()` / `agent.stream()` entry points were
+> removed in v1.0 — use `agent.invoke(...)` and `run.events()`
+> instead.  The v0.12 → v1.0 migration playbook lives in
 > [migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ```
@@ -99,7 +103,7 @@ asyncio.run(main())
 
 What just happened: `Agent.invoke` called `AsyncTensorZeroGateway.inference` with your prompt plus the tool schemas discovered from your FastMCP server, executed any tool calls the LLM produced, fed the results back, and looped until the model returned a tool-call-free response. The caller still owns the lifecycle of both the gateway and the MCP client — `Agent` never opens or closes either.
 
-For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP server, README), see [`examples/02_agent_class/`](../examples/02_agent_class/).
+For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP server, README), see [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/).
 
 ## Concepts
 
@@ -309,7 +313,7 @@ Bridges a FastMCP elicitation handler (which must return inline) to an out-of-pr
 
 ### Easy — one-liner
 
-The quickstart above (and [`examples/02_agent_class/`](../examples/02_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.invoke(message)` call.
+The quickstart above (and [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.invoke(message)` call.
 
 ### Intermediate — non-trivial config knobs
 
@@ -338,7 +342,7 @@ The `tags` passed to `.invoke()` shallow-merge on top of `config.tags`; per-call
 
 ### Advanced — custom `ToolProvider`
 
-`ToolProvider` is structural — anything with the two async methods works. The most complete reference implementation that ships with this library is `t0_agents.testing.MockToolProvider`, documented in [testing.md](testing.md) and used in [`examples/11_testing/`](../examples/11_testing/). Use it as the template when you want to:
+`ToolProvider` is structural — anything with the two async methods works. The most complete reference implementation that ships with this library is `t0_agents.testing.MockToolProvider`, documented in [testing.md](testing.md) and used in [`examples/agent/11_testing/`](../examples/agent/11_testing/). Use it as the template when you want to:
 
 - feed tools into an `Agent` from a source that isn't a FastMCP server,
 - write fast, deterministic unit tests without Docker, or

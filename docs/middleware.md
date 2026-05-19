@@ -474,3 +474,6 @@ gateway, to `mcp/`, and across runs stay clear.
   `MemoryMiddleware`.
 - [`docs/api-reference.md` — Middleware](api-reference.md#middleware-1)
   — exhaustive symbol table.
+- [`docs/glow/escape-hatch.md`](glow/escape-hatch.md) — per-call
+  middleware override from a `@app.agent` wrapper via
+  `wrapper._agent.invoke(..., middleware=[...])`.

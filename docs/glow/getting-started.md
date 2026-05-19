@@ -2,14 +2,15 @@
 
 > **Experimental.** Public API on the
 > [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
-> branch is unstable.  This tutorial is the canonical entry point;
-> known limitations are catalogued at [`limitations.md`](limitations.md).
+> branch is unstable.  Known limitations are catalogued at
+> [`limitations.md`](limitations.md); the escape hatch to the v1.0
+> `Agent` lives at [`escape-hatch.md`](escape-hatch.md).
 
 `t0_agents.glow` is a Pythonic skin over the v1.0 primitives — `Agent`,
-`Run[T]`, and `OutputMode[T]`.  Where the base API takes ~25
-lines to construct an `AgentConfig`, build the gateway and FastMCP
-client, and orchestrate a `Run`, glow takes four: a function with
-a docstring and a return-type annotation, decorated with `@app.agent`.
+`Run[T]`, and `OutputMode[T]`.  Where the base API takes ~25 lines to
+construct an `AgentConfig`, build the gateway and FastMCP client, and
+orchestrate a `Run`, glow takes four: a function with a docstring and
+a return-type annotation, decorated with `@app.agent`.
 
 ```python
 from t0_agents.glow import App
@@ -25,9 +26,7 @@ print(await tutor("How do I say hello in formal Japanese?"))
 The docstring is the system prompt; the `-> str` return annotation
 selects [`ChatOutput`](../output-modes.md); `await tutor(...)` returns
 the unwrapped string directly.  Everything else — MCP, tool routing,
-event streaming — is opt-in.  Below is the full tour.  Each section
-is short enough to read in one pass; the running examples under
-[`examples/glow/`](../../examples/glow/) are the long-form companion.
+event streaming — is opt-in.
 
 Install glow with the extra:
 
@@ -39,6 +38,11 @@ The extra pulls `pydantic>=2.0` (FastAPI precedent — glow uses pydantic
 for type introspection in a few places).  See
 [`limitations.md`](limitations.md#pydantic-is-a-hard-dep-of-the-glow-extra)
 for the rationale.
+
+The running examples under [`examples/glow/`](../../examples/glow/) are
+the long-form companion to this tutorial — boot the gateway once with
+`docker compose -f examples/glow/docker-compose.yml --env-file .env up -d`
+and run each with `uv run python examples/glow/<NN>_*.py`.
 
 ---
 
@@ -120,47 +124,6 @@ unwrapped value.
 
 ---
 
-## Streaming and event selectors
-
-`FluentRun.events(*selectors)` is the typed event stream from
-[`Run.events()`](../streaming.md), filtered.  Seven module-level
-selectors cover the [v1.0 event union](../../src/t0_agents/stream/events.py):
-`Thought`, `ToolCall`, `Text`, `ToolResult`, `TurnEnd`, `Done`,
-`Error`.  Compose them with `.where(pred)` (AND-chains predicates) and
-`.map(fn)` (transforms the yielded value).
-
-```python
-from t0_agents.glow import Thought, ToolCall, Text
-
-async for event in tutor("Explain present perfect").events(
-    Thought,
-    ToolCall.map(lambda tc: f"> calling {tc.name}"),
-    Text,
-):
-    ...
-```
-
-`Text` defaults to `TextEndEvent` (the completion marker for one
-text block).  For token-by-token streaming, build a selector for
-`TextDeltaEvent` directly and map it to the delta string:
-
-```python
-from t0_agents.glow import Selector
-from t0_agents.stream.events import TextDeltaEvent
-
-async for delta in tutor("Explain present perfect").events(
-    Selector(TextDeltaEvent).map(lambda e: e.delta),
-):
-    print(delta, end="", flush=True)
-```
-
-Passing no selectors yields every `AgentEvent` (parity with
-`Run.events()`).  Glow only supports streaming for chat-flavoured
-output modes; the [v1.0 chat-only constraint](../streaming.md) carries
-through.  Demo: [`03_streaming.py`](../../examples/glow/03_streaming.py).
-
----
-
 ## Multi-agent patterns
 
 glow has no compose() helper of its own — three canonical patterns,
@@ -178,177 +141,30 @@ in the gap.  Parallel is `asyncio.gather(a(q), b(q),
 return_exceptions=True)` plus whatever reducer fits the data.
 Orchestrator declares each sub-agent as a normal `@app.agent` and
 threads them into the parent decorator via `Depends(<wrapper>)`
-parameters; v1.0's `install_sub_agents` (now in
-`t0_agents.delegation`) wires each as a `<name>_ask` MCP tool on
-the parent's App-owned FastMCP server.  See [Multi-agent](../multi-agent.md)
-for the legacy-Agent counterparts and the wiring details.
+parameters; the v1.0 sub-agent installer (now in
+[`t0_agents.delegation`](../multi-agent.md)) wires each as a
+`<name>_ask` MCP tool on the parent's App-owned FastMCP server.
 
----
-
-## `Depends` — tools and sub-agents
-
-`Depends(provider)` is FastAPI's injection sentinel.  glow uses it
-in two places:
-
-**Inside `@app.tool` — value-style injection.**  Strip the dependency
-parameter from the tool's auto-generated JSON Schema (so the LLM
-never sees it) and re-inject it at call time:
-
-```python
-from t0_agents.glow import Depends
-
-async def get_db() -> DB: ...
-
-@app.tool
-async def lookup_order(order_id: str, db: DB = Depends(get_db)) -> Order:
-    return await db.orders.get(order_id)
-
-# Tests:
-app.dependency_overrides[get_db] = lambda: InMemoryDB(...)
-```
-
-Providers may themselves take `Depends` (recursive resolution); sync,
-async, and sync-returning-awaitable shapes are all supported.  The
-override dict is consulted on every call, not snapshotted at
-registration — drop in a mock at test time without re-instantiating
-the decorator.
-
-**Inside `@app.agent` — sub-agent injection.**  When the parameter
-is typed as a glow agent wrapper and the provider is itself a
-glow-registered agent, glow installs it as a sub-agent on the
-parent `AgentConfig.sub_agents` declaratively:
-
-```python
-@app.agent("orchestrator")
-async def orchestrator(
-    query: str,
-    research: Agent = Depends(researcher),
-    write: Agent    = Depends(writer),
-) -> str:
-    """Calls research → write."""
-```
-
-The sub-agents become `{name}_ask` tools on the orchestrator's MCP
-server (the v1.0 [multi-agent composition](../multi-agent.md) path).
-Value-style `Depends(get_db)` on `@app.agent` raises
-`ConfigurationError` — the runtime only has two defined behaviours
-for `@app.agent` parameters (the user message and sub-agents), so
-glow rejects ambiguous shapes loudly.  Demo:
-[`05_di_tools.py`](../../examples/glow/05_di_tools.py).
-
----
-
-## Typed MCP
-
-Two patterns coexist:
-
-```python
-from fastmcp import FastMCP
-from t0_agents.glow import App, MCPServer
-
-# 1. Class-based — preferred for shared servers.
-class MathMCP(MCPServer, server=_math_mcp_instance, namespace="math"): ...
-
-app = App(t0=t0, servers=[MathMCP])
-
-# 2. Annotated — per-parameter override on a single agent.
-@app.agent("calc")
-async def calc(query: str, math: Annotated[Any, MCPServer(url="http://...")]) -> str:
-    """Math assistant with a remote MCP server."""
-```
-
-Class-based declarations register the spec on
-`__init_subclass__`; annotation-based declarations are harvested by
-`@app.agent`'s parameter walk.  `App.build()` mounts every spec on
-the App-owned composed FastMCP via `FastMCP.mount()` for in-memory
-servers and `fastmcp.server.create_proxy(url)` for remote
-HTTP/SSE/STDIO endpoints.  Remote auth headers and transport
-options pass through `create_proxy(url, ...)`.
-
-Every glow agent on a given `App` sees every mounted server — per-
-agent MCP subsets are a [known limitation](limitations.md#no-per-agent-mcp-subsets);
-spin up multiple `App` instances for strict isolation.  Demo:
-[`06_mcp_typing.py`](../../examples/glow/06_mcp_typing.py).
-
----
-
-## Guardrails as type metadata
-
-The v1.0 [guardrail factories](../guardrails.md) (`require_approval`,
-`max_cost`, `max_tool_calls`, `block_tools`, `require_parsed`,
-`regex_guardrail`) can be attached as `Annotated` metadata on
-`@app.agent` parameter or return annotations.  `regex_guardrail`
-lives in `t0_agents.guardrails` and is also re-exported from
-`t0_agents.glow` so the typed-metadata pattern composes cleanly:
-
-```python
-from typing import Annotated
-from t0_agents.glow import regex_guardrail
-from t0_agents.guardrails import max_cost
-
-no_pii = regex_guardrail(r"\b\d{3}-\d{2}-\d{4}\b", "no SSN")
-under_budget = max_cost(0.50)
-
-@app.agent("support")
-async def support(query: str) -> Annotated[str, no_pii, under_budget]:
-    """Customer support."""
-```
-
-`@app.agent`'s decoration-time walk harvests every Annotated
-metadata entry satisfying the `Guardrail` Protocol and folds it
-into `AgentConfig.guardrails`.  Runtime path is unchanged — the
-canonical `GuardrailsMiddleware` does the work.  `phase="before_run"`
-guardrails (e.g. `regex_guardrail(pattern, msg, phase="before_run")`)
-also work attached to a parameter annotation; the metadata harvest
-is symmetric.
-
----
-
-## Lifespan, build, shutdown
-
-The App owns a long-lived in-memory FastMCP server + matching
-Client (`app._owned_client`).  Tools registered via `@app.tool`
-land on that server; class-based `MCPServer` declarations mount
-remote endpoints into the same composed view.  The Client enters
-its in-process transport task inside `app.build()`; `app.shutdown()`
-closes it; `app.lifespan()` is the recommended entry point and does
-`build → yield → shutdown` in a `try/finally`:
-
-```python
-async def main() -> None:
-    async with await gateway as t0:
-        app = App(t0=t0)
-
-        @app.agent("tutor")
-        async def tutor(q: str) -> str: ...
-
-        async with app.lifespan():            # ← here
-            print(await tutor("Say hi"))
-```
-
-Without `lifespan()` (or an explicit `build()`/`shutdown()` pair),
-the first agent invocation reaches an unentered Client and the
-FastMCP transport raises.  Build is idempotent; `lifespan()` is
-re-entrant in the sense that consecutive calls construct and tear
-down cleanly.  Forward-ref failures, duplicate agent names, and
-mis-shaped `Depends` declarations all surface at `build()` time
-rather than at the first inference, matching FastAPI's fail-fast
-ergonomics.
+The full DI pattern — value-style `Depends(get_db)` for tools and
+sub-agent injection for `@app.agent` — is documented in
+[`depends-and-tools.md`](depends-and-tools.md).
 
 ---
 
 ## Where to go next
 
-- **All six runnable examples** under
-  [`examples/glow/`](../../examples/glow/) — boot the gateway with
-  `docker compose -f examples/glow/docker-compose.yml --env-file .env up -d`
-  and run each with `uv run python examples/glow/<NN>_*.py`.
-- **[Known limitations](limitations.md)** — what's deferred to v1.1.
-- **[v1.0 docs](../index.md)** — the underlying primitives glow compiles
-  to.  Glow's escape hatch is `wrapper._agent` (the v1.0 `Agent`
-  built by the decorator); drop down to `Agent.invoke(...)` whenever
-  the high-level surface is in your way.
-- **Branch:**
-  [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
-  — the branch this tutorial documents.  Public API is unstable
-  until the user opts in to merging back to `main`.
+- **[Streaming and events](streaming-and-events.md)** — `FluentRun.events(*selectors)`,
+  the seven typed selectors, and the `Selector(TextDeltaEvent)` recipe for
+  token-by-token streaming.
+- **[Depends and tools](depends-and-tools.md)** — value-style injection inside
+  `@app.tool`, sub-agent injection inside `@app.agent`, and the
+  `app.dependency_overrides` test hook.
+- **[Typed MCP and guardrails](typed-mcp-and-guardrails.md)** — class-based
+  `MCPServer` declarations, the `Annotated[...]` override, and the
+  `Annotated[T, guardrail(...)]` metadata pattern.
+- **[Escape hatch to v1.0](escape-hatch.md)** — when glow stands in your way:
+  `wrapper._agent` is the v1.0 `Agent` the decorator built, plus
+  `app.lifespan()` / `build()` / `shutdown()` for explicit lifecycle.
+- **[Known limitations](limitations.md)** — what's deferred to v1.1
+  (streaming JSON, per-agent MCP subsets, AsyncIterator tools, sync API).
+- **[v1.0 docs](../index.md)** — the underlying primitives glow compiles to.

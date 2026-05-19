@@ -51,6 +51,8 @@ t0-agents = "t0_agents.cli.app:main"
 
 [project.urls]
 Repository = "https://github.com/sproutfi/t0-agents"
+Documentation = "https://github.com/sproutfi/t0-agents/blob/main/docs/index.md"
+Changelog = "https://github.com/sproutfi/t0-agents/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]

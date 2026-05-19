@@ -1,5 +1,9 @@
 # Getting Started
 
+> **Prefer the four-line decorator path?** Start at
+> [`docs/glow/getting-started.md`](glow/getting-started.md) — same
+> install, one decorator, no `AgentConfig` boilerplate.
+
 ## Install
 
 ```bash
@@ -93,4 +97,4 @@ Both the `AsyncTensorZeroGateway` and `Client` must be entered as async context 
 - [Elicitation](elicitation.md) -- human-in-the-loop approval and structured input, with no changes to `run_agent`.
 - [Error handling](error-handling.md) -- how the loop handles tool errors, hallucinated tool names, timeouts, and `max_turns`.
 - [Observability](observability.md) -- episode IDs, inference IDs, feedback to ClickHouse.
-- Examples: [`01_adapter_basics`](../examples/15_adapter_low_level/) (offline), [`02_basic_agent`](../examples/01_first_agent/) (loop), [`05_error_handling`](../examples/02_agent_class/), [`07_elicitation`](../examples/04_elicitation/).
+- Examples: [`15_mcp_internals`](../examples/agent/15_mcp_internals/) (offline adapter basics), [`01_first_agent`](../examples/agent/01_first_agent/) (loop), [`02_agent_class`](../examples/agent/02_agent_class/) (error handling), [`04_elicitation`](../examples/agent/04_elicitation/).

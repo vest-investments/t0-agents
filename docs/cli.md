@@ -62,7 +62,7 @@ quickstart for the CLI (the factory contract requires live resources).
 ## Quickstart
 
 Run the shipped example agent end-to-end. The example lives at
-[`examples/10_cli/`](../examples/10_cli/) and exposes two tools: `add`
+[`examples/agent/10_cli/`](../examples/agent/10_cli/) and exposes two tools: `add`
 (plain) and `set_reminder` (elicitation).
 
 ```bash
@@ -556,7 +556,7 @@ Use `--streaming` only when the served agent's tools never call
 For full streaming + browser elicitation, drop the CLI and call
 [`create_app`](serving.md) directly with a `client_factory` plus an
 `elicitation_client_factory`. The reference implementation is at
-[`examples/07_streaming/agent_app.py`](../examples/07_streaming/agent_app.py),
+[`examples/agent/07_streaming/agent_app.py`](../examples/agent/07_streaming/agent_app.py),
 and the protocol reference lives in [Streaming](streaming.md).
 
 ---
@@ -675,7 +675,7 @@ async def my_elicitation_handler(message, response_type, params, context):
 For a fully runnable version that also composes on
 `make_rich_elicitation_handler` (so the stock pause / resume + schema
 dispatch stay in place) and writes an audit trail, see
-[`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) — it
+[`examples/agent/10_cli/advanced.py`](../examples/agent/10_cli/advanced.py) — it
 exposes `assistant_with_audit`, runnable via `t0-agents run
 examples.10_cli.advanced:assistant_with_audit`.
 
@@ -777,7 +777,7 @@ recursion. For scalar responses, FastMCP wraps the field in
   prompt dispatch — the wrapper adds behaviour (logging, consent gates,
   side-channel notifications) while the stock handler keeps driving
   the actual prompts. See
-  [`examples/10_cli/advanced.py`](../examples/10_cli/advanced.py) for a
+  [`examples/agent/10_cli/advanced.py`](../examples/agent/10_cli/advanced.py) for a
   runnable audit-logging wrapper.
 
 ---
@@ -895,7 +895,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 
 - **Browser client needs elicitation** — the CLI's Rich handler only
   works in the same terminal the REPL runs in. For browser-hosted
-  serving, see [`examples/07_streaming/`](../examples/07_streaming/)
+  serving, see [`examples/agent/07_streaming/`](../examples/agent/07_streaming/)
   for the `SessionProvider`-based WS wiring.
 
 ---
@@ -926,7 +926,7 @@ surface (custom tags, ClickHouse hooks, reflection queries).
 ## Example
 
 A runnable end-to-end walkthrough lives at
-[`examples/10_cli/`](../examples/10_cli/):
+[`examples/agent/10_cli/`](../examples/agent/10_cli/):
 
 - `server.py` — FastMCP server exposing `add` and `set_reminder`
   (structured-elicitation tool).

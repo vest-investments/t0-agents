@@ -20,6 +20,33 @@ from t0_agents.mcp import (
 )
 ```
 
+> **Glow surface** — the decorator API (13 public symbols, behind the
+> `[glow]` extra):
+>
+> ```python
+> from t0_agents.glow import (
+>     App,              # FastAPI-style decorator container
+>     Depends,          # injection sentinel (tool values, sub-agents)
+>     FluentRun,        # awaitable handle, .events()/.json()/.text()
+>     MCPServer,        # typed MCP server metaclass + Annotated marker
+>     Selector,         # generic typed event filter
+>     Thought,          # selector for ThoughtEvent
+>     ToolCall,         # selector for ToolCallEvent
+>     Text,             # selector for TextEndEvent
+>     ToolResult,       # selector for ToolResultEvent
+>     TurnEnd,          # selector for TurnEndEvent
+>     Done,             # selector for DoneEvent
+>     Error,            # selector for ErrorEvent
+>     regex_guardrail,  # re-export from t0_agents.guardrails.regex
+> )
+> ```
+>
+> See [`docs/glow/index.md`](glow/index.md) for the full guide.
+> Install with `pip install 't0-agents[glow]'` — the extra pulls
+> `pydantic>=2.0`.  Every `@app.agent` wrapper exposes `_agent` (the
+> v1.0 `Agent` the decorator built); the drop-down recipes live at
+> [`docs/glow/escape-hatch.md`](glow/escape-hatch.md).
+
 > **v1.0 output modes** — 11 new public symbols:
 >
 > ```python
@@ -217,7 +244,7 @@ result = await agent.invoke(
 )
 ```
 
-See [`examples/02_agent_class/`](../examples/02_agent_class/)
+See [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/)
 for the runnable PaaS-style demo.
 
 ---

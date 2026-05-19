@@ -114,25 +114,10 @@ framework (FastAPI, httpx) directly.
 ## Where to drop down to v1.0
 
 When the glow surface stands in your way, the escape hatch is
-always `wrapper._agent`: the v1.0 `Agent` constructed by
-`@app.agent` is exposed for direct use.
-
-```python
-@app.agent("tutor")
-async def tutor(q: str) -> str:
-    """An English tutor."""
-
-async with app.lifespan():
-    # Drop down to v1.0:
-    run = tutor._agent.invoke("Say hi", middleware=[...], output=...)
-    result = await run.result()
-```
-
-That sidesteps `FluentRun`, gives you the full `Run[T]` surface,
-and bypasses every glow walker (DI, MCP injection, guardrail
-harvesting).  Sub-agents, MCP mounts, and `@app.tool`
-registrations remain visible because the `tool_provider` is still
-`app._owned_client`.
+[`escape-hatch.md`](escape-hatch.md): every `@app.agent` wrapper
+exposes `_agent`, the v1.0 `Agent` the decorator constructed, with
+the full [`Run[T]`](../run.md) / [`Middleware`](../middleware.md) /
+[`OutputMode`](../output-modes.md) surface intact.
 
 ---
 

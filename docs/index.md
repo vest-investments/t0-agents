@@ -1,13 +1,14 @@
 # t0-agents Documentation
 
-t0-agents is a Python library that connects [TensorZero](https://www.tensorzero.com/docs/) (an LLM inference gateway with built-in observability and analytics) to [FastMCP](https://gofastmcp.com/) (an MCP server framework for exposing tools). Together, they enable LLM agents that can discover and execute tools through MCP while retaining TensorZero's structured inference, episode tracking, and ClickHouse-backed analytics.
+t0-agents is a Python library that connects [TensorZero](https://www.tensorzero.com/docs/) (an LLM inference gateway with built-in observability and analytics) to [FastMCP](https://gofastmcp.com/) (an MCP server framework for exposing tools).  Together they enable LLM agents that can discover and execute tools through MCP while retaining TensorZero's structured inference, episode tracking, and ClickHouse-backed analytics.
 
-The documentation is written as a progressive tour: start with [Getting Started](getting-started.md), follow the **Reading path** below in order — each chapter picks up the tension the previous one left open — and reach for the **Appendices** when you need a cross-cutting reference.
+The library ships **two surfaces, one engine**: [`t0_agents.glow`](glow/index.md) is the four-line decorator path (start here); the canonical `Agent` / `Run[T]` / `Middleware` / `OutputMode[T]` surface is the explicit construction path (the page set that follows).  Every `@app.agent` wrapper exposes `_agent` — the same v1.0 `Agent` — so the two surfaces are not parallel paths, they are layers.
 
 ## Modules
 
 | Module | Status | Description |
 |--------|--------|-------------|
+| `t0_agents.glow` | Experimental | FastAPI-style decorator surface (`[glow]` extra): `App`, `@app.agent`, `@app.tool`, `Depends`, `FluentRun`, class-based `MCPServer`, seven typed event selectors (`Thought`, `ToolCall`, `Text`, `ToolResult`, `TurnEnd`, `Done`, `Error`), `regex_guardrail` re-export.  Four-line "hello agent" path that compiles down to a real v1.0 `Agent`.  See the [`docs/glow/`](glow/index.md) ladder. |
 | `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, the v1.0 three-abstraction surface (`Run[T]`, `Middleware`, `OutputMode[T]`), and the JSON-function dispatch covered in [Output modes](output-modes.md) and the legacy [Structured outputs](structured-outputs.md) reference. |
 | `t0_agents.mcp` | Stable | MCP adapter (`convert_tools`, `serialize_tool_result`, `build_tool_result`), agent loop (`run_agent`, `execute_tool_calls`, `execute_tool_calls_parallel`, `has_tool_calls`), and reference elicitation handlers (`auto_approve_handler`, `auto_decline_handler`) |
 | `t0_agents.memory` | Stable | Cross-run persistence keyed by TensorZero's episode id: the `MemoryProvider` Protocol, `MemoryRecord` dataclass, `render_memory_summary` renderer, the ephemeral `InMemoryMemory`, the SQLite-backed `SqliteMemory`, and `TensorZeroMemory` for episode-scoped reads from TZ's observability log (with the `memory_strategy="messages"` native-history path that threads conversation history through `input.messages` without stringification) |
@@ -20,6 +21,24 @@ The documentation is written as a progressive tour: start with [Getting Started]
 
 ## Reading path
 
+### glow — the four-line path
+
+Start here if you want the shortest distance from query to answer.  Each
+chapter is short enough to read in one pass; the runnable companions
+live under [`examples/glow/`](../examples/glow/).
+
+1. **[Getting Started](glow/getting-started.md)** — toolless chat, structured outputs by return type, per-call overrides (`.json()` / `.text()` / `.as_()`), and the three multi-agent patterns.
+2. **[Streaming and events](glow/streaming-and-events.md)** — `FluentRun.events(*selectors)`, seven typed selectors, `.where(pred)` / `.map(fn)`, the token-by-token `Selector(TextDeltaEvent)` recipe.
+3. **[Depends and tools](glow/depends-and-tools.md)** — value-style injection inside `@app.tool`, sub-agent injection inside `@app.agent`, and `app.dependency_overrides` for tests.
+4. **[Typed MCP and guardrails](glow/typed-mcp-and-guardrails.md)** — class-based `MCPServer` declarations, the `Annotated[...]` override, and the `Annotated[T, guardrail(...)]` metadata pattern.
+5. **[Escape hatch](glow/escape-hatch.md)** — `wrapper._agent` IS the v1.0 `Agent`; lifespan / build / shutdown; drop-down recipes for middleware, custom `OutputMode`, hand-rolled event handling, and `cancel()` / `fork()` / `replay()`.
+6. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, per-agent MCP subsets, AsyncIterator tools, sync API).
+
+### Agent — the canonical, fully-typed surface
+
+The explicit construction path.  Read it when you outgrow the decorator or
+want the typed view of every collaborator.
+
 1. **[Getting Started](getting-started.md)** — install the library and run your first agent in under five minutes via the canonical `Agent.invoke` surface.
 2. **[Agent](agent.md)** — meet the declarative `Agent` class, its `AgentConfig`, and the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`) the later chapters wire in.
 3. **[Run](run.md)** — `agent.invoke(message)` returns a `Run[T]`: the first-class invocation handle.  Await it for the final `AgentResult`, iterate `events()` for live `AgentEvent`s, cancel, replay, fork, attach feedback.
@@ -30,7 +49,7 @@ The documentation is written as a progressive tour: start with [Getting Started]
 8. **[Memory](memory.md)** — the loop is stateless between runs; wire a `MemoryProvider` into `AgentConfig` to give it a past — ephemeral in-process, persistent SQLite, or a backend of your own.
 9. **[Guardrails](guardrails.md)** — the agent now remembers and is equipped with tools; guardrails decide what it may do with them (approval gates, cost caps, tool-call limits, deny-lists, custom policies).
 10. **[Streaming](streaming.md)** — until now you only saw the final response; iterate `agent.invoke(message).events()` to narrate the loop live with typed events, SSE, and WebSocket.
-11. **[Multi-Agent Composition](multi-agent.md)** — the declarative `AgentConfig.sub_agents=[...]` path (LLM-driven delegation), plus runnable canonical patterns (Sequential, Parallel, Orchestrator) under [`examples/12_concurrency/`](../examples/12_concurrency/) and [`examples/glow/`](../examples/glow/).
+11. **[Multi-Agent Composition](multi-agent.md)** — the declarative `AgentConfig.sub_agents=[...]` path (LLM-driven delegation), plus runnable canonical patterns (Sequential, Parallel, Orchestrator) under [`examples/agent/12_concurrency/`](../examples/agent/12_concurrency/) and [`examples/glow/`](../examples/glow/).
 12. **[Serving](serving.md)** — drop the whole stack (single agent or orchestrator, with or without memory and guardrails) behind `/chat`, `/chat/stream`, and `/chat/ws` with `create_app`.
 13. **[CLI](cli.md)** — the same stack, in a terminal, via the `t0-agents` console script: an interactive `run` REPL, a `serve` dev HTTP server, and `info` introspection.
 14. **[Testing](testing.md)** — keep every layer above from regressing with `MockGateway` and `MockToolProvider` for deterministic unit tests, and `EmbeddedGatewayHelper` for real-inference integration tests without Docker.
@@ -60,7 +79,13 @@ each other when a pattern spans both sides.
 ## Public API
 
 ```python
+# The canonical surface:
 from t0_agents import Agent, AgentConfig, run_agent, AgentResult, MaxTurnsExceededError, ToolChoice
+
+# The glow decorator surface ([glow] extra):
+from t0_agents.glow import App, Depends, FluentRun, MCPServer, Selector
+from t0_agents.glow import Thought, ToolCall, Text, ToolResult, TurnEnd, Done, Error
+from t0_agents.glow import regex_guardrail
 ```
 
 ## Requirements

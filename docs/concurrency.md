@@ -58,7 +58,7 @@ When in doubt, leave it off and turn it on per-agent once you have read the [Pro
    - mentions of the BFCL parallel-category benchmark
    - whether the provider's API exposes a `parallel_tool_calls: bool` parameter — if it does, the model is probably capable
 
-   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/12_concurrency/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
+   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/agent/12_concurrency/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
 
 2. **Provider-gateway support inside TensorZero.** Even when the upstream model is capable, the gateway has to forward the parallel-emission hint. TensorZero maintains an allowlist; at the time of writing **Groq is not on it** (`tests/test_mcp/test_integration.py:388` documents the constraint), while OpenAI and Fireworks AI are. Check TensorZero's release notes and your provider block in `tensorzero.toml`.
 
