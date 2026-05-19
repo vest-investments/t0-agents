@@ -176,6 +176,6 @@ If you find yourself reaching for any of the above, the answer is almost always 
 
 - `parallel_tools` field — [`AgentConfig`](agent.md#agentconfig) and the low-level [`run_agent`](api-reference.md#run_agent) signature
 - Sequential and parallel executors — `src/t0_agents/mcp/loop.py` (`execute_tool_calls`, `execute_tool_calls_parallel`)
-- Sub-agent dispatch — [`Multi-Agent Composition`](multi-agent.md), `src/t0_agents/compose/`
+- Sub-agent dispatch — [`Multi-Agent Composition`](multi-agent.md), `src/t0_agents/delegation/`
 - Guardrail safety under parallel dispatch — [`Guardrails`](guardrails.md#parallel_toolstrue)
 - Provider-side caveats (which models even emit multiple tool calls per turn) — [`Production`](production.md#parallel-vs-sequential-tool-execution)
