@@ -21,6 +21,10 @@ from t0_agents import Agent, AgentConfig, DoneEvent, TextDeltaEvent, ToolCallEve
 > [Structured outputs — Why you cannot stream JSON functions](structured-outputs.md#why-you-cannot-stream-json-functions)
 > for the rationale and recommended pattern (call `Agent.invoke(...)` and
 > present the JSON on the consumer side once it lands).
+>
+> **Glow companion.**  `FluentRun.events(*selectors)` filters this
+> stream through typed selectors (`Thought`, `ToolCall`, `Text`, …);
+> see [`docs/glow/streaming-and-events.md`](glow/streaming-and-events.md).
 
 ## Why stream?
 

@@ -21,6 +21,11 @@ The subsystem ships four built-ins:
 Bring your own by implementing the structural `Guardrail` Protocol —
 four optional async hooks and a `name` attribute. No inheritance required.
 
+> **Glow companion.**  Guardrails can be attached as `Annotated[T,
+> guardrail(...)]` metadata on `@app.agent` parameter or return
+> annotations; the runtime path is unchanged.  See
+> [`docs/glow/typed-mcp-and-guardrails.md`](glow/typed-mcp-and-guardrails.md).
+
 ---
 
 ## Installation

@@ -2,16 +2,20 @@
 
 The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.invoke(message)` surface that returns a `Run[T]` handle (awaitable for the final `AgentResult`, iterable for live `AgentEvent`s). Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
 
+> **Prefer the four-line decorator path?** Start at
+> [`docs/glow/`](glow/index.md) — this page documents the canonical
+> surface glow compiles down to.
+>
 > **v1.0 surface — read these three pages first:**
 > [Run](run.md) (the invocation handle), [Middleware](middleware.md)
 > (composable cross-cutting concerns), [Output modes](output-modes.md)
 > (polymorphic output shape).  Multi-agent topologies are built
 > directly from these primitives — see [Multi-Agent](multi-agent.md)
 > and the runnable examples under
-> [`examples/12_concurrency/`](../examples/12_concurrency/).  The legacy
-> `agent.run()` / `agent.stream()` entry points were removed in v1.0
-> — use `agent.invoke(...)` and `run.events()` instead.  The v0.12 →
-> v1.0 migration playbook lives in
+> [`examples/agent/12_concurrency/`](../examples/agent/12_concurrency/).
+> The legacy `agent.run()` / `agent.stream()` entry points were
+> removed in v1.0 — use `agent.invoke(...)` and `run.events()`
+> instead.  The v0.12 → v1.0 migration playbook lives in
 > [migration-v0.12-to-v1.0.md](migration-v0.12-to-v1.0.md).
 
 ```

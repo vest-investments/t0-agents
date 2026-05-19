@@ -509,3 +509,7 @@ have two choices:
 - [`docs/migration-v0.12-to-v1.0.md`](migration-v0.12-to-v1.0.md) — the
   5 Tier 2 kwargs that became `output=JsonOutput(...)`.
 - [`docs/api-reference.md` — Output modes](api-reference.md#output-modes).
+- [`docs/glow/getting-started.md` — Structured outputs by return
+  type](glow/getting-started.md#structured-outputs-by-return-type) —
+  glow infers the `OutputMode` from the function's return annotation;
+  the dispatch table lives there.

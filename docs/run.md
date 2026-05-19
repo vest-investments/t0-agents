@@ -371,3 +371,6 @@ the TensorZero gateway it expects via `docker-compose.yml`.
 - [Multi-Agent](multi-agent.md) — the sub_agents=, Sequential, and Parallel patterns.
 - [API reference — Run](api-reference.md#run) — exhaustive signature
   table for every method on `Run`.
+- [glow — escape hatch](glow/escape-hatch.md) — glow's `FluentRun` wraps
+  this `Run[T]`; drop to `wrapper._agent.invoke(...)` for `cancel()` /
+  `fork()` / `replay()` and the full handle surface.

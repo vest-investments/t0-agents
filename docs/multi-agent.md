@@ -15,15 +15,17 @@ the `core` + `mcp` foundation.
 > `AgentConfig.sub_agents=[...]` path documented on this page, t0-agents
 > supports code-driven topologies in plain Python — no special
 > framework abstractions needed.  Three canonical examples:
-> [Sequential](../examples/12_concurrency/01_sequential.py) (await chain),
-> [Parallel](../examples/12_concurrency/02_parallel.py)
+> [Sequential](../examples/agent/12_concurrency/01_sequential.py) (await chain),
+> [Parallel](../examples/agent/12_concurrency/02_parallel.py)
 > (`asyncio.gather` + reducer), and
-> [Orchestrator](../examples/12_concurrency/03_orchestrator.py)
+> [Orchestrator](../examples/agent/12_concurrency/03_orchestrator.py)
 > (the same `sub_agents=` mechanism this page documents).  The
 > glow-decorator counterparts live in
 > [examples/glow/04_sequential.py](../examples/glow/04_sequential.py),
 > [05_parallel.py](../examples/glow/05_parallel.py), and
-> [06_orchestrator.py](../examples/glow/06_orchestrator.py).
+> [06_orchestrator.py](../examples/glow/06_orchestrator.py).  For the
+> decorator-style sub-agent injection pattern (`Depends(<wrapper>)`),
+> see [`docs/glow/depends-and-tools.md`](glow/depends-and-tools.md).
 >
 > Use `sub_agents=` (this page) when the right delegate depends on the
 > input and the LLM should decide; write the dispatch in code (the
