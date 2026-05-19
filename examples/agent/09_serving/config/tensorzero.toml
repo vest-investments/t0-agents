@@ -1,0 +1,19 @@
+# TensorZero gateway configuration for the HTTP serving demo.
+# Docs: https://www.tensorzero.com/docs/gateway/configuration
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+
+[models.groq_model]
+routing = ["groq"]
+
+[models.groq_model.providers.groq]
+type = "groq"
+model_name = "openai/gpt-oss-20b"
+
+[functions.agent]
+type = "chat"
+
+[functions.agent.variants.default]
+type = "chat_completion"
+model = "groq_model"
