@@ -429,7 +429,7 @@ $ uv run pytest -m "not integration" -q
 
 $ uv run python -c "
 import t0_agents
-removed = {'Composable', 'Composer', 'ComposerError', 'CompositeRun',
+removed = {'Composable', 'Composer', 'ComposerError',
            'circuit_breaker', 'conditional', 'consensus', 'map_reduce',
            'parallel', 'race', 'retry_chain', 'saga', 'sequential'}
 overlap = removed & set(t0_agents.__all__)

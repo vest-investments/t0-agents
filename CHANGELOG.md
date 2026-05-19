@@ -503,8 +503,8 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   (`sequential`, `parallel`, `race`, `conditional`, `consensus`,
   `map_reduce`, `saga`, `retry_chain`, `circuit_breaker`) and the
   `Composable` / `Composer` / `CompositeRun` / `ComposerError`
-  protocol layer.  Use raw `asyncio.gather` + `await
-  agent.invoke().result()` chaining for Sequential/Parallel, and
+  protocol layer.  Use `await agent.invoke(...)` for sequential
+  chaining, `asyncio.gather` for parallel execution, and
   `AgentConfig(sub_agents=[...])` with a routing system prompt for
   the dispatch case.  See
   `examples/12_concurrency/{01_sequential,02_parallel,03_orchestrator}.py`
