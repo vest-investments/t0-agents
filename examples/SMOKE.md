@@ -487,7 +487,7 @@ before declaring red.
 | ☐ | B.6b | 08_multi_agent | `…/08_multi_agent/advanced.py` |
 | ☐ | B.7 | 13_observability | `…/13_observability/main.py` |
 | ☐ | B.8 | 14_multi_server | `…/14_multi_server/main.py` |
-| ☐ | B.9 | (none) | `pytest examples/agent/11_testing -m embedded` |
+| ☐ | B.9 | (none) | `RUN_EMBEDDED_TESTS=1 uv run pytest examples/agent/11_testing -m embedded` |
 
 ### Batch C — Shared composes
 
