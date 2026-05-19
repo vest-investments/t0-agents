@@ -328,7 +328,7 @@ public release: the simple patterns (Sequential, Parallel) are
 3-5 lines of plain `asyncio` in user code, and the routing case
 overlaps with `sub_agents=`.  See
 [`docs/multi-agent.md`](multi-agent.md) and the runnable examples
-under [`examples/12_concurrency/`](../examples/12_concurrency/) and
+under [`examples/agent/12_concurrency/`](../examples/agent/12_concurrency/) and
 [`examples/glow/`](../examples/glow/).
 
 ---

@@ -379,7 +379,7 @@ the client as soon as it arrives.
 
 ### Intermediate — REPL with Rich
 
-[`examples/10_cli/`](../examples/10_cli/) wraps `Run.events()` in a
+[`examples/agent/10_cli/`](../examples/agent/10_cli/) wraps `Run.events()` in a
 `rich.live.Live` display.  `t0_agents.cli.TUIRenderer` folds the event
 iterator into a live panel; `rich_elicitation_handler` provides
 browser-free `Prompt.ask()` modals when a tool calls `ctx.elicit()`.
@@ -393,7 +393,7 @@ CLI subcommands (`run`, `serve`, `info`).
 
 ### Advanced — HTTP with SSE, WebSocket, and elicitation
 
-[`examples/07_streaming/`](../examples/07_streaming/) ships a
+[`examples/agent/07_streaming/`](../examples/agent/07_streaming/) ships a
 full browser demo — a FastAPI app, a vanilla-JS client, a FastMCP
 server with elicitation-gated tools, and `InMemoryMemory` for
 multi-turn conversations.  The recipe below wires the four HTTP
@@ -494,7 +494,7 @@ auto-declines the pending request — no hanging tool.
 #### Browser client recipe
 
 A 180-line vanilla-JS client that covers every event is in
-[`examples/07_streaming/static/app.js`](../examples/07_streaming/static/app.js).
+[`examples/agent/07_streaming/static/app.js`](../examples/agent/07_streaming/static/app.js).
 The core pattern:
 
 ```js
@@ -671,10 +671,10 @@ Streaming makes a single agent's work visible. When a single agent is not enough
 
 ## See also
 
-- [`examples/07_streaming/`](../examples/07_streaming/) —
+- [`examples/agent/07_streaming/`](../examples/agent/07_streaming/) —
   runnable browser demo covering every event type and the
   elicitation round-trip.
-- [`examples/10_cli/`](../examples/10_cli/) — streaming REPL with
+- [`examples/agent/10_cli/`](../examples/agent/10_cli/) — streaming REPL with
   Rich and `rich_elicitation_handler`.
 - [`docs/elicitation.md`](elicitation.md) — the HITL contract the WS
   route bridges.

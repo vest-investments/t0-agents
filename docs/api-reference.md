@@ -244,7 +244,7 @@ result = await agent.invoke(
 )
 ```
 
-See [`examples/02_agent_class/`](../examples/02_agent_class/)
+See [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/)
 for the runnable PaaS-style demo.
 
 ---

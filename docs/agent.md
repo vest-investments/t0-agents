@@ -103,7 +103,7 @@ asyncio.run(main())
 
 What just happened: `Agent.invoke` called `AsyncTensorZeroGateway.inference` with your prompt plus the tool schemas discovered from your FastMCP server, executed any tool calls the LLM produced, fed the results back, and looped until the model returned a tool-call-free response. The caller still owns the lifecycle of both the gateway and the MCP client — `Agent` never opens or closes either.
 
-For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP server, README), see [`examples/02_agent_class/`](../examples/02_agent_class/).
+For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP server, README), see [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/).
 
 ## Concepts
 
@@ -313,7 +313,7 @@ Bridges a FastMCP elicitation handler (which must return inline) to an out-of-pr
 
 ### Easy — one-liner
 
-The quickstart above (and [`examples/02_agent_class/`](../examples/02_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.invoke(message)` call.
+The quickstart above (and [`examples/agent/02_agent_class/`](../examples/agent/02_agent_class/)) is the canonical one-liner: a single `AgentConfig`, a FastMCP server with `get_weather` / `add`, one `agent.invoke(message)` call.
 
 ### Intermediate — non-trivial config knobs
 
@@ -342,7 +342,7 @@ The `tags` passed to `.invoke()` shallow-merge on top of `config.tags`; per-call
 
 ### Advanced — custom `ToolProvider`
 
-`ToolProvider` is structural — anything with the two async methods works. The most complete reference implementation that ships with this library is `t0_agents.testing.MockToolProvider`, documented in [testing.md](testing.md) and used in [`examples/11_testing/`](../examples/11_testing/). Use it as the template when you want to:
+`ToolProvider` is structural — anything with the two async methods works. The most complete reference implementation that ships with this library is `t0_agents.testing.MockToolProvider`, documented in [testing.md](testing.md) and used in [`examples/agent/11_testing/`](../examples/agent/11_testing/). Use it as the template when you want to:
 
 - feed tools into an `Agent` from a source that isn't a FastMCP server,
 - write fast, deterministic unit tests without Docker, or
