@@ -52,10 +52,9 @@ templates.system.path = "functions/plan_trip/system_template.minijinja"
 json_mode = "strict"
 
 # ---------------------------------------------------------------------------
-# Chat function for the orchestrator pattern — exercised by the M3
-# integration test `test_orchestrator_with_glow_sub_agents`.  Same model
-# as `agent`; the orchestrator delegates to glow-registered sub-agents
-# (researcher, writer) installed as `<name>_ask` MCP tools.
+# Chat function for the orchestrator pattern.  Same model as `agent`;
+# the orchestrator delegates to glow-registered sub-agents (researcher,
+# writer) installed as `<name>_ask` MCP tools.
 # ---------------------------------------------------------------------------
 
 [functions.orchestrator]
