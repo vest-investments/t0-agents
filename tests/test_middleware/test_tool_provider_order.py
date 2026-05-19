@@ -21,11 +21,11 @@ from typing import Any, cast
 from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.compose.orchestrator import _OrchestrationToolProvider
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.middleware.base import Middleware, RunContext
 from t0_agents.core.types import AgentResult, Guardrail, ToolProvider
+from t0_agents.delegation.orchestrator import _OrchestrationToolProvider
 from t0_agents.guardrails.runtime import GuardedToolProvider
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0

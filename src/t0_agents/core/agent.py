@@ -155,8 +155,8 @@ class Agent:
         # empty, so single-agent constructions pay no cost.
         self._sub_agents_by_tool_name: dict[str, Agent] = {}
         if config.sub_agents:
-            from t0_agents.compose.orchestrator import install_sub_agents
-            from t0_agents.compose.routing import default_tool_name
+            from t0_agents.delegation import install_sub_agents
+            from t0_agents.delegation.routing import default_tool_name
 
             install_sub_agents(self)
             # Cache the tool-name -> sub-agent map so the

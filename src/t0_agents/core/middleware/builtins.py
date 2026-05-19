@@ -447,7 +447,7 @@ class SubAgentMiddleware:
         self._sub_agents = sub_agents
 
     async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
-        from t0_agents.compose.orchestrator import (
+        from t0_agents.delegation.orchestrator import (
             _OrchestrationToolProvider,
             bind_parent_episode_id,
             update_parent_episode_id,
