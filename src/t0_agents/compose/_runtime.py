@@ -3,7 +3,7 @@
 One private ``_drive_*`` function per built-in topology.  Each driver:
 
 1. Pulls the ambient ``parent_episode_id`` from
-   :func:`~t0_agents.compose.orchestrator.get_parent_episode_id`, so
+   :func:`~t0_agents.delegation.orchestrator.get_parent_episode_id`, so
    nested composers inherit correlation transparently.
 2. Invokes each child :class:`Composable` and appends the resulting
    :class:`Run` to ``composite._sub_runs`` for cancellation cascade.
@@ -34,7 +34,7 @@ import time
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
-from t0_agents.compose.orchestrator import (
+from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
     bind_parent_episode_id,
     get_parent_episode_id,

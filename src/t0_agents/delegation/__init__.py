@@ -9,10 +9,20 @@ delegation tree.
 """
 
 from t0_agents.delegation.agent_as_tool import agent_as_tool
+from t0_agents.delegation.orchestrator import (
+    bind_parent_episode_id,
+    get_parent_episode_id,
+    install_sub_agents,
+    update_parent_episode_id,
+)
 from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 
 __all__ = [
     "agent_as_tool",
     "assert_unique_names",
+    "bind_parent_episode_id",
     "default_tool_name",
+    "get_parent_episode_id",
+    "install_sub_agents",
+    "update_parent_episode_id",
 ]

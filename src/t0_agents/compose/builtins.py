@@ -28,7 +28,7 @@ their children.  Each child owns its own configuration; a composer
 that injected kwargs into sub-runs would silently override the
 configuration the child was constructed with.  ``parent_episode_id``
 correlation is threaded automatically by the runtime via the
-:func:`~t0_agents.compose.orchestrator.bind_parent_episode_id`
+:func:`~t0_agents.delegation.orchestrator.bind_parent_episode_id`
 ContextVar and the TZ-native ``tags={"t0_agents.parent_episode_id":
 ...}`` kwarg on Agent children.
 """

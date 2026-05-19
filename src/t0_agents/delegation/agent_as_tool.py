@@ -56,7 +56,7 @@ def agent_as_tool(
         # Deferred imports keep this module import-light so the
         # orchestrator submodule stays the only place that touches the
         # ContextVar machinery.
-        from t0_agents.compose.orchestrator import (
+        from t0_agents.delegation.orchestrator import (
             PARENT_EPISODE_ID_TAG,
             get_parent_episode_id,
         )
