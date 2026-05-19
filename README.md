@@ -30,13 +30,13 @@ the hard parts:
 
 t0-agents is the thin glue between them.  The `mcp/` submodule fits in
 ~100 lines of production code; everything above it — `Agent`,
-`Run[T]`, `Middleware`, `OutputMode[T]`, `Composer`, memory,
-guardrails, streaming, multi-agent, HTTP serving, the terminal TUI,
-and the test harness — is opt-in.
+`Run[T]`, `Middleware`, `OutputMode[T]`, memory, guardrails,
+streaming, multi-agent, HTTP serving, the terminal TUI, and the test
+harness — is opt-in.
 
-## The four v1.0 abstractions
+## The three v1.0 abstractions
 
-Every agentic feature in t0-agents sits on top of one of these four
+Every agentic feature in t0-agents sits on top of one of these three
 primitives, and you can adopt them piece by piece:
 
 ```python
@@ -85,19 +85,18 @@ extractor = Agent(AgentConfig(
 result = await extractor.invoke("Sarah <sarah@example.com>")
 result.value.email                          # statically typed Customer
 
-# 4. Composer — code-driven topologies of agents and composers.
-from t0_agents import sequential, parallel, race
-
-pipeline = sequential(
-    parallel(researcher, fact_checker),     # both run, both return
-    race(writer_fast, writer_thorough),     # first to finish wins
-)
-report = await pipeline.invoke("Write a memo on RLHF, < 500 words.")
 ```
 
 Each pairs with one chapter of the docs: see
 [Run](docs/run.md) · [Middleware](docs/middleware.md) ·
-[Output Modes](docs/output-modes.md) · [Composition](docs/composition.md).
+[Output Modes](docs/output-modes.md).
+
+Multi-agent topologies are built directly from these primitives plus
+plain `asyncio`.  Three canonical patterns — Sequential, Parallel,
+and Orchestrator — live as runnable examples under
+[`examples/12_concurrency/`](examples/12_concurrency/) (legacy Agent
+API) and [`examples/glow/`](examples/glow/) (decorator API).  See
+[Multi-Agent](docs/multi-agent.md) for the wiring details.
 
 ## Features
 
@@ -110,7 +109,6 @@ heavier extras live behind named installs.
 | **`Run[T]` handles** | `agent.invoke(msg)` returns a `Run` you can `await`, iterate with `.events()`, cancel, replay, fork, and attach feedback to. |
 | **Middleware chain** | Memory, guardrails, cost tracking, sub-agent orchestration, JSON retry — all composable middlewares; add your own without forking `core/agent.py`. |
 | **`OutputMode[T]` polymorphism** | `ChatOutput`, `JsonOutput`, `StructuredOutput[M]` (Pydantic), `ToolCallOutput`, `StreamingOutput`.  Custom modes (YAML, Instructor, SQLAlchemy) plug in via the same protocol. |
-| **Topology composers** | `sequential`, `parallel`, `race`, `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`, `circuit_breaker`.  Cancellation cascades; `parent_episode_id` audit threads to ClickHouse. |
 | **Cross-run memory** | `InMemoryMemory`, `SqliteMemory`, `TensorZeroMemory`, or your own `MemoryProvider`.  Keyed by TensorZero's `episode_id`. |
 | **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules.  Every decision is captured on `AgentResult.guardrail_log` for audit. |
 | **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
@@ -221,7 +219,6 @@ picks up the tension the previous one left open.  Start at
 - [Run](docs/run.md) — `agent.invoke(msg)` returns `Run[T]`: await, iterate events, cancel, replay, fork.
 - [Middleware](docs/middleware.md) — composable cross-cutting concerns (memory, guardrails, cost, retry…).
 - [Output Modes](docs/output-modes.md) — chat strings, JSON dicts, Pydantic models, tool-call routers, streaming.
-- [Composition](docs/composition.md) — nine code-driven topologies (`sequential`, `parallel`, `race`, `saga`, …).
 - [Concepts](docs/concepts.md) — pop the hood: what `agent.invoke()` actually does, turn by turn.
 - [Elicitation](docs/elicitation.md) — tools that pause to ask humans questions.
 - [Memory](docs/memory.md) — remember across turns and across processes.
@@ -244,20 +241,18 @@ Runnable examples for every chapter live under [`examples/`](examples/).
 ## Experimental: `t0_agents.glow`
 
 A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
-`OutputMode[T]`, `Composer` — lives on the
+`OutputMode[T]` — lives on the
 [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
 branch.  Where the base API takes ~25 lines to wire an agent, glow takes
 four: a function with a docstring (the system prompt) and a return-type
-annotation (the `OutputMode`), decorated with `@app.agent`.  The same
-surface adds `compose([a, b, c])` / `compose({a, b}, merge=fn)` / dict-routed
-composition over native Python collections, FastAPI-style `Depends`
-injection for tools and sub-agents, and typed MCP declarations via class-
-based or `Annotated[...]` metadata.
+annotation (the `OutputMode`), decorated with `@app.agent`.  Adds
+FastAPI-style `Depends` injection for tools and sub-agents and typed
+MCP declarations via class-based or `Annotated[...]` metadata.
 
 The tutorial walks every public symbol — see
 [`docs/glow/getting-started.md`](docs/glow/getting-started.md) on the
 experimental branch.  Public API is **unstable** and may change before
-v1.1; six runnable examples ship under
+v1.1; eight runnable examples ship under
 [`examples/glow/`](examples/glow/).  Install with the extra
 (`pip install 't0-agents[glow]'`).
 

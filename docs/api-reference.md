@@ -504,8 +504,9 @@ print(result.response_source)  # "text"
 
 > See [docs/run.md](run.md) for the canonical narrative — lifecycle,
 > two-channel consumption, replay/fork semantics, error model,
-> `Run(agent=None)` mode for third-party Composer authors.  This
-> section is the API-reference summary.
+> `Run(agent=None)` mode for third-party authors who need a Run
+> without an enclosing Agent.  This section is the API-reference
+> summary.
 
 First-class invocation handle returned by `Agent.invoke(...)`.  A `Run`
 represents one live or completed agent invocation.  It supports two
@@ -751,69 +752,6 @@ pip install 't0-agents[pydantic]'
 
 `ConfigurationError` surfaces at construction time with an install
 hint if pydantic isn't available.
-
----
-
-## Composers *(v1.0)*
-
-The fourth abstraction.  Nine built-in topologies compose Agents (and
-other Composers) into industrial patterns.  Every Composer satisfies
-the `Composable[Input, T]` protocol so they nest uniformly; each
-`composer.invoke(input)` returns the same `Run[T]` handle as
-`agent.invoke(user_message)`, with cancellation cascading to every
-sub-Run under a 30s default timeout.  Full guide in
-[`docs/composition.md`](composition.md).
-
-### Protocol types
-
-| Symbol | Description |
-|---|---|
-| `Composable[Input, T]` | `@runtime_checkable` Protocol: an object whose `.invoke(input)` returns a `Run[T]`.  Agents and Composers both satisfy it. |
-| `Composer` | Base class for every built-in topology.  Each topology is a concrete `@dataclass` subclass exposing topology-specific fields plus `name: str` and `invoke(input, *, eager, context, cancel_timeout)`. |
-| `ComposerError(node, cause)` | `T0AgentsError` subclass raised when a sub-Run inside a Composer fails (the wrapping topology decides when).  `node` references the failing `Composable`; `cause` is the original exception. |
-
-### Topology builders
-
-| Builder | Shape | Behaviour |
-|---|---|---|
-| `sequential(*nodes, chain=None, cancel_timeout=30.0)` | pipeline | Each node's result feeds the next via `chain(prev_result, original_input)`.  Default chain JSON-encodes non-string values. |
-| `parallel(*nodes, reducer=None, error_policy="fail_fast", cancel_timeout=30.0)` | fan-out | All nodes on same input concurrently.  `fail_fast` cancels siblings on first failure; `continue` collects exceptions for the reducer (`list[AgentResult \| BaseException]`). |
-| `race(*nodes, cancel_others=True, cancel_timeout=30.0)` | first-completed | First to settle wins; `cancel_others=True` cancels losers under `cancel_timeout`. |
-| `consensus(*nodes, merge, cancel_timeout=30.0)` | N-propose | All children propose; `merge(list[T])` decides.  Any failure propagates as `ComposerError`. |
-| `map_reduce(node, *, reducer, concurrency=None, cancel_timeout=30.0)` | scatter-gather | Input is iterable; `node` runs per-item; reducer aggregates.  `concurrency=N` bounds active calls via `asyncio.Semaphore`. |
-| `conditional(*, router, routes, default=None, cancel_timeout=30.0)` | triage | Sync `router(input) -> key` selects one of `routes`; falls through to `default` if set, else `ComposerError`. |
-| `saga(*steps, cancel_timeout=30.0)` | seq + rollback | Each step is `(action, compensate \| None)`.  Failure at step N runs `compensate_{N-1..0}` in reverse.  Compensations receive the same input action did; must be idempotent (user responsibility). |
-| `retry_chain(*nodes, on_error=None, cancel_timeout=30.0)` | provider escalation | Try each node in order; on failure, try next.  All-fail re-raises the original last exception un-wrapped (so `except SpecificError` still works). |
-| `circuit_breaker(node, *, threshold=5, reset_timeout=30.0, cancel_timeout=30.0)` | state machine | After `threshold` consecutive failures the breaker opens and refuses calls; after `reset_timeout` it half-opens.  State is per-Composer-instance. |
-
-### Module constant
-
-`DEFAULT_CANCEL_TIMEOUT: float = 30.0` — default per-topology
-cancellation budget.  Override per-instance with the `cancel_timeout=`
-kwarg on any factory (passed at construction) or per-call via
-`composer.invoke(input, cancel_timeout=...)` (overrides for that
-specific Run).
-
-### Public-surface example
-
-```python
-from t0_agents import (
-    Agent, AgentConfig, sequential, parallel, race,
-    conditional, retry_chain, consensus,
-)
-
-# Three Agents (constructed elsewhere): researcher, summariser, sentiment.
-pipeline = sequential(
-    researcher,
-    parallel(summariser, sentiment, reducer=lambda rs: {
-        "summary": rs[0].value, "sentiment": rs[1].value,
-    }),
-)
-
-run = pipeline.invoke("What changed in v1.0?")
-result = await run.result()
-# result.value == {"summary": "...", "sentiment": "..."}
-```
 
 ---
 

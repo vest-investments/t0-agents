@@ -1,117 +1,84 @@
-# 16 - Parallel tool dispatch
+# 12 - Canonical multi-agent patterns
 
-Two demos that exercise the three layers of parallelism described in
-[`docs/concurrency.md`](../../docs/concurrency.md):
+Three runnable examples that cover the multi-agent design space using
+plain Python plus the v1.0 `Agent` surface — no framework abstraction
+stands between the steps, so each example shows exactly where you can
+drop ad-hoc code (a transform, a validation, a branch, a log).
 
-| Demo | Layer | What it shows |
-|---|---|---|
-| `01_parallel_tools.py` | L1 intra-turn | Same prompt run twice (`parallel_tools=False` then `True`); side-by-side wall-clock timing |
-| `02_parallel_subagents.py` | L3 multi-agent | An orchestrator with two sub-agents (`researcher`, `writer`); side-by-side timing of sequential vs parallel delegation |
+| Pattern      | Topology                                | File                                                    |
+|--------------|-----------------------------------------|---------------------------------------------------------|
+| Sequential   | pipeline `A → B → C`                    | [`01_sequential.py`](01_sequential.py)                  |
+| Parallel     | fan-out + plain-Python reducer          | [`02_parallel.py`](02_parallel.py)                      |
+| Orchestrator | `AgentConfig(sub_agents=[…])` + LLM     | [`03_orchestrator.py`](03_orchestrator.py)              |
 
-The L2 "batch tool" pattern is illustrated by `server.py` — the
-`fetch_urls_batch` tool fans out N requests via `asyncio.gather` inside
-a single tool call, sidestepping the case where the LLM emits one tool
-per turn. It is not invoked by the demos (they exercise L1 / L3) but
-ships as a code-level reference.
-
-## Why the demos use a mocked LLM
-
-Whether `parallel_tools=True` accelerates a run depends on the LLM
-deciding to emit several tool calls in one assistant turn. Smaller
-models (and some providers) emit exactly one tool call per turn — in
-that case the parallel executor has nothing to parallelise and the
-flag's effect is invisible.
-
-To demonstrate the executor selection deterministically, both demos
-replace the real gateway with
-[`t0_agents.testing.MockGateway`](../../docs/testing.md), scripted to
-emit the multi-tool turn the layer requires (three `fetch_url` calls
-for L1; both `researcher_ask` and `writer_ask` in one turn for L3).
-The FastMCP servers and the agent loop are otherwise unchanged, so the
-wall-clock numbers reflect the real executor at work.
+For the same three patterns expressed via the experimental
+`@app.agent` decorator surface, see
+[`examples/glow/04_sequential.py`](../glow/04_sequential.py),
+[`05_parallel.py`](../glow/05_parallel.py), and
+[`06_orchestrator.py`](../glow/06_orchestrator.py).
 
 ## Prerequisites
 
-Just `uv sync`. **No docker, no API key, no gateway** — the demos run
-offline.
+The three examples share the gateway with `examples/glow/`.  Boot it
+once from the repo root:
+
+```bash
+docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
+```
+
+You need `GROQ_API_KEY` in `.env`.  The shared `tensorzero.toml`
+under `examples/glow/config/` declares the `agent` chat function
+(used by every leaf) and the `orchestrator` chat function (used by
+`03_orchestrator.py`).
 
 ## Run
 
 ```bash
-uv run python examples/12_concurrency/01_parallel_tools.py
-uv run python examples/12_concurrency/02_parallel_subagents.py
+uv run python examples/12_concurrency/01_sequential.py
+uv run python examples/12_concurrency/02_parallel.py
+uv run python examples/12_concurrency/03_orchestrator.py
 ```
 
-## Expected output
+Each example prints labelled output as it works.  No assertions —
+these are demonstrations, not tests.
 
-### `01_parallel_tools.py`
+## What each example shows
 
-`fetch_url` sleeps for `LATENCY_S = 1.5` seconds per call. With three
-calls in a single turn:
+### `01_sequential.py`
 
-```
-Run 1 (sequential, the default):
-  parallel_tools=False ->  4.5Xs (2 turn(s))
+Two toolless Agents (`summarizer`, `translator`) chained with plain
+`await` plus an ad-hoc truncate step in the gap.  Nesting: call from
+another `async def`, expose as MCP tool via `fastmcp.Tool.from_function`,
+or embed inside an orchestrator's `sub_agents=[...]`.
 
-Run 2 (parallel):
-  parallel_tools=True  ->  1.5Xs (2 turn(s))
+### `02_parallel.py`
 
-Speed-up: ~3x (sequential / parallel)
-```
+Three toolless Agents (`optimist`, `pessimist`, `pragmatist`) run
+concurrently via `asyncio.gather(..., return_exceptions=True)`.  A
+plain Python reducer joins the survivors with `"\n---\n"` and drops
+any branch that raised.
 
-The INFO log on stderr shows three `fetch_url START` markers followed
-by three `fetch_url END` markers. Under sequential dispatch the START
-and END lines interleave one pair at a time; under parallel dispatch
-all three STARTs arrive back-to-back and all three ENDs land ~1.5 s
-later.
+### `03_orchestrator.py`
 
-### `02_parallel_subagents.py`
+An orchestrator delegates to `researcher` and `writer` sub-agents via
+`AgentConfig(sub_agents=[researcher, writer])`.  The `SubAgentMiddleware`
+(in `t0_agents.delegation`) installs each sub-agent as a
+`<name>_ask` MCP tool on the orchestrator's FastMCP tool provider.
+Includes a docstring note on `max_turns` as the anti-recursion guardrail.
 
-Each sub-agent's tool sleeps for 1 s. With the orchestrator delegating
-to both sub-agents in the same turn:
+## When to use which
 
-```
-Run 1 (sequential, the default):
-  parallel_tools=False ->  2.0Xs (2 turn(s))
+- **Sequential** — fixed pipeline where each step's input is the
+  previous step's output.  No LLM in the routing decision.
+- **Parallel** — independent calls on the same input, combined by a
+  pure function.  Pick the reducer that fits your data; failures stay
+  inline under `return_exceptions=True`.
+- **Orchestrator** — the right delegate depends on the input, and the
+  LLM should decide.  More expensive (the LLM picks; you pay one
+  inference for the decision), but flexible.
 
-Run 2 (parallel):
-  parallel_tools=True  ->  1.0Xs (2 turn(s))
-
-Speed-up: ~2x (sequential / parallel)
-```
-
-The orchestrator's `parallel_tools=True` is what enables the overlap:
-sub-agents are exposed as MCP tools, so multi-agent parallelism reduces
-to the same intra-turn dispatch as L1.
-
-## Adapting the demos to a real LLM
-
-`MockGateway` is a duck-typed `AsyncTensorZeroGateway`. To swap a real
-gateway in, replace `_build_gateway()` (or the three `_..._gateway()`
-helpers in demo 02) with `AsyncTensorZeroGateway.build_http(...)`, add
-a `tensorzero.toml` declaring the functions used by each
-`AgentConfig.function_name`, and boot the gateway with
-`docker compose`.
-
-Whether you then observe the speed-up depends on **three independent
-things**: the model's native ability to emit multi-tool turns, your
-provider's support for TensorZero's `parallel_tool_calls` hint
-(Groq currently is **not** on the allowlist; OpenAI and Fireworks AI
-are), and the inference-level flag itself. See
-[Concurrency / Model and provider support](../../docs/concurrency.md#model-and-provider-support)
-for the model-card checklist, and
-[Concurrency / Verifying support without committing to a model](../../docs/concurrency.md#verifying-support-without-committing-to-a-model)
-for the five-line probe you can run against any candidate model before
-wiring it into your stack.
-
-## File layout
-
-```
-examples/12_concurrency/
-├── README.md                       ← this file
-├── 01_parallel_tools.py            ← L1 demo with side-by-side timing
-├── 02_parallel_subagents.py        ← L3 demo with side-by-side timing
-├── server.py                       ← FastMCP server: fetch_url + fetch_urls_batch
-├── research_server.py              ← researcher sub-agent's MCP server
-└── writing_server.py               ← writer sub-agent's MCP server
-```
+The patterns nest.  An orchestrator's sub-agent can itself be a
+Sequential pipeline; a Parallel reducer can return a value that feeds
+the next step in a Sequential outer chain; a Sequential step can
+contain a `asyncio.gather` fan-out internally.  None of these need a
+special framework type — just plain async Python.
