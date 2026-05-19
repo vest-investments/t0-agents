@@ -32,14 +32,14 @@ from fastmcp.tools import Tool as _FastMCPTool
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
-from t0_agents.delegation.agent_as_tool import agent_as_tool
-from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 from t0_agents.core.exceptions import (
     ConfigurationError,
     SubAgentError,
     T0AgentsFatalError,
 )
 from t0_agents.core.types import ToolProvider
+from t0_agents.delegation.agent_as_tool import agent_as_tool
+from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent

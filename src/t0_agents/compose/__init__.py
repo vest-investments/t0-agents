@@ -36,6 +36,13 @@ from t0_agents.compose.builtins import (
     saga,
     sequential,
 )
+from t0_agents.compose.topology import (
+    DEFAULT_CANCEL_TIMEOUT,
+    Composable,
+    Composer,
+    ComposerError,
+    CompositeRun,
+)
 from t0_agents.delegation.agent_as_tool import agent_as_tool
 from t0_agents.delegation.orchestrator import (
     bind_parent_episode_id,
@@ -44,13 +51,6 @@ from t0_agents.delegation.orchestrator import (
     update_parent_episode_id,
 )
 from t0_agents.delegation.routing import assert_unique_names, default_tool_name
-from t0_agents.compose.topology import (
-    DEFAULT_CANCEL_TIMEOUT,
-    Composable,
-    Composer,
-    ComposerError,
-    CompositeRun,
-)
 
 __all__ = [
     "DEFAULT_CANCEL_TIMEOUT",

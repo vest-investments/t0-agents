@@ -34,12 +34,6 @@ import time
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
-from t0_agents.delegation.orchestrator import (
-    PARENT_EPISODE_ID_TAG,
-    bind_parent_episode_id,
-    get_parent_episode_id,
-    update_parent_episode_id,
-)
 from t0_agents.compose.topology import (
     Composable,
     Composer,
@@ -48,6 +42,12 @@ from t0_agents.compose.topology import (
 )
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
+from t0_agents.delegation.orchestrator import (
+    PARENT_EPISODE_ID_TAG,
+    bind_parent_episode_id,
+    get_parent_episode_id,
+    update_parent_episode_id,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -56,11 +56,11 @@ def agent_as_tool(
         # Deferred imports keep this module import-light so the
         # orchestrator submodule stays the only place that touches the
         # ContextVar machinery.
+        from t0_agents.core.exceptions import SubAgentError, T0AgentsFatalError
         from t0_agents.delegation.orchestrator import (
             PARENT_EPISODE_ID_TAG,
             get_parent_episode_id,
         )
-        from t0_agents.core.exceptions import SubAgentError, T0AgentsFatalError
 
         parent_episode_id = get_parent_episode_id() or "unknown"
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
