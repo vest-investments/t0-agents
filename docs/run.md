@@ -16,7 +16,7 @@ opt-in for the patterns the simple `await` doesn't cover.
 > the way out, see [`AgentResult[T]`](api-reference.md#agentresult-1) +
 > [Output modes](output-modes.md).  For the cross-cutting concerns
 > threaded through every Run, see [Middleware](middleware.md).  For
-> composing Runs into topologies, see [Composition](composition.md).
+> multi-agent topologies, see [Multi-Agent](multi-agent.md).
 
 ---
 
@@ -206,11 +206,6 @@ sees the full history from `run1` onwards.
 > a richer transcript is queued for a future minor once the
 > middleware chain can record full message history.
 
-`CompositeRun.fork` raises `NotImplementedError` — "extra user turn"
-doesn't map cleanly onto every topology (what does it mean for a
-`parallel` of voters?).  Use explicit composition instead:
-`sequential(composer, follow_up_agent)`.
-
 ---
 
 ## `Run.cancel`
@@ -232,13 +227,6 @@ except RunCancelledError:
 hooks observe the cancellation.  `MemoryMiddleware.save` runs in
 `finally` so the memory layer sees the cancellation too.
 
-When a `Run` is the root of a Composer topology, `cancel()`
-propagates to every sub-Run.  Each sub-Run gets up to
-`cancel_timeout` seconds to clean up (default 30s; per-topology
-override via the `cancel_timeout=` kwarg on the factory — Q3
-resolution).  Overshoot logs a single WARN on
-`t0_agents.compose.topology` and lets cleanup continue best-effort.
-
 ---
 
 ## `Run.feedback`
@@ -257,12 +245,6 @@ await run.feedback("confidence", 0.87, target="inference")
 Both `target="episode"` (default) and `target="inference"` route
 through `t0.feedback(...)` — t0-agents does not maintain a parallel
 metric stream (TensorZero-first invariant §2.2).
-
-`CompositeRun.feedback` raises `NotImplementedError` because a
-Composer has no single episode id of its own; route feedback to
-individual sub-Runs instead (`composite._sub_runs[i].feedback(...)`,
-documented as private access for now — a public surface lands when
-demand justifies one per topology).
 
 ---
 
@@ -317,21 +299,13 @@ even though each Run only records its boundary.
 
 ---
 
-## `Run(agent=None)` — composer authors only
+## `Run(agent=None)` — advanced authors only
 
-Third-party Composer authors who need to build their own topology
-without a single owning Agent can construct a `Run` with `agent=None`
-and a custom drive callable.  `CompositeRun` (the implementation
-behind every topology factory in `compose/`) does exactly this —
-the parent Run has no Agent of its own; the sub-Runs each carry
-their own.
-
-The trade-off is that `feedback()` / `replay()` / `fork()` will raise
-`RuntimeError` because they require an Agent to drive against.
-That's intentional — sub-Run-level methods are reachable through
-`composite._sub_runs[i]`, and re-invocation of a Composer is
-`composer.invoke(input)`, which is more explicit than `.replay()`
-anyway.
+Third-party authors who build their own `Run` subclass on top of the
+public protocol can construct a `Run` with `agent=None` and supply a
+custom drive callable.  The trade-off is that `feedback()` /
+`replay()` / `fork()` raise `RuntimeError` because they require an
+Agent to drive against.
 
 This is an advanced surface — most users don't need to know it
 exists.  Documented here for completeness.
@@ -394,6 +368,9 @@ the TensorZero gateway it expects via `docker-compose.yml`.
 - [Output modes](output-modes.md) — what `Run.result()` returns and how
   the type parameter `T` is inferred.
 - [Middleware](middleware.md) — what runs around your inference loop.
-- [Composition](composition.md) — uniformly composable Runs.
+- [Multi-Agent](multi-agent.md) — the sub_agents=, Sequential, and Parallel patterns.
 - [API reference — Run](api-reference.md#run) — exhaustive signature
   table for every method on `Run`.
+- [glow — escape hatch](glow/escape-hatch.md) — glow's `FluentRun` wraps
+  this `Run[T]`; drop to `wrapper._agent.invoke(...)` for `cancel()` /
+  `fork()` / `replay()` and the full handle surface.

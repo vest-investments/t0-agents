@@ -58,7 +58,7 @@ When in doubt, leave it off and turn it on per-agent once you have read the [Pro
    - mentions of the BFCL parallel-category benchmark
    - whether the provider's API exposes a `parallel_tool_calls: bool` parameter — if it does, the model is probably capable
 
-   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/12_concurrency/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
+   Known-capable families at the time of writing: OpenAI GPT-4-turbo and GPT-4o, Anthropic Claude 3.x and 4.x, Mistral Large 2, Cohere Command R+. Models that ship with parallel calling **disabled by default** or simply not supported: many small open-source variants such as `openai/gpt-oss-20b` (observed in `examples/agent/12_concurrency/`), older `gpt-3.5-turbo-0613`, and minor providers without a documented parallel mode.
 
 2. **Provider-gateway support inside TensorZero.** Even when the upstream model is capable, the gateway has to forward the parallel-emission hint. TensorZero maintains an allowlist; at the time of writing **Groq is not on it** (`tests/test_mcp/test_integration.py:388` documents the constraint), while OpenAI and Fireworks AI are. Check TensorZero's release notes and your provider block in `tensorzero.toml`.
 
@@ -112,7 +112,7 @@ agent = Agent(config, t0=cast(AsyncTensorZeroGateway, gateway), tool_provider=..
 result = await agent.invoke("...")
 ```
 
-`examples/12_concurrency/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
+Pair the probe above with `parallel_tools=True` in your own integration tests to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
 
 ## L2: Inter-turn dependencies and the "batch tool" pattern
 
@@ -176,6 +176,6 @@ If you find yourself reaching for any of the above, the answer is almost always 
 
 - `parallel_tools` field — [`AgentConfig`](agent.md#agentconfig) and the low-level [`run_agent`](api-reference.md#run_agent) signature
 - Sequential and parallel executors — `src/t0_agents/mcp/loop.py` (`execute_tool_calls`, `execute_tool_calls_parallel`)
-- Sub-agent dispatch — [`Multi-Agent Composition`](multi-agent.md), `src/t0_agents/compose/`
+- Sub-agent dispatch — [`Multi-Agent Composition`](multi-agent.md), `src/t0_agents/delegation/`
 - Guardrail safety under parallel dispatch — [`Guardrails`](guardrails.md#parallel_toolstrue)
 - Provider-side caveats (which models even emit multiple tool calls per turn) — [`Production`](production.md#parallel-vs-sequential-tool-execution)

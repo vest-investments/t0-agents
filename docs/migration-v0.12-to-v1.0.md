@@ -12,7 +12,7 @@ code.  If you only have time for one section, read
 > Companion reading: [`docs/run.md`](run.md),
 > [`docs/middleware.md`](middleware.md),
 > [`docs/output-modes.md`](output-modes.md),
-> [`docs/composition.md`](composition.md).
+> [`docs/multi-agent.md`](multi-agent.md).
 
 ---
 
@@ -319,22 +319,17 @@ plug in YAML extraction, Instructor-style retry, SQLAlchemy row
 materialisation without forking.  See
 [`docs/output-modes.md`](output-modes.md).
 
-### `Composer` — topology primitive
+### Multi-agent patterns — code, not framework
 
-Nine topology builders (`sequential`, `parallel`, `race`,
-`consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`,
-`circuit_breaker`) for multi-agent orchestration.  Every Composer
-satisfies the `Composable[Input, T]` protocol so they nest uniformly.
-Cancellation cascades to every sub-Run; `parent_episode_id` audit
-threads through to ClickHouse for hierarchy reconstruction.  See
-[`docs/composition.md`](composition.md).
-
-> **Saga compensation idempotency** — if you adopt `saga(...)` for
-> distributed-transaction patterns, note that compensations may be
-> invoked more than once on partial failure (e.g., a raising
-> compensate mid-cascade).  Make them idempotent — dedupe by resource
-> id, transaction handle, or similar.  This is a classical saga
-> constraint, not a t0-agents-specific quirk.
+Earlier v1.0 prereleases shipped a `Composer` topology layer
+(`sequential`, `parallel`, `race`, etc.) alongside the declarative
+`AgentConfig.sub_agents=[...]` path.  That layer was removed before
+public release: the simple patterns (Sequential, Parallel) are
+3-5 lines of plain `asyncio` in user code, and the routing case
+overlaps with `sub_agents=`.  See
+[`docs/multi-agent.md`](multi-agent.md) and the runnable examples
+under [`examples/agent/12_concurrency/`](../examples/agent/12_concurrency/) and
+[`examples/glow/`](../examples/glow/).
 
 ---
 
@@ -355,7 +350,7 @@ A pragmatic order to migrate one codebase from v0.12 to v1.0:
    `StructuredOutput` for the new Pydantic-driven OutputMode keep
    working unchanged.
 4. **Adopt new features opt-in** if you want them — `Middleware`,
-   `Composer`, `Run.replay/.fork`, `output=StructuredOutput(Model)`.
+   `Run.replay/.fork`, `output=StructuredOutput(Model)`.
    None are required to ship 1.0.
 
 When your tests pass, you're on v1.0.

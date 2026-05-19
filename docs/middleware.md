@@ -18,8 +18,6 @@ impossible in v0.12 without forking the library.
 > Companion reading: [`docs/run.md`](run.md) (the invocation handle),
 > [`docs/output-modes.md`](output-modes.md) (the canonical home for
 > `OutputMode` + the JSON retry handshake),
-> [`docs/composition.md`](composition.md) (Composers reuse middleware
-> per sub-Run),
 > [`docs/api-reference.md` — Middleware](api-reference.md#middleware-1)
 > (exhaustive symbol table).
 
@@ -215,8 +213,7 @@ configured sub-agent tool names and dispatches them inline as
 `sub_agent.invoke(...).result()` — no FastMCP transport round-trip,
 no extra latency.  Refreshes the `parent_episode_id` ContextVar so
 sub-Runs tag their inferences with the parent's episode id, enabling
-the ClickHouse hierarchy reconstruction (see
-[`docs/composition.md` — Audit](composition.md#audit-via-parent_episode_id)).
+ClickHouse hierarchy reconstruction.
 
 ### `GuardrailsMiddleware`
 
@@ -469,11 +466,14 @@ gateway, to `mcp/`, and across runs stay clear.
   `Run.cost()` / `Run.usage()` read live data populated here.
 - [`docs/output-modes.md`](output-modes.md) — `OutputMode[T]` and the
   `JsonRetryMiddleware` retry handshake.
-- [`docs/composition.md`](composition.md) — Composers build a
-  middleware chain per sub-Run.
+- [`docs/multi-agent.md`](multi-agent.md) — `SubAgentMiddleware` and
+  the `<name>_ask` sub-agent dispatch path.
 - [`docs/guardrails.md`](guardrails.md) — the policy layer that runs
   via `GuardrailsMiddleware`.
 - [`docs/memory.md`](memory.md) — the persistence layer that runs via
   `MemoryMiddleware`.
 - [`docs/api-reference.md` — Middleware](api-reference.md#middleware-1)
   — exhaustive symbol table.
+- [`docs/glow/escape-hatch.md`](glow/escape-hatch.md) — per-call
+  middleware override from a `@app.agent` wrapper via
+  `wrapper._agent.invoke(..., middleware=[...])`.

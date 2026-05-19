@@ -133,6 +133,21 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `parent_episode_id` correlation through to children for
   ClickHouse reconstruction of nested runs.
 
+#### Guardrails — regex content blocker
+
+- **`regex_guardrail(pattern, message, *, phase="after_run")`** —
+  new built-in factory at `t0_agents.guardrails.regex`, re-exported
+  from `t0_agents.guardrails`.  Blocks a run when
+  `re.search(pattern, ...)` matches: `phase="after_run"` (default)
+  scans `AgentResult.value` (string values directly, everything
+  else JSON-encoded via `json.dumps(default=str)`); `phase="before_run"`
+  scans `GuardrailContext.user_message`.  Raises
+  `GuardrailBlockedError(message)` on a hit, which
+  `GuardrailsMiddleware` propagates as a hard abort.  Pre-compiled
+  `re.Pattern` accepted in lieu of a source string.  `t0_agents.glow`
+  re-exports the same callable for the
+  `Annotated[T, Guardrail(...)]` typed-metadata pattern.
+
 #### Documentation
 
 - **`docs/run.md`** — canonical user-facing guide for the `Run`
@@ -148,12 +163,6 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `Agent.invoke(output=...)` overloads, retry-and-recovery handshake,
   `OutputDiagnostics.failure_detail`, third-party `YamlOutput`
   walkthrough, the `[pydantic]` extra.
-- **`docs/composition.md`** — canonical guide for `Composer`: the 9
-  topology builders with runnable examples, narrow `Composer.invoke`
-  surface, cancellation cascade, `parent_episode_id` audit, saga
-  compensation contract, `retry_chain` exception asymmetry,
-  declarative-vs-explicit two-paths comparison, deferred
-  `CompositeRun` APIs.
 - **`docs/migration-v0.12-to-v1.0.md`** — migration walkthrough for
   the two v0.12 surfaces removed in v1.0 (`Agent.run` / `.stream` →
   `Agent.invoke` / `Run.events`; five JSON config kwargs →
@@ -172,11 +181,194 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   Output Modes / Composition between Agent and Concepts.
 - **`docs/structured-outputs.md`** header cross-links to the new
   `docs/output-modes.md` canonical narrative.
-- **`docs/multi-agent.md`** preview rewritten to a stable
-  cross-link at `docs/composition.md` (the orthogonal code-driven
-  path).
+- **`docs/multi-agent.md`** preview rewritten with cross-links into
+  `docs/concurrency.md` and `examples/agent/12_concurrency/` for the
+  orthogonal code-driven path.
+
+#### Experimental — `t0_agents.glow`
+
+- **`t0_agents.glow` sub-package scaffolded** on the
+  `experimental/glow` branch. Purely additive Pythonic skin over v1.0
+  primitives (FastAPI-style decorators, type-hint-driven OutputMode
+  inference, fluent `Run` wrapper, native-collection composition,
+  typed MCP). Public API is **unstable**; ships as the future
+  `t0-agents[glow]` extra. The implementation roadmap and DX design
+  live on the experimental branch.
+- **Output-mode inference from return-type hints**
+  (`t0_agents.glow.output_inference`, internal). `str` /
+  `dict[*]` / `BaseModel` / `list[BaseModel]` / `Optional[*]` /
+  `T | None` map to `ChatOutput`, `JsonOutput`,
+  `StructuredOutput(M)`, and a synthetic-wrapper `StructuredOutput`
+  respectively. Forward-ref failures raise `ConfigurationError` at
+  registration time so `@app.agent` surfaces them eagerly.
+- **`FluentRun[T]` lazy invocation wrapper**
+  (`from t0_agents.glow import FluentRun`). Defers `OutputMode`
+  selection until `__await__`; exposes `.text()`, `.json()`,
+  `.json(M)`, `.as_(mode)`, `.events(*selectors)`, and a `.result()`
+  escape hatch for the full `AgentResult[T]`. `.json(A).json(B)` is
+  last-wins (second override on an already-overridden FluentRun logs
+  DEBUG).
+- **`App` + `@app.agent` decorator landed.** `from t0_agents.glow
+  import App` exposes the registry+lifecycle class; `@app.agent("name",
+  *, function_name="agent")` walks the function signature at decoration
+  time, picks the `OutputMode` from the return annotation, uses the
+  docstring as the system prompt, and registers an internal
+  `_AgentSpec`.  The returned callable preserves the original
+  parameters via `ParamSpec`, so `mypy`-strict callers see
+  `tutor("hi")` typed as `FluentRun[str]` and `await tutor("hi")` as
+  `str`.  Forward-ref failures and duplicate names raise
+  `ConfigurationError` eagerly at decoration time.  The wrapper
+  exposes `._agent` (None pre-build) and `._spec` for escape-hatch
+  access.  `App.build()` and `app.lifespan()` are the eager
+  construction hooks.
+- **Event selectors.** `from t0_agents.glow import Thought,
+  ToolCall, Text, ToolResult, TurnEnd, Done, Error` — seven
+  module-level `Selector[E]` instances covering the v1.0 `AgentEvent`
+  union.  `.where(pred)` AND-chains predicates and `.map(fn)` replaces
+  the transform; both return *new* selectors so the constants stay
+  immutable.  `FluentRun.events(*selectors)` filters with first-match-
+  wins semantics; empty selectors preserve the yield-every-event
+  contract.  `Text` defaults to `TextEndEvent` (whole-text variant)
+  per the spec — token-by-token delta filtering remains reachable
+  through `Selector(TextDeltaEvent).where(...)`.
+- **`FluentRun(value_transform=...)`.** New keyword-only
+  constructor argument that maps `AgentResult.value` through a callable
+  when no per-call override is active.  `list[BaseModel]` return
+  annotations unwrap the synthetic `<Inner>List` wrapper so
+  `await agent(...)` returns `list[Inner]` directly, matching the
+  user's annotation.  Per-call overrides
+  (`.text` / `.json` / `.as_`) reset the transform via the existing
+  `_spawn` path (deliberate opt-out).
+- **`[glow]` pip extra.** `pip install t0-agents[glow]` materialises
+  `pydantic>=2.0` (FastAPI precedent — the glow surface uses pydantic
+  heavily for type introspection).
+- **Two runnable examples.** `examples/glow/01_hello.py` and
+  `examples/glow/02_structured.py` ship with a self-contained
+  TensorZero gateway configuration under `examples/glow/config/`
+  (chat function `agent` + JSON-structured function `plan_trip` with a
+  schema matching `TripPlan`).  Boot with `docker compose -f
+  examples/glow/docker-compose.yml --env-file .env up -d`.
+- **`Depends` + `DependencyResolver`.** `from t0_agents.glow
+  import Depends` provides the FastAPI-style injection sentinel
+  (`provider: Callable`, `use_cache: bool = True`).  The internal
+  `DependencyResolver` walks `inspect.signature(fn)`, recursively
+  resolves provider chains, caches per call when `use_cache=True`,
+  and consults `app.dependency_overrides[provider]` on every call
+  (not snapshotted at registration).  Sync + async + sync-returns-
+  awaitable providers are all supported.
+- **`@app.tool` decorator.** Registers user functions as
+  FastMCP tools on the App-owned in-memory server.  Parameters with a
+  `Depends` default are **stripped** from the auto-generated JSON
+  Schema (so the LLM never sees them) and re-injected at call time
+  via the App's resolver.  Tool docstring becomes the MCP description.
+  `Depends(<glow agent wrapper>)` inside `@app.tool` raises
+  `ConfigurationError` — sub-agent semantics belong on `@app.agent`.
+- **Sub-agents via `Depends(agent_wrapper)` on `@app.agent`.**
+  The signature walk now requires every non-message parameter to
+  declare `Depends(<glow agent wrapper>)`; the provider's spec is
+  added to `AgentConfig.sub_agents` declaratively and the parameter
+  is compiled out of the runtime call signature.  Value-style
+  `Depends(get_db)` on `@app.agent` raises `ConfigurationError`
+  with a pointer to `@app.tool`.  Forward refs are rejected eagerly
+  (register sub-agents BEFORE their orchestrators).
+- **App-owned FastMCP server + Client lifecycle.**
+  `App.__init__` allocates a long-lived in-memory `FastMCP("glow-app")`
+  + `Client`; every glow agent is constructed with
+  `tool_provider=app._owned_client`, so the v1.0 toolless-chat
+  fallback at `core/agent.py:_resolve_chat_tool_provider` is never
+  reached for glow agents.
+  `app.build()` enters the Client once (idempotent); `app.shutdown()`
+  closes it; `app.lifespan()` does `build → yield → shutdown` in a
+  `try/finally`.  Examples and integration tests are updated to wrap
+  their hot path in `async with app.lifespan():`.
+- **`app.dependency_overrides` is now load-bearing.**  The
+  override dict is consulted on every `Depends` resolution.
+  `app.dependency_overrides[get_db] = mock_db` replaces the resolved
+  value at call time without re-instantiating the decorator —
+  FastAPI's testing-ergonomics pattern.
+- **`examples/glow/05_di_tools.py`.**  Runnable demo showing
+  `@app.tool` + `Depends` stripping + `dependency_overrides` over a
+  direct MCP round-trip (no agent / no TZ inference).  Adds a
+  `[functions.orchestrator]` chat function to
+  `examples/glow/config/tensorzero.toml` used by the new integration
+  test `test_orchestrator_with_glow_sub_agents`.
+- **Typed MCP integration via `MCPServer`.**  `from t0_agents.glow
+  import MCPServer` exports a dual-personality base class:
+  - Class form (canonical): `class GithubMCP(MCPServer, url="...",
+    namespace="github"): ...` records an `MCPServerSpec` on the class
+    via `__init_subclass__`.
+  - Annotated form: `Annotated[Any, MCPServer(url="...")]` carries
+    the spec as Annotated metadata.
+  `App.__init__` accepts `servers=list[type[MCPServer]] | None`;
+  `@app.agent` parameter walks via `_extract_mcp_specs` append
+  discovered specs to
+  `app._mcp_specs`.  `App.build()` mounts every spec onto the
+  long-lived `glow-app` composed FastMCP BEFORE entering the owned
+  Client — `FastMCP.mount(server)` for in-memory `FastMCP` instances,
+  `FastMCP.mount(create_proxy(url))` for URL-based remotes (HTTP,
+  SSE, or any `ClientTransport` `create_proxy` accepts).  Per-agent
+  MCP subsets are deferred — every glow agent on a given App sees
+  every mounted MCP server.
+- **`Annotated[T, Guardrail(...)]` extraction.**  `@app.agent`
+  parameter and return annotations are walked at registration time;
+  every `Annotated` metadata entry satisfying the runtime-checkable
+  v1.0 `Guardrail` Protocol is harvested and folded into
+  `AgentConfig.guardrails` on first build.  The runtime path
+  (`GuardrailsMiddleware`) is unchanged.  `_AgentSpec` grows a
+  `guardrails: list[Guardrail]` slot for the harvested set.
+- **Iterative `Annotated`/`Optional` peel in `output_inference`.**
+  `_peel_to_core(rt)` is an iterative `while changed:` loop that
+  converges on the inner type regardless of nesting depth, so both
+  `Optional[Annotated[T, m]]` and `Annotated[Optional[T], m]`
+  resolve the same way — important for guardrails-on-return-type,
+  which produces the mirror nesting.
+- **`examples/glow/06_mcp_typing.py`.**  Runnable demo: in-memory
+  `FastMCP` math server, `class MathMCP(MCPServer, server=...)`,
+  `App(servers=[MathMCP])`, end-to-end verification that
+  `app._owned_client.list_tools()` returns the namespaced tool
+  followed by a live agent call.  Commented-out HTTP variant points
+  at the `create_proxy(url)` path for remote MCP servers.
+- **Public glow `__all__` settles at 13 entries.**  `App`,
+  `Depends`, `Done`, `Error`, `FluentRun`, `MCPServer`, `Selector`,
+  `Text`, `Thought`, `ToolCall`, `ToolResult`, `TurnEnd`,
+  `regex_guardrail`.
+- **`examples/glow/03_streaming.py`.**  Runnable demo of
+  `FluentRun.events(*selectors)`: a chat agent + a `@app.tool`
+  weather lookup + a live `async for` loop driving three
+  selectors at once (`Thought`, `ToolCall.map(...)`, `Text`).
+  Reuses the existing `[functions.agent]` chat function — no new
+  TZ config.
+- **`docs/glow/getting-started.md`.**  Canonical user-facing
+  tutorial covering every public glow symbol plus the load-bearing
+  callouts: toolless-chat, sub-agents via `Depends(agent)`, typed
+  MCP, `Annotated[T, Guardrail(...)]`, and the
+  `app.lifespan()`-as-entry-point recommendation.
+- **`docs/glow/limitations.md`.**  Known limitations of the
+  glow surface: no streaming JSON, no `AsyncIterator` tools, no
+  per-agent MCP subsets, the `[glow]` extra's hard pydantic dep,
+  and the `_AgentWrapper.__call__` ParamSpec dual-personality.
+- **Top-level `README.md` points at the glow tutorial.**  A
+  small "Experimental: `t0_agents.glow`" section sits between the
+  Documentation reading-path and the Requirements block; flags
+  unstable status; links to `docs/glow/getting-started.md`; mentions
+  the `[glow]` install extra.
 
 ### Changed
+
+- **`Agent.__init__` accepts `tool_provider=None` for chat-mode
+  agents.** v1.0 originally rejected chat configs (`output=ChatOutput()`,
+  the default) constructed without a tool provider; that rule is
+  relaxed so `Agent(config, t0=t0)` works for every output mode.
+  When chat-mode is selected and the caller passes `None`, the chat
+  terminals allocate an ephemeral `Client(FastMCP("agent-default"))`
+  for the duration of each invocation — the in-memory MCP server
+  advertises zero tools, so `run_agent` sees an empty tool list, the
+  LLM produces a text response, and the loop terminates after the
+  first turn.  This is the "toolless chat" convenience for thin
+  chatbot-style use cases.  Single-shot output modes (`JsonOutput`,
+  `StructuredOutput`, `ToolCallOutput`) were already tolerant of
+  `tool_provider=None`.  The `mcp/` standalone-submodule invariant is
+  preserved (no change to `mcp/loop.run_agent`'s signature).
 
 - **`Agent` internals** refactored to a middleware pipeline.
   `core/agent.py` shrinks from ~1670 LoC (v0.12) to ~870 LoC.
@@ -215,6 +407,22 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   with explicit v0.12 → v1.0 migration block.
 
 ### Removed
+
+- **`compose` topology primitives** — the 9 factories
+  (`sequential`, `parallel`, `race`, `conditional`, `consensus`,
+  `map_reduce`, `saga`, `retry_chain`, `circuit_breaker`) and the
+  `Composable` / `Composer` / `CompositeRun` / `ComposerError`
+  protocol layer.  Use `await agent.invoke(...)` for sequential
+  chaining, `asyncio.gather` for parallel execution, and
+  `AgentConfig(sub_agents=[...])` with a routing system prompt for
+  the dispatch case.  See
+  `examples/agent/12_concurrency/{01_sequential,02_parallel,03_orchestrator}.py`
+  and `examples/glow/{04_sequential,05_parallel,06_orchestrator}.py`.
+- **`t0_agents.glow.compose`** — removed alongside the underlying
+  topology layer.
+- **Sub-agent orchestration relocated** — `agent_as_tool`,
+  `install_sub_agents`, and friends now live in
+  `t0_agents.delegation` (top-level re-exports unchanged).
 
 - **`Agent.run(...)`** — replaced by `await agent.invoke(msg, ...)`
   (a `Run` is awaitable and returns the same `AgentResult`).
@@ -258,7 +466,7 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `examples/{02,03,04,05,06,07,18}/docker-compose.yml` pinned the
   non-existent `clickhouse/clickhouse-server:lts`; replaced with
   the canonical `clickhouse:lts`.
-- **`examples/01_first_agent/README.md` directory drift** — README
+- **`examples/agent/01_first_agent/README.md` directory drift** — README
   still referenced the directory by its old name `01_basic_agent`;
   replaced and stale forward-reference removed.
 - **429 regression test** — `tests/test_mcp/test_harness.py::
@@ -274,6 +482,16 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `OTelTracerAdapter` were considered for the v1.0 release and
   dropped after a scope review (no concrete consumer asks for them
   today).
+
+### Release verification
+
+- **`examples/SMOKE.md`** — release-gate manual checklist (not CI).
+  Twenty-four example scripts plus four manual UI checks, organised
+  into one offline batch and two docker batches that share composes
+  across multiple examples.  Two known model-side flakes
+  (`test_require_approval_auto_decline_surfaces_to_llm`,
+  `test_tool_timeout_does_not_crash_run_agent`) are documented with
+  reroll guidance and a non-Groq model-swap escape hatch.
 
 ## [0.13.0] — Unreleased
 
@@ -302,10 +520,10 @@ the wire.  Backwards compatible: any caller that does not pass
   `system_arguments`"** — decision matrix for the two kwargs across
   schema'd / schema-less functions, plus guidance on when to reach
   for each.
-- **`examples/02_agent_class/`** — runnable PaaS-style demo:
+- **`examples/agent/02_agent_class/`** — runnable PaaS-style demo:
   the same `Agent` is invoked three times with three runtime-supplied
   personalities (haiku, pirate, lawyer), driving the model purely
-  through `system="..."`.  Companion to `examples/02_agent_class/`
+  through `system="..."`.  Companion to `examples/agent/02_agent_class/`
   (which demonstrates the templated, recommended pattern via
   `system_template`).
 

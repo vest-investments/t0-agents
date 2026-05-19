@@ -21,6 +21,11 @@ The subsystem ships four built-ins:
 Bring your own by implementing the structural `Guardrail` Protocol —
 four optional async hooks and a `name` attribute. No inheritance required.
 
+> **Glow companion.**  Guardrails can be attached as `Annotated[T,
+> guardrail(...)]` metadata on `@app.agent` parameter or return
+> annotations; the runtime path is unchanged.  See
+> [`docs/glow/typed-mcp-and-guardrails.md`](glow/typed-mcp-and-guardrails.md).
+
 ---
 
 ## Installation
@@ -66,7 +71,7 @@ async def cli_handler(message, response_type, params, context):
         return ElicitResult(
             action="accept" if yes else "decline", content={},
         )
-    # (structured-input branch omitted for brevity — see examples/06_guardrails/)
+    # (structured-input branch omitted for brevity — see examples/agent/06_guardrails/)
     return ElicitResult(action="decline")
 
 
@@ -108,7 +113,7 @@ asyncio.run(main())
 
 The full runnable example — including the server, the structured-input
 branch of the handler, and the expected interactive session — lives at
-[`examples/06_guardrails/`](../examples/06_guardrails/).
+[`examples/agent/06_guardrails/`](../examples/agent/06_guardrails/).
 
 ---
 
@@ -597,7 +602,7 @@ def business_hours_only(*, start: time, end: time) -> Guardrail:
 ```
 
 A runnable variant of this pattern ships at
-[`examples/06_guardrails/custom_guardrail.py`](../examples/06_guardrails/custom_guardrail.py):
+[`examples/agent/06_guardrails/custom_guardrail.py`](../examples/agent/06_guardrails/custom_guardrail.py):
 an `enforce_email_allowlist` factory that inspects `tool_call.arguments`,
 records attempts on `ctx.extra`, raises `UnauthorizedRecipientError` on
 off-list domains, and emits an audit summary from `after_run` even when
@@ -955,7 +960,7 @@ Guardrails decide synchronously, on the same turn, before the tool dispatches. B
 
 ## See also
 
-- [`examples/06_guardrails/`](../examples/06_guardrails/) — runnable demo
+- [`examples/agent/06_guardrails/`](../examples/agent/06_guardrails/) — runnable demo
   composing all four built-ins on one agent, with a shared interactive
   handler for both client-side and server-side elicitation.
 - [Elicitation](elicitation.md) — the FastMCP elicitation signature that

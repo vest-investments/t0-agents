@@ -140,20 +140,43 @@ class TestAgent:
                 tool_provider=cast(ToolProvider, "not a provider"),
             )
 
-    def test_chat_agent_without_tool_provider_raises(self) -> None:
-        """Chat-mode (the default ``function_kind``) requires a provider.
+    def test_chat_agent_without_tool_provider_constructs(self) -> None:
+        """Chat-mode agents may omit ``tool_provider`` (toolless chat).
 
-        The constructor must reject the omission eagerly with a message
-        that names ``output='chat'`` and points at the single-shot
-        escape hatch — otherwise the failure surfaces deep inside
-        ``run_agent`` on the first ``Agent.run`` call.
+        v1.0 originally rejected this combination eagerly; the
+        ``feat(agent): make tool_provider optional for chat-mode agents``
+        change relaxes the rule.  The constructor stores
+        ``_tool_provider = None``; the chat terminals allocate an
+        ephemeral in-memory ``FastMCP("agent-default")`` (zero tools)
+        for the duration of each invocation, so the LLM produces a
+        text response and the loop terminates after the first turn.
         """
         config = AgentConfig(name="a", function_name="f")
-        with pytest.raises(ConfigurationError, match="output='chat'"):
-            Agent(
-                config,
-                t0=cast(AsyncTensorZeroGateway, FakeT0([])),
-            )
+        agent = Agent(
+            config,
+            t0=cast(AsyncTensorZeroGateway, FakeT0([])),
+        )
+        assert agent.config.output.name == "chat"
+        # Internal attribute mirrors the json-mode parity case below:
+        # toolless chat keeps ``_tool_provider = None``; the fallback
+        # is allocated lazily per invocation by ``_resolve_chat_tool_provider``.
+        assert agent._tool_provider is None
+
+    async def test_toolless_chat_invoke_returns_text(self) -> None:
+        """End-to-end: toolless chat completes the inference loop.
+
+        With ``tool_provider=None``, the chat terminal wraps the run in
+        an ephemeral ``Client(FastMCP("agent-default"))`` — a real
+        in-memory FastMCP that advertises zero tools.  The fake
+        ``run_agent`` upstream (driven by ``FakeT0``) receives an empty
+        tool list, the response has no tool calls, and the loop
+        terminates after the first turn returning the LLM's text.
+        """
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="hello world")])])
+        config = AgentConfig(name="toolless", function_name="agent")
+        agent = Agent(config, t0=cast(AsyncTensorZeroGateway, t0))
+        result = await agent.invoke("hi").result()
+        assert result.value == "hello world"
 
     def test_json_agent_without_tool_provider_constructs(self) -> None:
         """Single-shot agents may omit the provider entirely (v1.0)."""

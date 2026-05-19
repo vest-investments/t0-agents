@@ -8,9 +8,87 @@ The Pythonic agentic framework for [TensorZero](https://www.tensorzero.com/).
 Build LLM agents that discover and execute tools through
 [MCP](https://modelcontextprotocol.io/) (Model Context Protocol), while
 TensorZero handles inference routing, episode tracking, and
-ClickHouse-backed observability for you.
+ClickHouse-backed observability for you.  Two surfaces, one engine:
+`t0_agents.glow` for the four-line decorator path, the canonical
+`Agent` surface for the moments you need every escape hatch.
 
 > **Status**: Alpha. APIs are stabilising. Pinned against `tensorzero >= 2026.4.0` and `fastmcp >= 3.2.3`.
+
+## Four lines, one agent.
+
+```python
+from t0_agents.glow import App
+app = App(t0=t0)
+
+@app.agent("tutor")
+async def tutor(query: str) -> str:
+    """An English tutor that explains grammar like you're 12."""
+
+print(await tutor("How do I say hello in formal Japanese?"))
+```
+
+The docstring is the system prompt.  The return annotation picks the
+[`OutputMode`](docs/output-modes.md).  `await tutor(...)` returns the
+unwrapped string directly.  Install with the extra:
+`pip install 't0-agents[glow]'`.  Full tour at
+[`docs/glow/`](docs/glow/index.md).
+
+## When you need the controls — drop down to Agent.
+
+```python
+from t0_agents import Agent, AgentConfig
+
+# Construct once, run many.
+agent = Agent(AgentConfig(
+    name="assistant",
+    function_name="agent",
+    middleware=[TimingMiddleware(), MyGuardrails()],   # Starlette-style chain
+), t0=t0, tool_provider=client)
+
+# invoke(...) returns a Run[T] — the first-class invocation handle.
+run = agent.invoke("Plan my trip to Lisbon under $1500.")
+
+# Iterate live AgentEvent stream:
+async for event in run.events():
+    ...
+
+# Cooperative cancellation:
+await run.cancel()
+
+# Await the terminal AgentResult:
+result = await run                      # episode_id, inference_ids, cost
+forked = await run.fork("Make it Madrid instead.")
+
+# Polymorphic outputs — typed end-to-end.
+from t0_agents import StructuredOutput
+from pydantic import BaseModel
+
+class Customer(BaseModel):
+    name: str
+    email: str
+
+extractor = Agent(AgentConfig(
+    name="extractor",
+    function_name="extract_customer",
+    output=StructuredOutput(Customer),
+), t0=t0)
+parsed = (await extractor.invoke("Sarah <sarah@example.com>")).value
+parsed.email                            # statically typed Customer
+```
+
+Glow compiles down to exactly this `Agent`.  Every glow wrapper
+exposes `_agent` — the same v1.0 surface — for the moments the
+decorator is in your way.  See
+[`docs/glow/escape-hatch.md`](docs/glow/escape-hatch.md).
+
+Each axis pairs with one chapter of the docs:
+[Run](docs/run.md) · [Middleware](docs/middleware.md) ·
+[Output Modes](docs/output-modes.md).  Multi-agent topologies are
+built directly from these primitives plus plain `asyncio` — see the
+runnable patterns under
+[`examples/agent/12_concurrency/`](examples/agent/12_concurrency/)
+and [`examples/glow/`](examples/glow/), documented in
+[Multi-Agent](docs/multi-agent.md).
 
 ## Why t0-agents
 
@@ -30,94 +108,9 @@ the hard parts:
 
 t0-agents is the thin glue between them.  The `mcp/` submodule fits in
 ~100 lines of production code; everything above it — `Agent`,
-`Run[T]`, `Middleware`, `OutputMode[T]`, `Composer`, memory,
-guardrails, streaming, multi-agent, HTTP serving, the terminal TUI,
-and the test harness — is opt-in.
-
-## The four v1.0 abstractions
-
-Every agentic feature in t0-agents sits on top of one of these four
-primitives, and you can adopt them piece by piece:
-
-```python
-from t0_agents import Agent, AgentConfig
-
-agent = Agent(AgentConfig(name="assistant", function_name="agent"),
-              t0=t0, tool_provider=client)
-
-# 1. Run[T] — the first-class invocation handle.
-run = agent.invoke("Plan my trip to Lisbon under $1500.")
-result = await run                    # final AgentResult, awaitable
-async for event in run.events():      # live AgentEvent stream
-    ...
-await run.cancel()                    # cooperative cancellation
-forked = await run.fork("Make it Madrid instead.")
-
-# 2. Middleware — composable cross-cutting concerns.
-class TimingMiddleware:
-    name = "timing"
-    async def __call__(self, ctx, next_):
-        start = time.perf_counter()
-        result = await next_(ctx)
-        print(f"{ctx.config.name} took {time.perf_counter() - start:.2f}s")
-        return result
-
-timed = Agent(AgentConfig(
-    name="assistant",
-    function_name="agent",
-    middleware=[TimingMiddleware()],     # plugs into the chain
-), t0=t0, tool_provider=client)
-await timed.invoke("Plan my trip to Lisbon under $1500.")
-
-# 3. OutputMode[T] — polymorphic outputs, typed end-to-end.
-from t0_agents import JsonOutput, StructuredOutput
-from pydantic import BaseModel
-
-class Customer(BaseModel):
-    name: str
-    email: str
-
-extractor = Agent(AgentConfig(
-    name="extractor",
-    function_name="extract_customer",
-    output=StructuredOutput(Customer),     # T = Customer
-), t0=t0)
-result = await extractor.invoke("Sarah <sarah@example.com>")
-result.value.email                          # statically typed Customer
-
-# 4. Composer — code-driven topologies of agents and composers.
-from t0_agents import sequential, parallel, race
-
-pipeline = sequential(
-    parallel(researcher, fact_checker),     # both run, both return
-    race(writer_fast, writer_thorough),     # first to finish wins
-)
-report = await pipeline.invoke("Write a memo on RLHF, < 500 words.")
-```
-
-Each pairs with one chapter of the docs: see
-[Run](docs/run.md) · [Middleware](docs/middleware.md) ·
-[Output Modes](docs/output-modes.md) · [Composition](docs/composition.md).
-
-## Features
-
-Every layer is opt-in.  The base install gets you the core stack;
-heavier extras live behind named installs.
-
-| Capability | What it gives you |
-| --- | --- |
-| **MCP adapter & loop** | Convert FastMCP tool definitions to TensorZero's inference format, orchestrate the turn-based inference-execute loop, serialize tool results back.  Low-level `run_agent` for full control. |
-| **`Run[T]` handles** | `agent.invoke(msg)` returns a `Run` you can `await`, iterate with `.events()`, cancel, replay, fork, and attach feedback to. |
-| **Middleware chain** | Memory, guardrails, cost tracking, sub-agent orchestration, JSON retry — all composable middlewares; add your own without forking `core/agent.py`. |
-| **`OutputMode[T]` polymorphism** | `ChatOutput`, `JsonOutput`, `StructuredOutput[M]` (Pydantic), `ToolCallOutput`, `StreamingOutput`.  Custom modes (YAML, Instructor, SQLAlchemy) plug in via the same protocol. |
-| **Topology composers** | `sequential`, `parallel`, `race`, `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`, `circuit_breaker`.  Cancellation cascades; `parent_episode_id` audit threads to ClickHouse. |
-| **Cross-run memory** | `InMemoryMemory`, `SqliteMemory`, `TensorZeroMemory`, or your own `MemoryProvider`.  Keyed by TensorZero's `episode_id`. |
-| **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules.  Every decision is captured on `AgentResult.guardrail_log` for audit. |
-| **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
-| **HTTP serving** | `create_app(agent)` wraps any agent in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` — plus `/chat/stream` (SSE) and `/chat/ws` (WebSocket) when `streaming=True`. |
-| **Terminal CLI** | `t0-agents run` (interactive streaming TUI), `t0-agents serve` (dev HTTP server), `t0-agents info` (config introspection). |
-| **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
-| **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
+`Run[T]`, `Middleware`, `OutputMode[T]`, memory, guardrails,
+streaming, multi-agent, HTTP serving, the terminal TUI, the test
+harness, and the `glow` decorator skin — is opt-in.
 
 ## Install
 
@@ -129,6 +122,9 @@ optional extra.
 ```bash
 # Base install (no Docker, no FastAPI, no SQLite).
 pip install t0-agents
+
+# Adds pydantic + the @app.agent decorator surface (the four-line path).
+pip install 't0-agents[glow]'
 
 # Adds aiosqlite for cross-process memory persistence.
 pip install 't0-agents[memory-sqlite]'
@@ -143,71 +139,15 @@ pip install 't0-agents[cli]'
 pip install 't0-agents[pydantic]'
 
 # Combine extras as needed:
-pip install 't0-agents[memory-sqlite,serve,pydantic]'
+pip install 't0-agents[glow,memory-sqlite,serve,pydantic]'
 ```
 
 Or with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-uv add t0-agents                                 # base
-uv add 't0-agents[memory-sqlite,cli,pydantic]'   # with extras
+uv add t0-agents                                   # base
+uv add 't0-agents[glow,memory-sqlite,cli,pydantic]'   # with extras
 ```
-
-## Quickstart
-
-```python
-import asyncio
-
-from fastmcp import Client, FastMCP
-from tensorzero import AsyncTensorZeroGateway
-
-from t0_agents import Agent, AgentConfig
-
-mcp = FastMCP("demo")
-
-@mcp.tool
-def get_specialty_today() -> str:
-    """Today's specialty coffee at the shop."""
-    return "Ethiopian Yirgacheffe pour-over"
-
-@mcp.tool
-def estimate_wait_minutes() -> int:
-    """How many minutes the queue is right now."""
-    return 7
-
-async def main() -> None:
-    gateway = AsyncTensorZeroGateway.build_http(
-        gateway_url="http://localhost:3000",
-    )
-    async with gateway as t0, Client(mcp) as client:
-        agent = Agent(
-            AgentConfig(name="barista", function_name="agent"),
-            t0=t0,
-            tool_provider=client,
-        )
-        # `invoke` returns a Run handle — awaitable for the final
-        # AgentResult; iterate `run.events()` to watch the loop live;
-        # `run.cancel()` stops it cooperatively.
-        result = await agent.invoke(
-            "What should I order, and how long will I wait?"
-        )
-        print(result.response)
-        print(f"episode_id={result.episode_id} turns={result.turns}")
-
-asyncio.run(main())
-```
-
-The agent figures out it needs both tools, picks the order, and
-synthesises an answer like *"The Ethiopian Yirgacheffe pour-over is on
-today, and the queue is about a 7-minute wait."*
-
-Prerequisites: a local TensorZero gateway (`docker compose up -d` with
-a provider API key in `.env`).  The step-by-step setup lives in
-[Getting Started](docs/getting-started.md).
-
-Prefer a no-Docker first try?  The `t0_agents.testing` submodule ships
-a `MockGateway` you can drive the exact same `Agent` against — see
-[Testing](docs/testing.md).
 
 ## Documentation
 
@@ -215,13 +155,20 @@ The public docs are written as a **progressive tour**: each chapter
 picks up the tension the previous one left open.  Start at
 [the index](docs/index.md) for the full Reading path and Appendices.
 
-**Reading path**
+**glow — the four-line path** (start here)
+- [Getting Started](docs/glow/getting-started.md) — toolless chat, structured outputs by return type, per-call overrides, multi-agent patterns.
+- [Streaming and events](docs/glow/streaming-and-events.md) — `FluentRun.events(*selectors)` and the seven typed selectors.
+- [Depends and tools](docs/glow/depends-and-tools.md) — value-style injection and sub-agent injection via `Depends(...)`.
+- [Typed MCP and guardrails](docs/glow/typed-mcp-and-guardrails.md) — class-based `MCPServer` and `Annotated[T, guardrail(...)]` metadata.
+- [Escape hatch](docs/glow/escape-hatch.md) — `wrapper._agent` IS the v1.0 `Agent`; lifespan + drop-down recipes.
+- [Known limitations](docs/glow/limitations.md) — what's deferred to v1.1.
+
+**Agent — the canonical, fully-typed surface**
 - [Getting Started](docs/getting-started.md) — install and run your first agent.
 - [Agent](docs/agent.md) — the declarative `Agent` class and its collaborator Protocols.
 - [Run](docs/run.md) — `agent.invoke(msg)` returns `Run[T]`: await, iterate events, cancel, replay, fork.
 - [Middleware](docs/middleware.md) — composable cross-cutting concerns (memory, guardrails, cost, retry…).
 - [Output Modes](docs/output-modes.md) — chat strings, JSON dicts, Pydantic models, tool-call routers, streaming.
-- [Composition](docs/composition.md) — nine code-driven topologies (`sequential`, `parallel`, `race`, `saga`, …).
 - [Concepts](docs/concepts.md) — pop the hood: what `agent.invoke()` actually does, turn by turn.
 - [Elicitation](docs/elicitation.md) — tools that pause to ask humans questions.
 - [Memory](docs/memory.md) — remember across turns and across processes.
@@ -239,7 +186,30 @@ picks up the tension the previous one left open.  Start at
 - [Elicitation in your FastAPI / SSE backend](docs/guides/elicitation-in-api.md)
 - [Elicitation in your FastMCP server](docs/guides/elicitation-in-mcp-server.md)
 
-Runnable examples for every chapter live under [`examples/`](examples/).
+Runnable examples for every chapter live under [`examples/`](examples/) —
+[`examples/glow/`](examples/glow/) is the 8-example progressive tour
+on top of the decorator surface; [`examples/agent/`](examples/agent/)
+has 15 area-by-area examples on top of the canonical `Agent` surface.
+
+## Features
+
+Every layer is opt-in.  The base install gets you the core stack;
+heavier extras live behind named installs.
+
+| Capability | What it gives you |
+| --- | --- |
+| **MCP adapter & loop** | Convert FastMCP tool definitions to TensorZero's inference format, orchestrate the turn-based inference-execute loop, serialize tool results back.  Low-level `run_agent` for full control. |
+| **`Run[T]` handles** | `agent.invoke(msg)` returns a `Run` you can `await`, iterate with `.events()`, cancel, replay, fork, and attach feedback to. |
+| **Middleware chain** | Memory, guardrails, cost tracking, sub-agent orchestration, JSON retry — all composable middlewares; add your own without forking `core/agent.py`. |
+| **`OutputMode[T]` polymorphism** | `ChatOutput`, `JsonOutput`, `StructuredOutput[M]` (Pydantic), `ToolCallOutput`, `StreamingOutput`.  Custom modes (YAML, Instructor, SQLAlchemy) plug in via the same protocol. |
+| **glow decorator surface** | FastAPI-style `@app.agent` over the v1.0 primitives.  Docstring = system prompt, return annotation = `OutputMode`, `Depends(...)` for tools and sub-agents, `Annotated[T, guardrail(...)]` for policy as type metadata. |
+| **Cross-run memory** | `InMemoryMemory`, `SqliteMemory`, `TensorZeroMemory`, or your own `MemoryProvider`.  Keyed by TensorZero's `episode_id`. |
+| **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules.  Every decision is captured on `AgentResult.guardrail_log` for audit. |
+| **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
+| **HTTP serving** | `create_app(agent)` wraps any agent in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` — plus `/chat/stream` (SSE) and `/chat/ws` (WebSocket) when `streaming=True`. |
+| **Terminal CLI** | `t0-agents run` (interactive streaming TUI), `t0-agents serve` (dev HTTP server), `t0-agents info` (config introspection). |
+| **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
+| **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
 
 ## Requirements
 

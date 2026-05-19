@@ -42,12 +42,17 @@ cli = [
     "pydantic>=2.0",
     "sse-starlette>=2.0",
 ]
+glow = [
+    "pydantic>=2.0",
+]
 
 [project.scripts]
 t0-agents = "t0_agents.cli.app:main"
 
 [project.urls]
 Repository = "https://github.com/sproutfi/t0-agents"
+Documentation = "https://github.com/sproutfi/t0-agents/blob/main/docs/index.md"
+Changelog = "https://github.com/sproutfi/t0-agents/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -78,13 +83,12 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 
-# ``src/t0_agents/mcp/`` is the standalone submodule (invariant §2.1
-# of the v1.0 integration contract — ``git diff src/t0_agents/mcp/``
-# must show zero changes across milestones).  v1.0 (M3) made
-# :class:`AgentResult` generic in ``T``, but ``mcp/loop.py:run_agent``
-# returns the bare ``AgentResult`` type by design.  Relax
-# ``disallow_any_generics`` for this module only so the strict check
-# does not force a modification.
+# ``src/t0_agents/mcp/`` is the standalone submodule — its signature
+# is frozen so the bridge to TensorZero stays byte-identical across
+# releases.  v1.0 made :class:`AgentResult` generic in ``T``, but
+# ``mcp/loop.py:run_agent`` returns the bare ``AgentResult`` type by
+# design.  Relax ``disallow_any_generics`` for this module only so
+# the strict check does not force a modification.
 [[tool.mypy.overrides]]
 module = "t0_agents.mcp.*"
 disallow_any_generics = false

@@ -1,0 +1,170 @@
+# Getting started with `t0_agents.glow`
+
+> **Experimental.** Public API on the
+> [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
+> branch is unstable.  Known limitations are catalogued at
+> [`limitations.md`](limitations.md); the escape hatch to the v1.0
+> `Agent` lives at [`escape-hatch.md`](escape-hatch.md).
+
+`t0_agents.glow` is a Pythonic skin over the v1.0 primitives — `Agent`,
+`Run[T]`, and `OutputMode[T]`.  Where the base API takes ~25 lines to
+construct an `AgentConfig`, build the gateway and FastMCP client, and
+orchestrate a `Run`, glow takes four: a function with a docstring and
+a return-type annotation, decorated with `@app.agent`.
+
+```python
+from t0_agents.glow import App
+app = App(t0=t0)
+
+@app.agent("tutor")
+async def tutor(query: str) -> str:
+    """An English tutor that explains grammar like you're 12."""
+
+print(await tutor("How do I say hello in formal Japanese?"))
+```
+
+The docstring is the system prompt; the `-> str` return annotation
+selects [`ChatOutput`](../output-modes.md); `await tutor(...)` returns
+the unwrapped string directly.  Everything else — MCP, tool routing,
+event streaming — is opt-in.
+
+Install glow with the extra:
+
+```bash
+pip install 't0-agents[glow]'
+```
+
+The extra pulls `pydantic>=2.0` (FastAPI precedent — glow uses pydantic
+for type introspection in a few places).  See
+[`limitations.md`](limitations.md#pydantic-is-a-hard-dep-of-the-glow-extra)
+for the rationale.
+
+The running examples under [`examples/glow/`](../../examples/glow/) are
+the long-form companion to this tutorial — boot the gateway once with
+`docker compose -f examples/glow/docker-compose.yml --env-file .env up -d`
+and run each with `uv run python examples/glow/<NN>_*.py`.
+
+---
+
+## Toolless chat — no MCP plumbing needed
+
+The v1.0 `Agent` requires a `tool_provider` (typically a FastMCP
+`Client`) so the chat loop can advertise an empty tool list.  glow
+relaxes that requirement: chat-mode agents constructed without a
+`tool_provider` allocate an ephemeral in-memory FastMCP for the
+invocation's duration.  Concretely, the 4-line hello-world above
+runs without ever touching MCP — and the underlying unlock lives in
+the core `Agent`, so every consumer benefits, not just glow.
+
+When you register tools (`@app.tool`) or mount MCP servers
+(`servers=[MathMCP]`), glow switches to the App-owned in-memory
+server.  Until then, the chat loop just iterates `t0.inference()`
+once and returns text.  See [`01_hello.py`](../../examples/glow/01_hello.py)
+for the runnable demo.
+
+---
+
+## Structured outputs by return type
+
+Annotate the return type as a Pydantic model and glow picks
+`StructuredOutput(M)` automatically:
+
+```python
+from pydantic import BaseModel
+
+class TripPlan(BaseModel):
+    destinations: list[str]
+    cost_usd: float
+
+@app.agent("planner", function_name="plan_trip")
+async def plan(query: str) -> TripPlan:
+    """Plan trips with realistic budgets."""
+
+trip = await plan("3 days in Japan under $2000")
+print(trip.destinations)        # statically typed list[str]
+print(trip.cost_usd)
+```
+
+The mapping is one-to-one with [Output Modes](../output-modes.md):
+
+| Return annotation                  | `OutputMode`                                |
+| ---------------------------------- | ------------------------------------------- |
+| `str` (or missing)                 | `ChatOutput()`                              |
+| `dict`, `dict[str, Any]`, …        | `JsonOutput()`                              |
+| `T(BaseModel)`                     | `StructuredOutput(T)`                       |
+| `list[T(BaseModel)]`               | `StructuredOutput(<wrapper>)` (auto-unwrapped) |
+| `Optional[T]` / `T \| None`        | as `T` (None permitted at parse)            |
+
+Forward refs are resolved at decoration time; failures raise
+`ConfigurationError` immediately, not on the first call.  Runnable
+demo: [`02_structured.py`](../../examples/glow/02_structured.py).
+
+---
+
+## Per-call overrides with `.json()`, `.json(M)`, and `.text()`
+
+The same agent can return three different shapes per invocation:
+
+```python
+text = await tutor("Say hi")                              # str
+tips = await tutor("3 tips for learning English").json()  # dict
+trip = await tutor("Plan Lisbon trip").json(TripPlan)     # TripPlan
+```
+
+`tutor(...)` returns a `FluentRun[str]`; calling `.json()` or
+`.json(Model)` swaps the underlying `OutputMode` before the build
+fires.  `.json(A).json(B)` is **last-wins** (dict-update precedent;
+the swap logs at DEBUG).  `.as_(custom_mode)` accepts any
+`OutputMode[U]` directly for fully-custom outputs.
+
+The `await tutor("Plan Lisbon trip").result()` escape hatch returns
+the full `AgentResult[T]` — `episode_id`, `inference_ids`, the
+guardrail log, aggregated cost — for callers who need more than the
+unwrapped value.
+
+---
+
+## Multi-agent patterns
+
+glow has no compose() helper of its own — three canonical patterns,
+expressed in plain Python plus the v1.0 sub-agent surface, cover the
+multi-agent space:
+
+| Pattern      | Topology                              | Runnable example                                                                |
+|--------------|---------------------------------------|---------------------------------------------------------------------------------|
+| Sequential   | pipeline `A → B → C`                  | [`examples/glow/04_sequential.py`](../../examples/glow/04_sequential.py)        |
+| Parallel     | fan-out + plain-Python reducer        | [`examples/glow/05_parallel.py`](../../examples/glow/05_parallel.py)            |
+| Orchestrator | `Depends(<wrapper>)` sub-agents       | [`examples/glow/06_orchestrator.py`](../../examples/glow/06_orchestrator.py)    |
+
+Sequential is `await b(await a(query))` plus any ad-hoc transform
+in the gap.  Parallel is `asyncio.gather(a(q), b(q),
+return_exceptions=True)` plus whatever reducer fits the data.
+Orchestrator declares each sub-agent as a normal `@app.agent` and
+threads them into the parent decorator via `Depends(<wrapper>)`
+parameters; the v1.0 sub-agent installer (now in
+[`t0_agents.delegation`](../multi-agent.md)) wires each as a
+`<name>_ask` MCP tool on the parent's App-owned FastMCP server.
+
+The full DI pattern — value-style `Depends(get_db)` for tools and
+sub-agent injection for `@app.agent` — is documented in
+[`depends-and-tools.md`](depends-and-tools.md).
+
+---
+
+## Where to go next
+
+- **[Streaming and events](streaming-and-events.md)** — `FluentRun.events(*selectors)`,
+  the seven typed selectors, and the `Selector(TextDeltaEvent)` recipe for
+  token-by-token streaming.
+- **[Depends and tools](depends-and-tools.md)** — value-style injection inside
+  `@app.tool`, sub-agent injection inside `@app.agent`, and the
+  `app.dependency_overrides` test hook.
+- **[Typed MCP and guardrails](typed-mcp-and-guardrails.md)** — class-based
+  `MCPServer` declarations, the `Annotated[...]` override, and the
+  `Annotated[T, guardrail(...)]` metadata pattern.
+- **[Escape hatch to v1.0](escape-hatch.md)** — when glow stands in your way:
+  `wrapper._agent` is the v1.0 `Agent` the decorator built, plus
+  `app.lifespan()` / `build()` / `shutdown()` for explicit lifecycle.
+- **[Known limitations](limitations.md)** — what's deferred to v1.1
+  (streaming JSON, per-agent MCP subsets, AsyncIterator tools, sync API).
+- **[v1.0 docs](../index.md)** — the underlying primitives glow compiles to.

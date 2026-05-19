@@ -106,4 +106,4 @@ registry = {"billing": "http://billing:8000/mcp", "crm": "http://crm:8000/mcp"}
 client = await build_client(registry)
 ```
 
-See `examples/14_multi_server/` for a runnable example with Docker Compose configuration.
+See `examples/agent/14_multi_server/` for a runnable example with Docker Compose configuration.

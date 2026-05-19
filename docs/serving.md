@@ -451,7 +451,7 @@ of Python and a `docker compose up` for the gateway.
 
 ### Intermediate — multi-surface hosting, deployment labels, memory continuity
 
-[`examples/09_serving/`](../examples/09_serving/) is the
+[`examples/agent/09_serving/`](../examples/agent/09_serving/) is the
 runnable version. It adds:
 
 - **Memory continuity across requests.** `AgentConfig(memory=InMemoryMemory())`
@@ -586,7 +586,7 @@ human-in-the-loop transport today: `ctx.elicit()` emits a
 `WSElicitationResponse`, and the `ElicitationForwarder` resolves the
 pending future. The full event model, frame shapes, backpressure
 contract, and browser cookbook live in [Streaming](streaming.md);
-[`examples/07_streaming/`](../examples/07_streaming/) ships
+[`examples/agent/07_streaming/`](../examples/agent/07_streaming/) ships
 a runnable vanilla-JS client that covers every frame type.
 
 ## Error handling
@@ -781,9 +781,9 @@ The FastAPI layer covered above is the right target for production deployments. 
 
 ## See also
 
-- [`examples/09_serving/`](../examples/09_serving/) — runnable
+- [`examples/agent/09_serving/`](../examples/agent/09_serving/) — runnable
   single-agent demo with memory continuity and deployment tagging.
-- [`examples/07_streaming/`](../examples/07_streaming/) —
+- [`examples/agent/07_streaming/`](../examples/agent/07_streaming/) —
   runnable browser demo covering SSE, WebSocket, and live elicitation
   when `streaming=True`.
 - [Streaming](streaming.md) — `Run.events()` event model, SSE / WS
