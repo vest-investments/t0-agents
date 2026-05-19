@@ -20,6 +20,7 @@ services:
       - "3000:3000"
     volumes:
       - ./config:/app/config:ro
+    command: --config-file /app/config/tensorzero.toml
     environment:
       TENSORZERO_CLICKHOUSE_URL: "http://chuser:chpassword@clickhouse:8123/tensorzero"
       GROQ_API_KEY: "${GROQ_API_KEY}"
