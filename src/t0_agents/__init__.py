@@ -4,20 +4,6 @@ import logging
 
 from tensorzero import ToolChoice
 
-from t0_agents.compose import (
-    Composable,
-    Composer,
-    ComposerError,
-    circuit_breaker,
-    conditional,
-    consensus,
-    map_reduce,
-    parallel,
-    race,
-    retry_chain,
-    saga,
-    sequential,
-)
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.elicitation_forwarder import (
@@ -94,9 +80,6 @@ __all__ = [
     "AgentResult",
     "Attempt",
     "ChatOutput",
-    "Composable",
-    "Composer",
-    "ComposerError",
     "ConfigurationError",
     "CostTrackingMiddleware",
     "DoneEvent",
@@ -147,17 +130,8 @@ __all__ = [
     "TurnEndEvent",
     "TurnStreamAssembler",
     "agent_as_tool",
-    "circuit_breaker",
-    "conditional",
-    "consensus",
-    "map_reduce",
-    "parallel",
     "permissive_parse",
-    "race",
-    "retry_chain",
     "run_agent",
-    "saga",
-    "sequential",
 ]
 
 # Library best practice: prevent "No handler found" warnings.
