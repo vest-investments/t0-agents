@@ -1,4 +1,4 @@
-"""Unit tests for ``t0_agents.compose.delegation.agent_as_tool``."""
+"""Unit tests for :func:`t0_agents.delegation.agent_as_tool.agent_as_tool`."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 from fastmcp.tools import Tool
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.compose.delegation import agent_as_tool
-from t0_agents.compose.orchestrator import (
+from t0_agents.delegation.agent_as_tool import agent_as_tool
+from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
     bind_parent_episode_id,
 )

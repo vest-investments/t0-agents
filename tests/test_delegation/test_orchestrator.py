@@ -1,4 +1,4 @@
-"""Unit tests for ``t0_agents.compose.orchestrator``.
+"""Unit tests for ``t0_agents.delegation.orchestrator``.
 
 Covers:
 
@@ -26,7 +26,7 @@ from fastmcp.tools import Tool as FastMCPTool
 from mcp.types import TextContent
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 
-from t0_agents.compose.orchestrator import (
+from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
     _OrchestrationToolProvider,
     bind_parent_episode_id,
