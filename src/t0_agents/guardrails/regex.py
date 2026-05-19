@@ -19,15 +19,13 @@ with the supplied ``message``; the
 :class:`~t0_agents.core.middleware.GuardrailsMiddleware` propagates this
 as a hard abort.
 
-This factory was originally introduced for the
-:mod:`t0_agents.glow` experimental surface in v1.0 M4 (the
-``Annotated[T, Guardrail(...)]`` extraction test required a regex
-blocker, and the existing guardrails subsystem had ``max_cost``,
-``max_tool_calls``, ``block_tools``, ``require_approval``, and
-``require_parsed`` but nothing regex-based).  M5 promotes it to the
-canonical guardrails namespace so every ``Agent`` consumer can use it
-directly, not just glow agents.  The :mod:`t0_agents.glow` package
-re-exports the same callable, so existing glow imports keep working.
+The regex blocker fills a gap left by the other built-in guardrails
+(``max_cost``, ``max_tool_calls``, ``block_tools``, ``require_approval``,
+``require_parsed``) — it lets a user say "block any response that
+contains <pattern>" without writing a custom :class:`Guardrail`.
+:mod:`t0_agents.glow` re-exports the same callable so glow's
+``Annotated[T, regex_guardrail(...)]`` pattern works against the
+canonical implementation.
 """
 
 from __future__ import annotations

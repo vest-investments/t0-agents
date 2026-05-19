@@ -11,9 +11,8 @@ Pattern lift from FastAPI's ``app = FastAPI()`` followed by
 - A long-lived in-memory ``fastmcp.FastMCP`` server (``_mcp_server``)
   and the matching ``fastmcp.Client`` (``_owned_client``).  ``@app.tool``
   registers user tools on the server; every glow agent is constructed
-  with ``tool_provider=self._owned_client`` so the v1.0 toolless-chat
-  fallback is never reached for glow agents (M2 §4 carry-forward
-  option (b)).
+  with ``tool_provider=self._owned_client`` so the toolless-chat
+  fallback in ``core/agent.py`` is never reached for glow agents.
 - The lazy build path: each ``_AgentSpec`` materialises its underlying
   :class:`Agent` on first ``await wrapper(msg)`` *or* eagerly via
   ``await app.build()``.  ``app.lifespan()`` is the recommended entry
@@ -90,9 +89,10 @@ class App:
     ) -> None:
         self._t0: AsyncTensorZeroGateway = t0
         self._agent_registry: dict[str, _AgentSpec] = {}
-        # M3 wires the resolution path; the attribute lives here so
-        # users can install overrides without raising ``AttributeError``
-        # at any point in the lifecycle.
+        # Public mapping consulted by ``DependencyResolver`` on every
+        # ``Depends(...)`` resolution.  Lives here so users can install
+        # overrides without raising ``AttributeError`` at any point in
+        # the lifecycle.
         self.dependency_overrides: dict[Callable[..., Any], Callable[..., Any]] = {}
 
         # App-owned FastMCP server + matching Client.  The server starts
@@ -100,9 +100,8 @@ class App:
         # is constructed with ``tool_provider=self._owned_client``, so
         # the v1.0 toolless-chat fallback at
         # ``core/agent.py:_resolve_chat_tool_provider`` is never reached
-        # for glow agents (M2 §4 carry-forward option (b)).  The Client
-        # is connected by :meth:`build` (idempotent); :meth:`shutdown`
-        # exits the matching ``__aexit__``.
+        # for glow agents.  The Client is connected by :meth:`build`
+        # (idempotent); :meth:`shutdown` exits the matching ``__aexit__``.
         self._mcp_server: FastMCP[Any] = FastMCP("glow-app")
         self._owned_client: Client[Any] = Client(self._mcp_server)
         self._exit_stack: AsyncExitStack = AsyncExitStack()
@@ -115,7 +114,7 @@ class App:
         # resolution, so a single instance per ``App`` is safe.
         self._resolver: DependencyResolver = DependencyResolver()
 
-        # M4: typed-MCP integration.  Specs discovered via the ``servers=``
+        # Typed-MCP integration.  Specs discovered via the ``servers=``
         # kwarg are seeded first; ``@app.agent`` registration appends more
         # specs harvested from parameter annotations (``Annotated`` and
         # subclass forms).  Each spec is mounted onto ``_mcp_server`` in
@@ -191,7 +190,7 @@ class App:
         """Return the underlying :class:`Agent`, constructing it if needed.
 
         Sync — :class:`Agent.__init__` is sync.  ``async`` is reserved
-        for :meth:`build` so M4's MCP-mount machinery can interleave
+        for :meth:`build` so the MCP-mount machinery can interleave
         ``await FastMCP.mount(...)`` cleanly.
 
         When ``spec.sub_agent_specs`` is non-empty, depth-first
@@ -214,10 +213,10 @@ class App:
         if sub_agents:
             config_kwargs["sub_agents"] = sub_agents
         if spec.guardrails:
-            # M4: feed harvested ``Annotated[T, Guardrail(...)]`` metadata
-            # into the v1.0 ``AgentConfig.guardrails`` field so the
-            # existing ``GuardrailsMiddleware`` picks them up at runtime
-            # without further glow plumbing.
+            # Feed harvested ``Annotated[T, Guardrail(...)]`` metadata
+            # into the canonical ``AgentConfig.guardrails`` field so
+            # ``GuardrailsMiddleware`` picks them up at runtime without
+            # further glow plumbing.
             config_kwargs["guardrails"] = spec.guardrails
         agent = Agent(
             AgentConfig(**config_kwargs),
@@ -265,7 +264,7 @@ class App:
         off network traffic.
         """
         if not self._client_entered:
-            # M4: mount every typed MCP server BEFORE entering the
+            # Mount every typed MCP server BEFORE entering the
             # client so the mounted tools surface on the first
             # ``list_tools()`` call.  ``FastMCP.mount`` is sync and
             # immediate — no client re-entry required.  ``url``-based

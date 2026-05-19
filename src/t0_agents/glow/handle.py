@@ -4,9 +4,9 @@ Defers OutputMode selection until ``__await__`` (or ``events()``) so the
 caller can apply per-call overrides — ``.text()``, ``.json()``,
 ``.json(M)``, ``.as_(mode)`` — without rebuilding the underlying
 :class:`~t0_agents.core.run.Run`.  Construction stores a build closure
-that takes the chosen mode and produces a Run; M2's ``@app.agent`` will
-supply that closure as ``lambda mode: agent.invoke(msg, output=mode,
-eager=False)``.
+that takes the chosen mode and produces a Run; the ``@app.agent``
+decorator supplies that closure as ``lambda mode: agent.invoke(msg,
+output=mode, eager=False)``.
 
 ``__await__`` returns the *unwrapped* ``T`` directly (the Pythonic fast
 path: ``answer = await tutor(query)``).  :meth:`result` is the escape
@@ -73,10 +73,10 @@ class FluentRun(Generic[T]):
         # default ``OutputMode`` is in effect (i.e. the user did not call
         # a per-call override).  Decorator-driven path: ``@app.agent``
         # passes ``lambda v: v.items`` when the function's return type is
-        # ``list[BaseModel]`` (M1 synthesises a single-field wrapper model
-        # whose ``items: list[T]`` is the actual user-visible payload).
-        # Per-call overrides (.text / .json / .as_) deliberately reset
-        # the transform — the user has opted out of the default shape.
+        # ``list[BaseModel]`` — output inference synthesises a single-field
+        # wrapper model whose ``items: list[T]`` is the actual user-visible
+        # payload.  Per-call overrides (.text / .json / .as_) deliberately
+        # reset the transform — the user has opted out of the default shape.
         self._value_transform: Callable[[Any], T] | None = value_transform
 
     # ------------------------------------------------------------------

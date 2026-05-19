@@ -26,7 +26,7 @@ Either pattern surfaces a :class:`MCPServerSpec` at decoration time;
 the App accumulates them and mounts each onto its long-lived in-memory
 :class:`fastmcp.FastMCP` server during :meth:`App.build`.
 
-Both transports are supported in M4:
+Both transports are supported:
 
 - ``server=<FastMCP instance>`` mounts the in-memory server directly
   (``examples/14_multi_server`` pattern).
@@ -61,8 +61,8 @@ class MCPServerSpec:
 
     Exactly one of :attr:`url` or :attr:`server` must be set.  ``url``
     drives the HTTP path (wrapped via ``create_proxy`` at mount time);
-    ``server`` is the in-memory escape hatch (used by the M4 integration
-    test and by users with embedded ``FastMCP`` instances).  ``namespace``
+    ``server`` is the in-memory escape hatch for users with embedded
+    ``FastMCP`` instances.  ``namespace``
     becomes the ``namespace=`` kwarg on :meth:`FastMCP.mount` — the tool
     names exposed to the agent are prefixed with this namespace, which
     keeps multi-server setups collision-free.  ``transport`` is recorded
@@ -186,7 +186,7 @@ def _extract_mcp_specs(
 
     Returns the discovered specs in parameter-declaration order, then
     metadata order within each parameter.  Empty list when no
-    ``MCPServer`` markers appear (the M2/M3 case).
+    ``MCPServer`` markers appear.
 
     ``hints`` may be passed pre-resolved by the caller to avoid a second
     ``get_type_hints`` pass; when ``None``, it is resolved here.  Failure

@@ -46,8 +46,8 @@ class _AgentSpec:
     value_transform: Callable[[Any], Any] | None = None
     agent: Agent | None = field(default=None)
     sub_agent_specs: list[_AgentSpec] = field(default_factory=list)
-    # M4: guardrails harvested from ``Annotated[T, Guardrail(...)]`` on
-    # any of the decorated function's parameters or its return type.
-    # Folded into ``AgentConfig.guardrails`` at first build; the runtime
-    # path through ``GuardrailsMiddleware`` is unchanged.
+    # Guardrails harvested from ``Annotated[T, Guardrail(...)]`` on any
+    # of the decorated function's parameters or its return type.  Folded
+    # into ``AgentConfig.guardrails`` at first build; the runtime path
+    # through ``GuardrailsMiddleware`` is unchanged.
     guardrails: list[Guardrail] = field(default_factory=list)
