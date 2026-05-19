@@ -11,25 +11,23 @@ sub-agents as ordinary tools; calling one invokes the sub-agent's full
 Ships in the base distribution — no extras, no new dependencies beyond
 the `core` + `mcp` foundation.
 
-> **v1.0 Composers — orthogonal path.**  Alongside the declarative
-> `AgentConfig.sub_agents=[...]` path documented on this page, v1.0
-> ships a **topology** surface for code-driven composition.  Nine
-> built-in topologies (`sequential`, `parallel`, `race`, `consensus`,
-> `map_reduce`, `conditional`, `saga`, `retry_chain`,
-> `circuit_breaker`) compose Agents and other Composers into
-> industrial pipelines without an LLM in the routing decision.
-> Every Composer satisfies the `Composable[Input, T]` protocol;
-> `composer.invoke(input)` returns the same `Run[T]` handle as
-> `agent.invoke(user_message)`, with cancellation cascading to every
-> sub-Run and `parent_episode_id` audit threading through to
-> ClickHouse.
+> **Code-driven topologies.**  Alongside the LLM-routed
+> `AgentConfig.sub_agents=[...]` path documented on this page, t0-agents
+> supports code-driven topologies in plain Python — no special
+> framework abstractions needed.  Three canonical examples:
+> [Sequential](../examples/12_concurrency/01_sequential.py) (await chain),
+> [Parallel](../examples/12_concurrency/02_parallel.py)
+> (`asyncio.gather` + reducer), and
+> [Orchestrator](../examples/12_concurrency/03_orchestrator.py)
+> (the same `sub_agents=` mechanism this page documents).  The
+> glow-decorator counterparts live in
+> [examples/glow/04_sequential.py](../examples/glow/04_sequential.py),
+> [05_parallel.py](../examples/glow/05_parallel.py), and
+> [06_orchestrator.py](../examples/glow/06_orchestrator.py).
 >
-> Read [`docs/composition.md`](composition.md) for the full
-> reference.  Use `sub_agents=` (this page) when you want the
-> orchestrator's LLM to decide whom to delegate to; use Composers
-> when the topology is fixed in code.  The two paths compose — a
-> Composer child can have its own `AgentConfig.sub_agents=` chain,
-> and audit threads through both layers.
+> Use `sub_agents=` (this page) when the right delegate depends on the
+> input and the LLM should decide; write the dispatch in code (the
+> Sequential / Parallel patterns) when the topology is fixed.
 
 ## Requirements
 
@@ -116,7 +114,7 @@ default correlation behaviour.
 
 ## API reference
 
-Public symbols in `t0_agents.compose`:
+Public symbols in `t0_agents.delegation`:
 
 ### `agent_as_tool(sub_agent, *, tool_name=None, description=None) -> Tool`
 

@@ -6,7 +6,7 @@
 > known limitations are catalogued at [`limitations.md`](limitations.md).
 
 `t0_agents.glow` is a Pythonic skin over the v1.0 primitives — `Agent`,
-`Run[T]`, `OutputMode[T]`, `Composer`.  Where the base API takes ~25
+`Run[T]`, and `OutputMode[T]`.  Where the base API takes ~25
 lines to construct an `AgentConfig`, build the gateway and FastMCP
 client, and orchestrate a `Run`, glow takes four: a function with
 a docstring and a return-type annotation, decorated with `@app.agent`.
@@ -161,98 +161,27 @@ through.  Demo: [`03_streaming.py`](../../examples/glow/03_streaming.py).
 
 ---
 
-## Composers and agents are the same thing
+## Multi-agent patterns
 
-The v1.0 [`Composable[Input, T]`](../composition.md) Protocol declares
-one method: `invoke(input, /, **kwargs) -> Run[T]`.  `Agent` satisfies
-it.  Every `Composer` factory (`sequential`, `parallel`, `consensus`,
-…) returns a `Composer`, which is itself a `Composable`.  Composers
-nest for free — `sequential(parallel(a, b), router_dict)` type-checks
-and runs against the same contract.
+glow has no compose() helper of its own — three canonical patterns,
+expressed in plain Python plus the v1.0 sub-agent surface, cover the
+multi-agent space:
 
-glow's `compose()` returns a `Composer`, so anything you compose can
-serve as a node of any further `compose()`.  No graph DSL, no edge
-declarations:
+| Pattern      | Topology                              | Runnable example                                                                |
+|--------------|---------------------------------------|---------------------------------------------------------------------------------|
+| Sequential   | pipeline `A → B → C`                  | [`examples/glow/04_sequential.py`](../../examples/glow/04_sequential.py)        |
+| Parallel     | fan-out + plain-Python reducer        | [`examples/glow/05_parallel.py`](../../examples/glow/05_parallel.py)            |
+| Orchestrator | `Depends(<wrapper>)` sub-agents       | [`examples/glow/06_orchestrator.py`](../../examples/glow/06_orchestrator.py)    |
 
-```python
-from t0_agents.glow import compose
-
-deep_research = compose({arxiv_agent, perplexity_agent}, merge=union)
-qa = compose({
-    "research": compose([deep_research, summarizer]),
-    "code":     code_agent,
-    "default":  general_qa,
-})
-answer = await qa("Latest results on protein folding")
-```
-
-Each layer is a `Composable`.  Slot an agent or a composer
-interchangeably wherever a node is expected.  Demo:
-[`04_composition.py`](../../examples/glow/04_composition.py).
-
----
-
-## Native composition — `compose(spec, *, merge=None)`
-
-The `spec` shape selects the topology:
-
-| Spec type                     | Topology                                                            |
-| ----------------------------- | ------------------------------------------------------------------- |
-| `list` / `tuple`              | `sequential(*spec)` — pipeline                                      |
-| `set` / `frozenset`           | `parallel(*spec, reducer=merge, error_policy="continue")` — fan-out + merge |
-| `dict[str, Composable]`       | LLM-routed dispatch via a custom `_LLMRoutedComposer`               |
-
-The dict shape installs a synthetic FastMCP server with one no-op
-tool per route key, wires a classifier `Agent` configured with
-`ToolCallOutput(tool_choice="required")`, runs one inference per
-call to pick the route, and dispatches the **original** user input
-to `routes[picked]`.  This is *one extra inference per routing
-decision*; budget accordingly.
-
-> **Model capability requirement.**  The classifier uses
-> `tool_choice="required"` with arbitrary synthetic tool schemas.
-> Open-source models like `openai/gpt-oss-20b` are documented to
-> return provider errors in this mode (M4 §3.3).  Use
-> Claude Sonnet/Opus, GPT-4o, GPT-5, or Gemini-2.5-pro for the
-> dict-router path.
-
----
-
-## Sets and merging — the type-fragility risk
-
-`compose({a, b, c})` runs every agent and merges results.  The
-default reducer concatenates string `AgentResult.value`s with
-`"\n---\n"`; mixed-type ensembles raise loudly and force the user
-to pass an explicit `merge=`:
-
-```python
-def union(results):
-    return sorted({src for r in results if not isinstance(r, BaseException) for src in r.value})
-
-ensemble = compose({arxiv_agent, perplexity_agent}, merge=union)
-```
-
-The reducer receives raw entries: successful `AgentResult` for each
-finished branch, and a `BaseException` (kept inline by
-`error_policy="continue"`) for each branch that crashed.  If you
-need first-finisher-wins, write it explicitly with
-`asyncio.wait(return_when=FIRST_COMPLETED)` — glow does not bless
-`race` as a primitive (see next section).
-
----
-
-## Race is deprecated — use `parallel(*, reducer=…, error_policy=…)`
-
-v1.0 still ships `race(*nodes)`, but it emits a `DeprecationWarning`
-pointing at the same `parallel(*, reducer=..., error_policy="continue")`
-factory that backs `compose({...})`.  Removal is slated for v1.1.
-
-Why deprecated: first-finisher-cancels-the-rest pays for the
-inferences anyway (the slow branches kicked off before being
-cancelled), throws their work away, and the cancellation cascade is
-best-effort.  glow's `set[Composable]` semantics map to fan-out +
-merge precisely so users never get nudged toward the footgun.  See
-[Composition appendix](../composition.md#advanced--not-recommended).
+Sequential is `await b(await a(query))` plus any ad-hoc transform
+in the gap.  Parallel is `asyncio.gather(a(q), b(q),
+return_exceptions=True)` plus whatever reducer fits the data.
+Orchestrator declares each sub-agent as a normal `@app.agent` and
+threads them into the parent decorator via `Depends(<wrapper>)`
+parameters; v1.0's `install_sub_agents` (now in
+`t0_agents.delegation`) wires each as a `<name>_ask` MCP tool on
+the parent's App-owned FastMCP server.  See [Multi-agent](../multi-agent.md)
+for the legacy-Agent counterparts and the wiring details.
 
 ---
 

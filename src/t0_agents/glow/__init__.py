@@ -18,7 +18,6 @@ the implementation roadmap.
 from __future__ import annotations
 
 from t0_agents.glow.app import App
-from t0_agents.glow.compose import compose
 from t0_agents.glow.di import Depends
 from t0_agents.glow.guardrails_typing import regex_guardrail
 from t0_agents.glow.handle import FluentRun
@@ -47,6 +46,5 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "TurnEnd",
-    "compose",
     "regex_guardrail",
 ]

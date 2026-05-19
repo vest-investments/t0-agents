@@ -7,7 +7,7 @@
 # - ``writing``   — the writer sub-agent (markdown formatting).
 # - ``orchestrator`` — the parent agent, sees ``researcher_ask`` and
 #   ``writer_ask`` as tools (installed at Agent construction time by
-#   :func:`t0_agents.compose.install_sub_agents`).
+#   :func:`t0_agents.delegation.install_sub_agents`).
 #
 # All three use the same model for simplicity; a production setup would
 # typically vary model / temperature per agent role.

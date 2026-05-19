@@ -16,7 +16,7 @@ opt-in for the patterns the simple `await` doesn't cover.
 > the way out, see [`AgentResult[T]`](api-reference.md#agentresult-1) +
 > [Output modes](output-modes.md).  For the cross-cutting concerns
 > threaded through every Run, see [Middleware](middleware.md).  For
-> composing Runs into topologies, see [Composition](composition.md).
+> multi-agent topologies, see [Multi-Agent](multi-agent.md).
 
 ---
 
@@ -394,6 +394,6 @@ the TensorZero gateway it expects via `docker-compose.yml`.
 - [Output modes](output-modes.md) — what `Run.result()` returns and how
   the type parameter `T` is inferred.
 - [Middleware](middleware.md) — what runs around your inference loop.
-- [Composition](composition.md) — uniformly composable Runs.
+- [Multi-Agent](multi-agent.md) — the sub_agents=, Sequential, and Parallel patterns.
 - [API reference — Run](api-reference.md#run) — exhaustive signature
   table for every method on `Run`.

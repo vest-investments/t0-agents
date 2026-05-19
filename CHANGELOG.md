@@ -499,6 +499,22 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
 
 ### Removed
 
+- **`compose` topology primitives** — the 9 factories
+  (`sequential`, `parallel`, `race`, `conditional`, `consensus`,
+  `map_reduce`, `saga`, `retry_chain`, `circuit_breaker`) and the
+  `Composable` / `Composer` / `CompositeRun` / `ComposerError`
+  protocol layer.  Use `await agent.invoke(...)` for sequential
+  chaining, `asyncio.gather` for parallel execution, and
+  `AgentConfig(sub_agents=[...])` with a routing system prompt for
+  the dispatch case.  See
+  `examples/12_concurrency/{01_sequential,02_parallel,03_orchestrator}.py`
+  and `examples/glow/{04_sequential,05_parallel,06_orchestrator}.py`.
+- **`t0_agents.glow.compose`** — removed alongside the underlying
+  topology layer.
+- **Sub-agent orchestration relocated** — `agent_as_tool`,
+  `install_sub_agents`, and friends now live in
+  `t0_agents.delegation` (top-level re-exports unchanged).
+
 - **`Agent.run(...)`** — replaced by `await agent.invoke(msg, ...)`
   (a `Run` is awaitable and returns the same `AgentResult`).
   Migration is a one-liner per call site; see

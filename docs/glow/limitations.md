@@ -50,22 +50,6 @@ visibility boundaries by creating a per-domain `App` and routing
 queries between them at the application layer.  A first-class
 solution (per-agent MCP visibility filters) is a v1.1 candidate.
 
-## LLM-routed dict-composer model capability
-
-`compose({"name": agent, ...})` installs a synthetic classifier
-agent configured with `ToolCallOutput(tool_choice="required")` and
-a synthetic FastMCP server holding one no-op tool per route key.
-The model must honor `tool_choice="required"` with arbitrary
-synthetic tool schemas.
-
-Models known to fail: `openai/gpt-oss-20b` via Groq (M4 §3.3
-documents the provider error returned during integration testing).
-Models known to work: Claude Sonnet/Opus, GPT-4o, GPT-5,
-Gemini-2.5-pro.  See the tutorial's
-[Native composition](getting-started.md#native-composition--composespec--mergenone)
-section for the boxed callout; check your gateway config before
-running dict-router workloads against a smaller open-source model.
-
 ## Pydantic is a hard dep of the `[glow]` extra
 
 `pip install 't0-agents[glow]'` pulls `pydantic>=2.0` unconditionally
@@ -106,34 +90,18 @@ future tightening would carve a narrower runtime signature at the
 cost of losing static return-type inference for the chat case;
 not done in v1 of glow.
 
-## `05_di_tools.py` is MCP-only — no LLM round-trip
+## `07_di_tools.py` is MCP-only — no LLM round-trip
 
 The runnable demo at
-[`05_di_tools.py`](../../examples/glow/05_di_tools.py) exercises
+[`07_di_tools.py`](../../examples/glow/07_di_tools.py) exercises
 `@app.tool` + `Depends` stripping + `app.dependency_overrides` via
 a direct MCP `call_tool` round-trip.  The agent-uses-tool flow
 (LLM picks the tool, glow injects the dependency, the agent
-narrates the result) is *not* shown end-to-end — a future
-`07_agent_with_tools.py` would close the gap.  The mechanism is
+narrates the result) is *not* shown end-to-end.  The mechanism is
 identical to what `03_streaming.py` demonstrates (an agent
 calling a `@app.tool`), so the dependency-injection layer adds
 nothing new at the inference loop; the gap is example coverage,
 not functionality.
-
-## `race()` is deprecated
-
-Glow does not surface `race` as a primitive.  v1.0 still ships the
-factory, but it emits a `DeprecationWarning` pointing at
-`parallel(*, reducer=..., error_policy="continue")` — exactly what
-`compose({...})` backs into.  Removal is slated for v1.1.  If you
-need first-finisher-wins specifically (and accept the cost of the
-inferences you cancel), write it with
-`asyncio.wait(return_when=FIRST_COMPLETED)` in user code; glow
-deliberately does not bless it as a framework primitive.
-
-See [Composition — Advanced / not
-recommended](../composition.md#advanced--not-recommended) for the
-v1.0 appendix.
 
 ## Sync API
 
@@ -171,7 +139,6 @@ registrations remain visible because the `tool_provider` is still
 For the canonical v1.0 narratives, follow:
 [Agent](../agent.md) ·
 [Run](../run.md) ·
-[Composition](../composition.md) ·
 [Output Modes](../output-modes.md) ·
 [Streaming](../streaming.md) ·
 [Guardrails](../guardrails.md) ·

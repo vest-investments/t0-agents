@@ -18,7 +18,7 @@ Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
     2. Start the gateway:
        docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
-    3. Run: uv run python examples/glow/06_mcp_typing.py
+    3. Run: uv run python examples/glow/08_mcp_typing.py
 
 Remote MCP servers (HTTP/SSE) work too — uncomment the
 ``GithubMCP`` block below.  ``fastmcp.server.create_proxy(url)`` does

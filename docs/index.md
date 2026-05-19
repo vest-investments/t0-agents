@@ -25,16 +25,15 @@ The documentation is written as a progressive tour: start with [Getting Started]
 3. **[Run](run.md)** — `agent.invoke(message)` returns a `Run[T]`: the first-class invocation handle.  Await it for the final `AgentResult`, iterate `events()` for live `AgentEvent`s, cancel, replay, fork, attach feedback.
 4. **[Middleware](middleware.md)** — what runs around every inference: memory hydration, guardrail gating, cost tracking, sub-agent orchestration, JSON retry.  Add your own via the Starlette-style chain.
 5. **[Output Modes](output-modes.md)** — the polymorphic surface for what an agent returns: chat strings, JSON dicts, Pydantic models, tool calls.  Custom modes for YAML / Instructor-style retry / SQLAlchemy plug in via the same protocol.
-6. **[Composition](composition.md)** — nine topology builders (`sequential`, `parallel`, `race`, `consensus`, `map_reduce`, `conditional`, `saga`, `retry_chain`, `circuit_breaker`) compose Agents and other Composers into code-driven pipelines with cancellation cascade and `parent_episode_id` audit.
-7. **[Concepts](concepts.md)** — pop the hood: what `agent.invoke()` actually does, turn by turn, through the `run_agent` loop — tool discovery, inference, execution, error mapping, episode correlation.
-8. **[Elicitation](elicitation.md)** — once tools can call back to a human, the loop has to pause; here is how that round-trip works end-to-end without any change to `run_agent`.
-9. **[Memory](memory.md)** — the loop is stateless between runs; wire a `MemoryProvider` into `AgentConfig` to give it a past — ephemeral in-process, persistent SQLite, or a backend of your own.
-10. **[Guardrails](guardrails.md)** — the agent now remembers and is equipped with tools; guardrails decide what it may do with them (approval gates, cost caps, tool-call limits, deny-lists, custom policies).
-11. **[Streaming](streaming.md)** — until now you only saw the final response; iterate `agent.invoke(message).events()` to narrate the loop live with typed events, SSE, and WebSocket.
-12. **[Multi-Agent Composition](multi-agent.md)** — the declarative `AgentConfig.sub_agents=[...]` path (LLM-driven delegation) — orthogonal and complementary to [Composition](composition.md) above.
-13. **[Serving](serving.md)** — drop the whole stack (single agent or orchestrator, with or without memory and guardrails) behind `/chat`, `/chat/stream`, and `/chat/ws` with `create_app`.
-14. **[CLI](cli.md)** — the same stack, in a terminal, via the `t0-agents` console script: an interactive `run` REPL, a `serve` dev HTTP server, and `info` introspection.
-15. **[Testing](testing.md)** — keep every layer above from regressing with `MockGateway` and `MockToolProvider` for deterministic unit tests, and `EmbeddedGatewayHelper` for real-inference integration tests without Docker.
+6. **[Concepts](concepts.md)** — pop the hood: what `agent.invoke()` actually does, turn by turn, through the `run_agent` loop — tool discovery, inference, execution, error mapping, episode correlation.
+7. **[Elicitation](elicitation.md)** — once tools can call back to a human, the loop has to pause; here is how that round-trip works end-to-end without any change to `run_agent`.
+8. **[Memory](memory.md)** — the loop is stateless between runs; wire a `MemoryProvider` into `AgentConfig` to give it a past — ephemeral in-process, persistent SQLite, or a backend of your own.
+9. **[Guardrails](guardrails.md)** — the agent now remembers and is equipped with tools; guardrails decide what it may do with them (approval gates, cost caps, tool-call limits, deny-lists, custom policies).
+10. **[Streaming](streaming.md)** — until now you only saw the final response; iterate `agent.invoke(message).events()` to narrate the loop live with typed events, SSE, and WebSocket.
+11. **[Multi-Agent Composition](multi-agent.md)** — the declarative `AgentConfig.sub_agents=[...]` path (LLM-driven delegation), plus runnable canonical patterns (Sequential, Parallel, Orchestrator) under [`examples/12_concurrency/`](../examples/12_concurrency/) and [`examples/glow/`](../examples/glow/).
+12. **[Serving](serving.md)** — drop the whole stack (single agent or orchestrator, with or without memory and guardrails) behind `/chat`, `/chat/stream`, and `/chat/ws` with `create_app`.
+13. **[CLI](cli.md)** — the same stack, in a terminal, via the `t0-agents` console script: an interactive `run` REPL, a `serve` dev HTTP server, and `info` introspection.
+14. **[Testing](testing.md)** — keep every layer above from regressing with `MockGateway` and `MockToolProvider` for deterministic unit tests, and `EmbeddedGatewayHelper` for real-inference integration tests without Docker.
 
 ## Appendices
 

@@ -112,7 +112,7 @@ agent = Agent(config, t0=cast(AsyncTensorZeroGateway, gateway), tool_provider=..
 result = await agent.invoke("...")
 ```
 
-`examples/12_concurrency/01_parallel_tools.py` is a runnable example of this pattern; pair it with the probe above to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
+Pair the probe above with `parallel_tools=True` in your own integration tests to cover both the executor selection (deterministic) and the model emission style (model-dependent) in CI.
 
 ## L2: Inter-turn dependencies and the "batch tool" pattern
 

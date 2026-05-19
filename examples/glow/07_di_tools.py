@@ -19,7 +19,7 @@ Prerequisites:
        script itself.
     2. Start the gateway:
        docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
-    3. Run: uv run python examples/glow/05_di_tools.py
+    3. Run: uv run python examples/glow/07_di_tools.py
 """
 
 from __future__ import annotations
