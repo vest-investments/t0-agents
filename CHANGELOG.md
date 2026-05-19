@@ -483,6 +483,16 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   dropped after a scope review (no concrete consumer asks for them
   today).
 
+### Release verification
+
+- **`examples/SMOKE.md`** — release-gate manual checklist (not CI).
+  Twenty-four example scripts plus four manual UI checks, organised
+  into one offline batch and two docker batches that share composes
+  across multiple examples.  Two known model-side flakes
+  (`test_require_approval_auto_decline_surfaces_to_llm`,
+  `test_tool_timeout_does_not_crash_run_agent`) are documented with
+  reroll guidance and a non-Groq model-swap escape hatch.
+
 ## [0.13.0] — Unreleased
 
 Expose TensorZero's raw-string `input.system` form on every public
