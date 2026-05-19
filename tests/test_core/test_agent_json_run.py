@@ -104,7 +104,7 @@ class TestJsonDispatch:
     async def test_json_agent_runs_without_tool_provider(self) -> None:
         """End-to-end: a JSON agent built without a provider can still run.
 
-        Mirrors the canonical ``examples/03_output_modes/structured_agent.py``
+        Mirrors the canonical ``examples/agent/03_output_modes/structured_agent.py``
         v1.0 shape — no ``fastmcp.Client``, no noop server, just
         ``Agent(config, t0=t0)``.
         """
