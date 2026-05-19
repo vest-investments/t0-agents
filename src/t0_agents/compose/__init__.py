@@ -43,7 +43,7 @@ from t0_agents.compose.orchestrator import (
     install_sub_agents,
     update_parent_episode_id,
 )
-from t0_agents.compose.routing import assert_unique_names, default_tool_name
+from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 from t0_agents.compose.topology import (
     DEFAULT_CANCEL_TIMEOUT,
     Composable,

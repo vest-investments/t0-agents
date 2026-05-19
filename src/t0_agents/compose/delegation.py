@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from fastmcp.tools import Tool
 
-from t0_agents.compose.routing import default_tool_name
+from t0_agents.delegation.routing import default_tool_name
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent

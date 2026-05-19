@@ -8,4 +8,9 @@ to delegate.  Sub-agent inferences are tagged with
 delegation tree.
 """
 
-__all__: list[str] = []
+from t0_agents.delegation.routing import assert_unique_names, default_tool_name
+
+__all__ = [
+    "assert_unique_names",
+    "default_tool_name",
+]

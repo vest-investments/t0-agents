@@ -33,7 +33,7 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from t0_agents.compose.delegation import agent_as_tool
-from t0_agents.compose.routing import assert_unique_names, default_tool_name
+from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 from t0_agents.core.exceptions import (
     ConfigurationError,
     SubAgentError,
