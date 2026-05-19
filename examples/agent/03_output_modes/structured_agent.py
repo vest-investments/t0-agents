@@ -8,10 +8,10 @@ the high-level ``Agent`` wrapper instead of the low-level
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.
     2. Start the gateway with this example's config:
-         docker compose -f examples/03_output_modes/docker-compose.yml \\
+         docker compose -f examples/agent/03_output_modes/docker-compose.yml \\
              --env-file .env up -d
     3. Run:
-         uv run python examples/03_output_modes/structured_agent.py
+         uv run python examples/agent/03_output_modes/structured_agent.py
 
 The agent declares ``output=JsonOutput(json_mode="strict")`` in its
 :class:`AgentConfig` (v1.0 canonical surface — replaces the v0.12

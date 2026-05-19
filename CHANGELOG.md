@@ -182,7 +182,7 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
 - **`docs/structured-outputs.md`** header cross-links to the new
   `docs/output-modes.md` canonical narrative.
 - **`docs/multi-agent.md`** preview rewritten with cross-links into
-  `docs/concurrency.md` and `examples/12_concurrency/` for the
+  `docs/concurrency.md` and `examples/agent/12_concurrency/` for the
   orthogonal code-driven path.
 
 #### Experimental — `t0_agents.glow`
@@ -416,7 +416,7 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   chaining, `asyncio.gather` for parallel execution, and
   `AgentConfig(sub_agents=[...])` with a routing system prompt for
   the dispatch case.  See
-  `examples/12_concurrency/{01_sequential,02_parallel,03_orchestrator}.py`
+  `examples/agent/12_concurrency/{01_sequential,02_parallel,03_orchestrator}.py`
   and `examples/glow/{04_sequential,05_parallel,06_orchestrator}.py`.
 - **`t0_agents.glow.compose`** — removed alongside the underlying
   topology layer.
@@ -466,7 +466,7 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
   `examples/{02,03,04,05,06,07,18}/docker-compose.yml` pinned the
   non-existent `clickhouse/clickhouse-server:lts`; replaced with
   the canonical `clickhouse:lts`.
-- **`examples/01_first_agent/README.md` directory drift** — README
+- **`examples/agent/01_first_agent/README.md` directory drift** — README
   still referenced the directory by its old name `01_basic_agent`;
   replaced and stale forward-reference removed.
 - **429 regression test** — `tests/test_mcp/test_harness.py::
@@ -510,10 +510,10 @@ the wire.  Backwards compatible: any caller that does not pass
   `system_arguments`"** — decision matrix for the two kwargs across
   schema'd / schema-less functions, plus guidance on when to reach
   for each.
-- **`examples/02_agent_class/`** — runnable PaaS-style demo:
+- **`examples/agent/02_agent_class/`** — runnable PaaS-style demo:
   the same `Agent` is invoked three times with three runtime-supplied
   personalities (haiku, pirate, lawyer), driving the model purely
-  through `system="..."`.  Companion to `examples/02_agent_class/`
+  through `system="..."`.  Companion to `examples/agent/02_agent_class/`
   (which demonstrates the templated, recommended pattern via
   `system_template`).
 

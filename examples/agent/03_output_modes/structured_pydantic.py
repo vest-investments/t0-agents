@@ -12,10 +12,10 @@ Prerequisites:
     2. ``pip install 't0-agents[pydantic]'`` so :class:`StructuredOutput`
        can import :mod:`pydantic`.
     3. Start the gateway with this example's config:
-         docker compose -f examples/03_output_modes/docker-compose.yml \\
+         docker compose -f examples/agent/03_output_modes/docker-compose.yml \\
              --env-file .env up -d
     4. Run:
-         uv run python examples/03_output_modes/structured_pydantic.py
+         uv run python examples/agent/03_output_modes/structured_pydantic.py
 
 The TZ function ``extract_customer_info`` is the same one
 ``structured_agent.py`` uses — but here the schema is derived from the

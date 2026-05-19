@@ -1,10 +1,10 @@
-# 17 - Structured Outputs
+# 03 — Output modes (typed JSON, recovery ladder)
 
 Five complementary entry points covering the structured-outputs surface:
 
 - **`main.py`** — single-shot extraction with
-  `run_structured_inference()`, the low-level sibling of `run_agent`
-  for TensorZero functions whose `type = "json"`.
+  `run_structured_inference()`, the low-level helper for TensorZero
+  functions whose `type = "json"`.
 - **`structured_agent.py`** — the declarative `Agent` wrapper
   dispatching to the same helper transparently when
   `AgentConfig.function_kind == "json"`.
@@ -112,7 +112,7 @@ for byte-perfect TensorZero-pure behaviour.
    provider can emit prose-wrapped JSON; the permissive parsing layer
    recovers the result.
 
-See [`docs/structured-outputs.md`](../../docs/structured-outputs.md)
+See [`docs/structured-outputs.md`](../../../docs/structured-outputs.md)
 for the full provider matrix, per-call override semantics, the
 testing helpers (`MockGateway.script_json` and the `assert_parsed_*`
 family), and the Pydantic recipe.
@@ -126,7 +126,7 @@ family), and the Pydantic recipe.
 ## Start the gateway
 
 ```bash
-docker compose -f examples/03_output_modes/docker-compose.yml \
+docker compose -f examples/agent/03_output_modes/docker-compose.yml \
     --env-file .env up -d
 ```
 
@@ -134,25 +134,25 @@ docker compose -f examples/03_output_modes/docker-compose.yml \
 
 ```bash
 # Low-level helper (needs docker)
-uv run python examples/03_output_modes/main.py
+uv run python examples/agent/03_output_modes/main.py
 
 # Agent wrapper (needs docker)
-uv run python examples/03_output_modes/structured_agent.py
+uv run python examples/agent/03_output_modes/structured_agent.py
 
 # Local recovery ladder demo (no docker, < 1s)
-uv run python examples/03_output_modes/recovery_demo.py
+uv run python examples/agent/03_output_modes/recovery_demo.py
 
 # Recovery against a real provider (needs docker)
-uv run python examples/03_output_modes/recovery_real_provider.py
+uv run python examples/agent/03_output_modes/recovery_real_provider.py
 
 # Dynamic schema override + json_mode swap (needs docker)
-uv run python examples/03_output_modes/ner_dynamic_schema.py
+uv run python examples/agent/03_output_modes/ner_dynamic_schema.py
 ```
 
 ## Stop the gateway
 
 ```bash
-docker compose -f examples/03_output_modes/docker-compose.yml \
+docker compose -f examples/agent/03_output_modes/docker-compose.yml \
     --env-file .env down
 ```
 

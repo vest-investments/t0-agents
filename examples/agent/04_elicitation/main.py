@@ -5,12 +5,14 @@ Demonstrates:
 - MCP Elicitation for structured data collection
 - CLI-based elicitation handler that reads from stdin
 - The handler distinguishes approval from structured input via response_type
-- tool_timeout=None to disable timeout while waiting for human input
+- AgentConfig(tool_timeout=None) to disable timeout while waiting for human input
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
-    2. Start the gateway: docker compose up -d
-    3. Run: uv run python examples/04_elicitation/main.py
+    2. Start the gateway:
+         docker compose --env-file ../../../.env \\
+             -f examples/agent/04_elicitation/docker-compose.yml up -d
+    3. Run: uv run python examples/agent/04_elicitation/main.py
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents import run_agent
+from t0_agents import Agent, AgentConfig
+from t0_agents.core.types import ToolProvider
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from server import mcp  # type: ignore[import-not-found]
@@ -88,13 +91,18 @@ async def main() -> None:
     client: Client[Any] = Client(mcp, elicitation_handler=cli_elicitation_handler)
 
     async with await gateway as t0, client:
-        result = await run_agent(
-            t0,
-            client,
+        agent = Agent(
+            AgentConfig(
+                name="task-agent",
+                function_name="agent",
+                tool_timeout=None,  # Disable timeout -- human will be typing
+            ),
+            t0=t0,
+            tool_provider=cast(ToolProvider, client),
+        )
+        result = await agent.invoke(
             "List all tasks. Delete task T-103. "
-            "Then create a new task — the tool will collect the details.",
-            "agent",
-            tool_timeout=None,  # Disable timeout -- human will be typing
+            "Then create a new task — the tool will collect the details."
         )
         print(f"\nResponse: {result.response}")
         print(f"Turns: {result.turns}")

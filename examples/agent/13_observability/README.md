@@ -1,12 +1,12 @@
-# 06 Feedback Loop
+# 13 — Observability (feedback loop)
 
 Capture observability data from agent runs and send structured feedback to TensorZero for model optimization.
 
 ## What TensorZero tracks automatically
 
-Every call to `run_agent` returns an `AgentResult` containing:
+Every `Agent.invoke(...)` returns an `AgentResult` containing:
 
-- **`episode_id`** -- A unique identifier for the entire conversation. TensorZero allocates this on the first inference and reuses it for all subsequent turns in the same `run_agent` call.
+- **`episode_id`** -- A unique identifier for the entire conversation. TensorZero allocates this on the first inference and reuses it for all subsequent turns in the same invocation (and any later invocations that pass `episode_id=` back in).
 - **`inference_ids`** -- One ID per inference turn. Use these to attach per-turn feedback (e.g., rating the quality of a specific response).
 - **`turns`** -- How many inference rounds the loop took.
 
@@ -57,7 +57,7 @@ level = "episode"
 
 ## The dryrun caveat
 
-When `run_agent(..., dryrun=True)` is used, TensorZero generates inference IDs but does not persist them in ClickHouse. Any subsequent `t0.feedback()` call targeting those IDs will fail with HTTP 400 (`"Episode ID: ... does not exist"`).
+When the variant is configured with `dryrun = true` (or you override `dryrun` on a per-call basis), TensorZero generates inference IDs but does not persist them in ClickHouse. Any subsequent `t0.feedback()` call targeting those IDs will fail with HTTP 400 (`"Episode ID: ... does not exist"`).
 
 Use `dryrun=False` (the default) when you intend to send feedback after the agent run.
 
@@ -78,9 +78,9 @@ Feedback stored in ClickHouse is the foundation for TensorZero's optimization fe
 ## Run
 
 ```bash
-docker compose -f examples/13_observability/docker-compose.yml up -d
-uv run python examples/13_observability/main.py
-docker compose -f examples/13_observability/docker-compose.yml down
+docker compose --env-file .env -f examples/agent/13_observability/docker-compose.yml up -d
+uv run python examples/agent/13_observability/main.py
+docker compose -f examples/agent/13_observability/docker-compose.yml down
 ```
 
 ## What to observe

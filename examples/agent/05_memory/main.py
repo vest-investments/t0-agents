@@ -7,7 +7,8 @@ hydrates and persists state around every ``invoke()`` call via the configured
 ``MemoryProvider``.
 
 Requirements:
-    docker compose up -d          # boots TensorZero gateway + ClickHouse
+    docker compose --env-file .env \\
+        -f examples/agent/01_first_agent/docker-compose.yml up -d
     GROQ_API_KEY in .env
     pip install 't0-agents[memory-sqlite]'   # for SqliteMemory
 """

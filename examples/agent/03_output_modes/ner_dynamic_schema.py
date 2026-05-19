@@ -23,10 +23,10 @@ Runs four scenarios against the ``extract_entities`` JSON function:
 Prerequisites:
     1. ``GROQ_API_KEY`` in ``.env`` at the project root.
     2. Start the gateway with this example's config:
-         docker compose -f examples/03_output_modes/docker-compose.yml \\
+         docker compose -f examples/agent/03_output_modes/docker-compose.yml \\
              --env-file .env up -d
     3. Run:
-         uv run python examples/03_output_modes/ner_dynamic_schema.py
+         uv run python examples/agent/03_output_modes/ner_dynamic_schema.py
 """
 
 from __future__ import annotations

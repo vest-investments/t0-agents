@@ -9,7 +9,8 @@ text is never inflated with a rendered summary.
 
 Pre-requisites:
 
-    docker compose up -d              # boots TZ gateway + ClickHouse
+    docker compose --env-file .env \\
+        -f examples/agent/01_first_agent/docker-compose.yml up -d
     GROQ_API_KEY in .env
 
 This example ships in the base distribution because ``tensorzero`` is

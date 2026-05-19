@@ -31,20 +31,20 @@ runs unchanged whether you have two tools or twenty.
 ## Start the gateway
 
 ```bash
-docker compose -f examples/01_first_agent/docker-compose.yml \
+docker compose -f examples/agent/01_first_agent/docker-compose.yml \
     --env-file .env up -d
 ```
 
 ## Run
 
 ```bash
-uv run python examples/01_first_agent/main.py
+uv run python examples/agent/01_first_agent/main.py
 ```
 
 ## Stop the gateway
 
 ```bash
-docker compose -f examples/01_first_agent/docker-compose.yml down
+docker compose -f examples/agent/01_first_agent/docker-compose.yml down
 ```
 
 ## What to observe

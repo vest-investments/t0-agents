@@ -6,7 +6,7 @@ function variant), and the Python caller just points
 ``AgentConfig.function_name`` at it.  The persona is preserved across
 every ``agent.invoke(...)`` call without the caller ever having to
 thread the prompt through — which is exactly what
-``examples/02_agent_class/`` promises in its README.
+``examples/agent/02_agent_class/`` promises in its README.
 
 Compare with ``advanced.py`` (same example folder) which takes the
 opposite approach: bypass the template and supply a raw ``system="..."``
@@ -15,9 +15,9 @@ string per call.
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
     2. Start the gateway:
-       docker compose -f examples/02_agent_class/docker-compose.yml \\
+       docker compose -f examples/agent/02_agent_class/docker-compose.yml \\
            --env-file .env up -d
-    3. Run: uv run python examples/02_agent_class/intermediate.py
+    3. Run: uv run python examples/agent/02_agent_class/intermediate.py
 """
 
 from __future__ import annotations

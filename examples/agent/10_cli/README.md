@@ -1,4 +1,4 @@
-# TUI Agent — Typer + Rich CLI
+# 10 — CLI (Typer + Rich TUI agent)
 
 Interactive streaming REPL for an MCP-backed agent, powered by the new
 `[cli]` extra. Demonstrates:
@@ -18,15 +18,19 @@ Interactive streaming REPL for an MCP-backed agent, powered by the new
 ## Prerequisites
 
 ```bash
-docker compose up -d           # boots gateway + clickhouse from repo root
+docker compose --env-file .env -f examples/agent/01_first_agent/docker-compose.yml up -d
 export GROQ_API_KEY=gsk_...    # or whichever provider the function uses
 uv sync --extra cli            # installs typer + rich + uvicorn + fastapi
 ```
 
+This example shares the `agent` chat function with
+[`examples/agent/01_first_agent/`](../01_first_agent/) — boot that
+gateway.
+
 ## Run the TUI
 
 ```bash
-uv run t0-agents run examples.10_cli.agent:assistant
+uv run t0-agents run examples.agent.10_cli.agent:assistant
 ```
 
 You'll see a cyan panel labelled `tui-assistant`; type at the `You:`
@@ -64,18 +68,18 @@ Enable `-v` (or `--verbose`) to render `ThoughtEvent` / `ThoughtDeltaEvent`
 inline. Useful with reasoning models; ignore for chat-only models.
 
 ```bash
-uv run t0-agents run examples.10_cli.agent:assistant --verbose
+uv run t0-agents run examples.agent.10_cli.agent:assistant --verbose
 ```
 
 ## Run as a dev HTTP server
 
 ```bash
-uv run t0-agents serve examples.10_cli.agent:assistant \
+uv run t0-agents serve examples.agent.10_cli.agent:assistant \
     --port 8080 --deployment tui-demo
 ```
 
 This wraps the same factory in
-[`t0_agents.serve.create_app(share_client=True)`](../../docs/serving.md)
+[`t0_agents.serve.create_app(share_client=True)`](../../../docs/serving.md)
 and runs uvicorn against the non-streaming HTTP routes (`POST /chat`,
 `/feedback`, `/health`, `/info`). Streaming is off by default because
 this factory wires `rich_elicitation_handler` into a shared `Client` —
@@ -85,14 +89,14 @@ elicitation handler (one handler per `Client`) which shared-Client mode
 cannot give it.
 
 For full streaming + browser elicitation, see
-[`examples/07_streaming/`](../07_streaming/), which wires
+[`examples/agent/07_streaming/`](../07_streaming/), which wires
 `client_factory` + `elicitation_client_factory` into `create_app`
 directly.
 
 ## Inspect the config
 
 ```bash
-uv run t0-agents info examples.10_cli.agent:assistant
+uv run t0-agents info examples.agent.10_cli.agent:assistant
 ```
 
 Prints a table of every `AgentConfig` field the factory wires up. The
@@ -107,7 +111,7 @@ on top of `make_rich_elicitation_handler`**. Every `ctx.elicit` call
 and its outcome (`accept` / `decline` / `cancel`) gets appended to
 `tui-audit.jsonl` in the current working directory.
 
-Two patterns from the Advanced tiers of [`docs/cli.md`](../../docs/cli.md)
+Two patterns from the Advanced tiers of [`docs/cli.md`](../../../docs/cli.md)
 are exercised:
 
 - Composing on `make_rich_elicitation_handler()` so the Rich `Live`
@@ -119,7 +123,7 @@ are exercised:
   `ElicitationHandler` signature.
 
 ```bash
-uv run t0-agents run examples.10_cli.advanced:assistant_with_audit
+uv run t0-agents run examples.agent.10_cli.advanced:assistant_with_audit
 ```
 
 Issue a request that triggers elicitation (e.g. `Remind me tomorrow at
@@ -143,7 +147,7 @@ tui-audit.jsonl` in another terminal to watch entries as they land.
 ## Layout
 
 ```
-examples/10_cli/
+examples/agent/10_cli/
 ├── README.md          ← this file
 ├── agent.py           ← @asynccontextmanager factory consumed by the CLI
 ├── advanced.py        ← audit-logging elicitation handler + factory
@@ -156,5 +160,5 @@ Smaller models (`gpt-oss-20b`, Llama-3-8B, etc.) occasionally ask "are
 you sure?" in chat before invoking `set_reminder`. The elicitation modal
 still appears, just one turn later. Larger models consistently call the
 tool directly. See
-[`examples/07_streaming/README.md`](../07_streaming/README.md)
+[`examples/agent/07_streaming/README.md`](../07_streaming/README.md)
 for the long-form discussion.

@@ -5,8 +5,10 @@ The agent sees all tools as a flat list (math_add, math_multiply, text_word_coun
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment.
-    2. Start the gateway: docker compose -f examples/14_multi_server/docker-compose.yml up -d
-    3. Run: uv run python examples/14_multi_server/main.py
+    2. Start the gateway:
+         docker compose --env-file .env \\
+             -f examples/agent/14_multi_server/docker-compose.yml up -d
+    3. Run: uv run python examples/agent/14_multi_server/main.py
 """
 from __future__ import annotations
 
@@ -19,7 +21,8 @@ from typing import Any, cast
 from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents import run_agent
+from t0_agents import Agent, AgentConfig
+from t0_agents.core.types import ToolProvider
 from t0_agents.mcp import convert_tools
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,13 +50,18 @@ async def main() -> None:
         for tool in t0_tools:
             print(f"  {tool['name']}: {tool['description']}")
 
-        # Ask a question that requires both math and text tools
-        result = await run_agent(
-            t0,
-            client,
+        # Build the Agent and ask a question that requires both math and text tools
+        agent = Agent(
+            AgentConfig(
+                name="composed-tools-agent",
+                function_name="agent",
+            ),
+            t0=t0,
+            tool_provider=cast(ToolProvider, client),
+        )
+        result = await agent.invoke(
             "How many words are in 'The quick brown fox jumps over the lazy dog'? "
-            "Also, what is 7 multiplied by 6?",
-            "agent",
+            "Also, what is 7 multiplied by 6?"
         )
         print(f"\nResponse: {result.response}")
         print(f"Turns: {result.turns}")

@@ -2,7 +2,7 @@
 
 Demonstrates the escape hatch added in 0.13.0: instead of putting the
 system prompt in ``tensorzero.toml`` (the recommended pattern shown by
-``examples/02_agent_class/``), the caller supplies a raw string per
+``examples/agent/02_agent_class/``), the caller supplies a raw string per
 run.  Useful for prompt-as-a-service style products where the prompt
 body itself is request data.
 
@@ -14,16 +14,16 @@ Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
     2. Start the gateway::
 
-           docker compose -f examples/02_agent_class/docker-compose.yml \\
+           docker compose -f examples/agent/02_agent_class/docker-compose.yml \\
                --env-file .env up -d
 
     3. Run::
 
-           uv run python examples/02_agent_class/advanced.py
+           uv run python examples/agent/02_agent_class/advanced.py
 
     4. Tear down when done::
 
-           docker compose -f examples/02_agent_class/docker-compose.yml down
+           docker compose -f examples/agent/02_agent_class/docker-compose.yml down
 """
 
 from __future__ import annotations

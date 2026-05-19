@@ -3,13 +3,13 @@
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.
     2. Start the gateway with this example's config:
-         docker compose -f examples/03_output_modes/docker-compose.yml \\
+         docker compose -f examples/agent/03_output_modes/docker-compose.yml \\
              --env-file .env up -d
     3. Run:
-         uv run python examples/03_output_modes/main.py
+         uv run python examples/agent/03_output_modes/main.py
 
 The example calls the ``extract_customer_info`` JSON function defined
-in ``examples/03_output_modes/config/tensorzero.toml`` and prints the
+in ``examples/agent/03_output_modes/config/tensorzero.toml`` and prints the
 ``StructuredOutput`` fields the helper exposes (``parsed``, ``raw``,
 ``parse_strategy``, ``usage``).  No MCP server is needed — JSON
 functions are single-shot and do not call tools.

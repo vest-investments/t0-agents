@@ -1,6 +1,6 @@
-# `11_http_agent` — HTTP serving demo
+# 09 — Serving (FastAPI)
 
-One-line wrap of an `Agent` in a FastAPI service.  `uvicorn` serves the
+One-line wrap of an `Agent` in a FastAPI service. `uvicorn` serves the
 four endpoints documented in `docs/serving.md`:
 
 | Method | Path | Purpose |
@@ -13,19 +13,16 @@ four endpoints documented in `docs/serving.md`:
 ## Running the example
 
 ```bash
-docker compose up -d                                  # gateway + ClickHouse
-export GROQ_API_KEY=gsk_...                           # or live in .env
-pip install 't0-agents[serve]'                        # one-off
-./examples/09_serving/run.sh                       # uvicorn :8080
+docker compose --env-file .env -f examples/agent/09_serving/docker-compose.yml up -d
+export GROQ_API_KEY=gsk_...                                  # or live in .env
+pip install 't0-agents[serve]'                               # one-off
+./examples/agent/09_serving/run.sh                           # uvicorn :8080
 # In a second terminal:
-./examples/09_serving/client.sh                    # curl the four endpoints
+./examples/agent/09_serving/client.sh                        # curl the four endpoints
 ```
 
-`run.sh` is a thin wrapper around
-
-```bash
-uv run uvicorn examples.09_serving.agent_app:app --host 0.0.0.0 --port 8080
-```
+The bundled `docker-compose.yml` + `config/tensorzero.toml` make this
+folder self-contained — no shared gateway needed.
 
 ## Highlights
 

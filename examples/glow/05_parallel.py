@@ -1,6 +1,6 @@
 """Canonical Parallel pattern (glow API).
 
-The glow counterpart of ``examples/12_concurrency/02_parallel.py``:
+The glow counterpart of ``examples/agent/12_concurrency/02_parallel.py``:
 multiple ``@app.agent``-decorated callables fanned out with
 ``asyncio.gather`` and combined by a plain Python reducer.  Because
 ``await wrapper(query)`` returns the unwrapped value directly,

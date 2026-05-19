@@ -22,8 +22,8 @@ four episode chains per run:
 Prerequisites are identical to ``main.py``:
 
     1. ``GROQ_API_KEY`` set in your environment (or ``.env``).
-    2. ``docker compose -f examples/08_multi_agent/docker-compose.yml up -d``
-    3. ``uv run python examples/08_multi_agent/advanced.py``
+    2. ``docker compose -f examples/agent/08_multi_agent/docker-compose.yml up -d``
+    3. ``uv run python examples/agent/08_multi_agent/advanced.py``
 
 Both the inner and the outer orchestrator use the same TensorZero
 function (``orchestrator``) — the role-specific behaviour comes from

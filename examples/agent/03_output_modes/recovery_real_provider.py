@@ -12,10 +12,10 @@ inference with a corrective hint.
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.
     2. Start the gateway with this example's config:
-         docker compose -f examples/03_output_modes/docker-compose.yml \\
+         docker compose -f examples/agent/03_output_modes/docker-compose.yml \\
              --env-file .env up -d
     3. Run:
-         uv run python examples/03_output_modes/recovery_real_provider.py
+         uv run python examples/agent/03_output_modes/recovery_real_provider.py
 
 Model behaviour is non-deterministic — the same prompt may exit on
 ``strict``, ``permissive``, or ``retry`` on different runs.  Re-run a

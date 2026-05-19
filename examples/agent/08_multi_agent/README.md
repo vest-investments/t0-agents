@@ -1,4 +1,4 @@
-# Multi-Agent Composition
+# 08 — Multi-agent composition (sub-agents)
 
 Delegation between three `Agent` instances through the classic
 **"agent-as-tool"** pattern.
@@ -22,7 +22,7 @@ for correlation.
 ## Prerequisites
 
 ```bash
-# From examples/08_multi_agent/:
+# From examples/agent/08_multi_agent/:
 export GROQ_API_KEY=gsk_...                # or the provider your variant uses
 docker compose up -d                       # boots the per-example gateway on :3000
 uv sync                                    # no extras needed — compose has zero deps
@@ -32,14 +32,14 @@ uv sync                                    # no extras needed — compose has ze
 
 ```bash
 # Python entrypoint:
-uv run python examples/08_multi_agent/main.py
+uv run python examples/agent/08_multi_agent/main.py
 
 # CLI factory (same thing, through t0-agents run):
-uv run t0-agents run examples.08_multi_agent.agents:orchestrator_factory
+uv run t0-agents run examples.agent.08_multi_agent.agents:orchestrator_factory
 
 # Advanced variant — nested orchestrators (project_lead → report_drafter
 # → researcher + writer). Same prerequisites as main.py.
-uv run python examples/08_multi_agent/advanced.py
+uv run python examples/agent/08_multi_agent/advanced.py
 ```
 
 Sample run:
@@ -77,7 +77,7 @@ value is whatever the sub-agent produced via `sub_agent.invoke(message)`.
 ## Layout
 
 ```
-examples/08_multi_agent/
+examples/agent/08_multi_agent/
 ├── README.md                   ← this file
 ├── agents.py                   ← @asynccontextmanager factory for the CLI
 ├── main.py                     ← Python entrypoint (Intermediate tier)
@@ -108,7 +108,7 @@ example and watch the tool calls scroll past.
   must be `FastMCPTransport`).  Remote MCP transports cannot host
   runtime-registered tools from this framework.
 - **Errors are hybrid-fatal.**
-  [`GuardrailBlockedError`](../../docs/guardrails.md) raised inside a
+  [`GuardrailBlockedError`](../../../docs/guardrails.md) raised inside a
   sub-agent propagates through the orchestrator unchanged; every
   other exception is wrapped in `SubAgentError` so the orchestrator
   LLM can decide whether to retry.

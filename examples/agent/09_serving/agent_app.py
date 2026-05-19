@@ -2,8 +2,9 @@
 
 Launch with::
 
-    docker compose up -d          # from repo root (boots gateway + clickhouse)
-    uv run uvicorn examples.09_serving.agent_app:app --port 8080
+    docker compose --env-file .env \\
+        -f examples/agent/09_serving/docker-compose.yml up -d
+    examples/agent/09_serving/run.sh
 
 Then exercise the four endpoints with :file:`client.sh` or ``curl``.
 

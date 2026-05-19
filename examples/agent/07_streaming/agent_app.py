@@ -2,8 +2,9 @@
 
 Launch with::
 
-    docker compose up -d          # boots gateway + clickhouse at repo root
-    uv run uvicorn examples.07_streaming.agent_app:app --port 8080
+    docker compose --env-file .env \\
+        -f examples/agent/07_streaming/docker-compose.yml up -d
+    examples/agent/07_streaming/run.sh
 
 Open http://localhost:8080/static/index.html in a browser and chat.  The
 page uses a WebSocket connection for full bidirectional traffic so tools

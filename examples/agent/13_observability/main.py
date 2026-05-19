@@ -8,8 +8,10 @@ Demonstrates:
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment.
-    2. Start the gateway: docker compose -f examples/13_observability/docker-compose.yml up -d
-    3. Run: uv run python examples/13_observability/main.py
+    2. Start the gateway:
+         docker compose --env-file .env \\
+             -f examples/agent/13_observability/docker-compose.yml up -d
+    3. Run: uv run python examples/agent/13_observability/main.py
 """
 from __future__ import annotations
 
@@ -23,7 +25,8 @@ from typing import Any, cast
 from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents import run_agent
+from t0_agents import Agent, AgentConfig
+from t0_agents.core.types import ToolProvider
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from server import mcp  # type: ignore[import-not-found]
@@ -40,13 +43,18 @@ async def main() -> None:
     client: Client[Any] = Client(mcp)
 
     async with await gateway as t0, client:
-        # Run the agent (dryrun=False so IDs are stored in ClickHouse)
-        result = await run_agent(
-            t0,
-            client,
-            "Search the docs for 'installation' and show me the Getting Started content.",
-            "agent",
-            dryrun=False,
+        agent = Agent(
+            AgentConfig(
+                name="docs-search-agent",
+                function_name="agent",
+            ),
+            t0=t0,
+            tool_provider=cast(ToolProvider, client),
+        )
+        # Default dryrun=False so the inference IDs are stored in ClickHouse
+        # and feedback calls against them can land.
+        result = await agent.invoke(
+            "Search the docs for 'installation' and show me the Getting Started content."
         )
         print(f"\nResponse: {result.response}")
         print(f"Turns: {result.turns}")

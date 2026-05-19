@@ -12,7 +12,7 @@ Unlike the unit tests, these assertions DO touch real model behaviour
 
 Run locally::
 
-    GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest examples/11_testing -m embedded
+    GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest examples/agent/11_testing -m embedded
 """
 
 from __future__ import annotations

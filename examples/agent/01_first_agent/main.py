@@ -9,12 +9,12 @@ Prerequisites:
     1. ``GROQ_API_KEY=...`` in ``.env`` at the project root.
     2. Boot the gateway::
 
-           docker compose -f examples/01_first_agent/docker-compose.yml \\
+           docker compose -f examples/agent/01_first_agent/docker-compose.yml \\
                --env-file .env up -d
 
     3. Run::
 
-           uv run python examples/01_first_agent/main.py
+           uv run python examples/agent/01_first_agent/main.py
 """
 from __future__ import annotations
 

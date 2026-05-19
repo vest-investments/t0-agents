@@ -1,4 +1,4 @@
-# 12 - Canonical multi-agent patterns
+# 12 — Concurrency (canonical multi-agent patterns)
 
 Three runnable examples that cover the multi-agent design space using
 plain Python plus the v1.0 `Agent` surface — no framework abstraction
@@ -13,9 +13,9 @@ drop ad-hoc code (a transform, a validation, a branch, a log).
 
 For the same three patterns expressed via the experimental
 `@app.agent` decorator surface, see
-[`examples/glow/04_sequential.py`](../glow/04_sequential.py),
-[`05_parallel.py`](../glow/05_parallel.py), and
-[`06_orchestrator.py`](../glow/06_orchestrator.py).
+[`examples/glow/04_sequential.py`](../../glow/04_sequential.py),
+[`05_parallel.py`](../../glow/05_parallel.py), and
+[`06_orchestrator.py`](../../glow/06_orchestrator.py).
 
 ## Prerequisites
 
@@ -34,9 +34,9 @@ under `examples/glow/config/` declares the `agent` chat function
 ## Run
 
 ```bash
-uv run python examples/12_concurrency/01_sequential.py
-uv run python examples/12_concurrency/02_parallel.py
-uv run python examples/12_concurrency/03_orchestrator.py
+uv run python examples/agent/12_concurrency/01_sequential.py
+uv run python examples/agent/12_concurrency/02_parallel.py
+uv run python examples/agent/12_concurrency/03_orchestrator.py
 ```
 
 Each example prints labelled output as it works.  No assertions —

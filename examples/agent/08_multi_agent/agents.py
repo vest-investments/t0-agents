@@ -4,7 +4,7 @@ Invoked via:
 
 .. code-block:: bash
 
-    uv run t0-agents run examples.08_multi_agent.agents:orchestrator_factory
+    uv run t0-agents run examples.agent.08_multi_agent.agents:orchestrator_factory
 
 The factory yields an orchestrator :class:`Agent` that has been wired
 with two sub-agents (``researcher``, ``writer``).  Each sub-agent has
@@ -27,7 +27,7 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents import Agent, AgentConfig
 
 # Path juggling so the example modules can be imported as top-level names
-# the same way ``examples/10_cli/agent.py`` does.  Keeps the example
+# the same way ``examples/agent/10_cli/agent.py`` does.  Keeps the example
 # runnable both as a Python script and via the ``t0-agents run`` loader.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from arxiv_server import mcp as arxiv_server  # type: ignore[import-not-found]

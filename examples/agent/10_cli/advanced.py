@@ -20,7 +20,7 @@ It demonstrates two patterns documented in the Advanced tiers of
 
 Invoke via::
 
-    uv run t0-agents run examples.10_cli.advanced:assistant_with_audit
+    uv run t0-agents run examples.agent.10_cli.advanced:assistant_with_audit
 
 Every run appends to ``tui-audit.jsonl``; delete the file between runs
 if you want a clean log.

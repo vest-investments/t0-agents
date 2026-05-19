@@ -19,9 +19,10 @@ still fires with ``result=None``; it prints the attempted recipients so
 operators see the evidence even on aborted runs.
 
 Requirements:
-    docker compose up -d          # boots TensorZero gateway + ClickHouse
+    docker compose --env-file .env \\
+        -f examples/agent/01_first_agent/docker-compose.yml up -d
     GROQ_API_KEY in .env
-    uv run python examples/06_guardrails/custom_guardrail.py
+    uv run python examples/agent/06_guardrails/custom_guardrail.py
 """
 
 from __future__ import annotations

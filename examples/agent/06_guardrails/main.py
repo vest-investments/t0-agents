@@ -10,9 +10,10 @@ Demonstrates all four built-in guardrails composed on one ``Agent``:
 - ``block_tools(["drop_database"])`` — hard deny-list.
 
 Requirements:
-    docker compose up -d          # boots TensorZero gateway + ClickHouse
+    docker compose --env-file .env \\
+        -f examples/agent/01_first_agent/docker-compose.yml up -d
     GROQ_API_KEY in .env
-    uv run python examples/06_guardrails/main.py
+    uv run python examples/agent/06_guardrails/main.py
 
 Manual feedback path for guardrail outcomes.  The framework does not
 auto-emit ``t0.feedback(...)`` because TensorZero requires metrics to be

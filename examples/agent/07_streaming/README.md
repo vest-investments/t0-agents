@@ -1,4 +1,4 @@
-# Streaming HTTP agent — SSE + WebSocket + elicitation
+# 07 — Streaming (SSE + WebSocket + elicitation)
 
 Live demo of streaming agents over HTTP. Shows:
 
@@ -16,12 +16,15 @@ Live demo of streaming agents over HTTP. Shows:
 ## Run
 
 ```bash
-docker compose up -d           # from the repo root
+docker compose --env-file .env -f examples/agent/07_streaming/docker-compose.yml up -d
 export GROQ_API_KEY=gsk_...    # or whichever provider your function uses
 uv sync                        # picks up sse-starlette under [serve]
-examples/07_streaming/run.sh
+examples/agent/07_streaming/run.sh
 # → open http://localhost:8080/static/index.html
 ```
+
+The bundled `docker-compose.yml` + `config/tensorzero.toml` make this
+folder self-contained — no shared gateway needed.
 
 ## What is wired
 

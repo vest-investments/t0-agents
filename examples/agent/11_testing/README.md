@@ -1,4 +1,4 @@
-# Example 15 — testing an agent
+# 11 — Testing (mock + embedded)
 
 Two complementary test paths on a single agent:
 
@@ -25,16 +25,16 @@ From the repo root:
 
 ```bash
 # Fast path — always safe, no external services
-uv run pytest examples/11_testing/test_agent_unit.py
+uv run pytest examples/agent/11_testing/test_agent_unit.py
 
 # Real-inference path — brings your own API key
-GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest examples/11_testing -m embedded
+GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest examples/agent/11_testing -m embedded
 ```
 
 Or from inside the example directory:
 
 ```bash
-cd examples/11_testing
+cd examples/agent/11_testing
 pytest .                       # runs unit tests; embedded are skipped
 RUN_EMBEDDED_TESTS=1 pytest .  # runs both (needs an API key)
 ```
@@ -42,7 +42,7 @@ RUN_EMBEDDED_TESTS=1 pytest .  # runs both (needs an API key)
 ## Structure
 
 ```
-examples/11_testing/
+examples/agent/11_testing/
 ├── agent.py                 # build_agent(), build_mcp_server()
 ├── conftest.py              # sys.path hack so tests can `import agent`
 ├── pytest.ini               # registers the 'embedded' marker locally

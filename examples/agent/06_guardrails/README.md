@@ -1,4 +1,4 @@
-# `10_guardrails` — Built-in guardrails on one Agent
+# 06 — Guardrails (declarative middleware)
 
 Declarative guardrails composed on an `Agent`:
 
@@ -28,10 +28,14 @@ Every hook invocation is mirrored on `AgentResult.guardrail_log`.
 
 ## Running the example
 
+This example shares the `agent` chat function with
+[`examples/agent/01_first_agent/`](../01_first_agent/), so boot that
+gateway:
+
 ```bash
-docker compose up -d                        # boot gateway + ClickHouse
+docker compose --env-file .env -f examples/agent/01_first_agent/docker-compose.yml up -d
 export GROQ_API_KEY=gsk_...                 # (or use .env)
-uv run python examples/06_guardrails/main.py
+uv run python examples/agent/06_guardrails/main.py
 ```
 
 Expected interactive session (approximate):
@@ -50,11 +54,11 @@ Expected interactive session (approximate):
 
 `max_cost` reads `response.usage.cost` after every inference. TensorZero
 only populates this when pricing is declared in `tensorzero.toml`. The
-default config in this repo (`config/tensorzero.toml`) uses Groq-hosted
-`gpt_oss_20` without an explicit pricing block, so `Usage.cost = None`
-and the cap never fires. Declare pricing (see the TensorZero config
-reference for `pricing_per_million_tokens_input`/`_output`) or use
-`max_tool_calls` as a deterministic fallback cap.
+default config in this repo uses Groq-hosted `gpt_oss_20` without an
+explicit pricing block, so `Usage.cost = None` and the cap never fires.
+Declare pricing (see the TensorZero config reference for
+`pricing_per_million_tokens_input`/`_output`) or use `max_tool_calls`
+as a deterministic fallback cap.
 
 ## Emitting feedback for guardrail outcomes
 
@@ -90,7 +94,7 @@ doc: writing your own `Guardrail` with a domain-specific
 fires even on fatal abort).
 
 ```bash
-uv run python examples/06_guardrails/custom_guardrail.py
+uv run python examples/agent/06_guardrails/custom_guardrail.py
 ```
 
 The scenario asks the agent to send an email to a recipient outside the
@@ -101,8 +105,19 @@ allowlist. The custom `enforce_email_allowlist` guardrail inspects
 branch of `Agent.invoke`, the audit summary is logged regardless of whether
 the run completed.
 
+## Advanced — `advanced_middleware.py`
+
+A custom `Middleware` showing the generalisation of the guardrail
+pattern: guardrails ARE middleware in v1.0. The script attaches a
+`TimingMiddleware` + `CostTraceMiddleware` via
+`AgentConfig(middleware=[...])` and inspects the result.
+
+```bash
+uv run python examples/agent/06_guardrails/advanced_middleware.py
+```
+
 ## See also
 
-See [`docs/guardrails.md`](../../docs/guardrails.md) for the full public
-guide — protocol reference, lifecycle diagram, observability hooks, and
-production notes.
+See [`docs/guardrails.md`](../../../docs/guardrails.md) for the full
+public guide — protocol reference, lifecycle diagram, observability
+hooks, and production notes.

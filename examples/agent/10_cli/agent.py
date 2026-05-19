@@ -4,9 +4,9 @@ Invoked via:
 
 .. code-block:: bash
 
-    uv run t0-agents run examples.10_cli.agent:assistant
-    uv run t0-agents serve examples.10_cli.agent:assistant
-    uv run t0-agents info examples.10_cli.agent:assistant
+    uv run t0-agents run examples.agent.10_cli.agent:assistant
+    uv run t0-agents serve examples.agent.10_cli.agent:assistant
+    uv run t0-agents info examples.agent.10_cli.agent:assistant
 
 The factory is decorated with :func:`contextlib.asynccontextmanager` so
 the CLI can open both the TensorZero gateway and the FastMCP ``Client``

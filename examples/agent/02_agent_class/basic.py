@@ -1,13 +1,13 @@
 """Agent class: declarative agent with AgentConfig.
 
-Demonstrates the Agent wrapper around run_agent. Configure once with
-AgentConfig, then call agent.invoke(message) with no boilerplate.
+The declarative Agent wrapper. Configure once with AgentConfig, then
+call agent.invoke(message) with no boilerplate per call.
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
     2. Start the gateway:
-       docker compose -f examples/02_agent_class/docker-compose.yml up -d
-    3. Run: uv run python examples/02_agent_class/basic.py
+       docker compose -f examples/agent/02_agent_class/docker-compose.yml up -d
+    3. Run: uv run python examples/agent/02_agent_class/basic.py
 """
 
 from __future__ import annotations

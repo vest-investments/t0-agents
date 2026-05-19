@@ -1,4 +1,4 @@
-# Example 09 — Agent with memory
+# 05 — Memory (cross-session state)
 
 Demonstrates the `memory/` submodule across four difficulty tiers.
 Each tier is a standalone script.
@@ -18,21 +18,24 @@ tools the LLM calls directly) is demonstrated in the adjacent
 
 ## Running each tier
 
+The Docker-backed tiers share the `agent` chat function declared in
+[`examples/agent/01_first_agent/config/tensorzero.toml`](../01_first_agent/config/tensorzero.toml).
+Boot that gateway from the repo root:
+
 ```bash
 # Easy — no extra setup
-python easy.py
+uv run python examples/agent/05_memory/easy.py
 
 # Intermediate (InMemory + SQLite) — boot the gateway and install the SQLite extra
-docker compose up -d --env-file .env          # from repo root, requires GROQ_API_KEY
+docker compose --env-file .env -f examples/agent/01_first_agent/docker-compose.yml up -d
 pip install 't0-agents[memory-sqlite]'
-python main.py
+uv run python examples/agent/05_memory/main.py
 
 # Intermediate (TensorZeroMemory) — only the gateway is required
-docker compose up -d --env-file .env
-python tensorzero_backend.py
+uv run python examples/agent/05_memory/tensorzero_backend.py
 
 # Advanced — no extra setup
-python advanced.py
+uv run python examples/agent/05_memory/advanced.py
 ```
 
 ## Backends and strategies
@@ -50,7 +53,7 @@ python advanced.py
 | `"system_template"` | Passes memory via `input.system.memory_context` (no `arguments` wrapper) | Your variant declares a MiniJinja system template with a `memory_context` variable |
 | `"messages"` | Threads the prior conversation through `input.messages` verbatim | Pair with `TensorZeroMemory`; cleanest multi-turn path; preserves tool calls across turns |
 
-See [`docs/memory.md`](../../docs/memory.md) for the full reference:
+See [`docs/memory.md`](../../../docs/memory.md) for the full reference:
 concepts, API signatures, error handling, production considerations,
 and more custom-backend patterns (Redis sketch, RAG via a vector
 store).

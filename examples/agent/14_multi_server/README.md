@@ -1,4 +1,4 @@
-# Example 04: Multi-Server Composition
+# 14 — Multi-server (FastMCP mount)
 
 Demonstrates how to combine tools from multiple MCP servers into a single agent using FastMCP's `mount()` method.
 
@@ -31,9 +31,9 @@ After mounting, tools are available under their namespaced names:
 
 If two servers expose a tool with the same name, the namespace prefix keeps them distinct. For example, both servers could have a `describe` tool, and they would appear as `math_describe` and `text_describe` with no conflict.
 
-## No changes needed in run_agent
+## No changes needed in the Agent loop
 
-The `run_agent` function treats tool names as opaque strings. It receives the namespaced tool list from FastMCP's `Client`, passes those names to TensorZero, and routes tool calls back through the same client. The composition is entirely transparent to the agent loop.
+The `Agent` loop treats tool names as opaque strings. It receives the namespaced tool list from FastMCP's `Client`, passes those names to TensorZero, and routes tool calls back through the same client. The composition is entirely transparent to `Agent.invoke()`.
 
 ## Prerequisites
 
@@ -48,13 +48,13 @@ The `run_agent` function treats tool names as opaque strings. It receives the na
 export GROQ_API_KEY="gsk_..."
 
 # 2. Start the gateway and ClickHouse
-docker compose -f examples/14_multi_server/docker-compose.yml up -d
+docker compose --env-file .env -f examples/agent/14_multi_server/docker-compose.yml up -d
 
 # 3. Run the example
-uv run python examples/14_multi_server/main.py
+uv run python examples/agent/14_multi_server/main.py
 
 # 4. Tear down when done
-docker compose -f examples/14_multi_server/docker-compose.yml down
+docker compose -f examples/agent/14_multi_server/docker-compose.yml down
 ```
 
 ## What to observe
