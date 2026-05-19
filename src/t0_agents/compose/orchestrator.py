@@ -32,7 +32,7 @@ from fastmcp.tools import Tool as _FastMCPTool
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
-from t0_agents.compose.delegation import agent_as_tool
+from t0_agents.delegation.agent_as_tool import agent_as_tool
 from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 from t0_agents.core.exceptions import (
     ConfigurationError,
@@ -232,7 +232,7 @@ class _OrchestrationToolProvider:
     ``on_inference`` refresh wrapper.  All other tool calls fall
     through to the inner provider unchanged, preserving the MCP
     semantics for non-delegation tools.  The server-side handler in
-    :mod:`t0_agents.compose.delegation` remains installed on the
+    :mod:`t0_agents.delegation.agent_as_tool` remains installed on the
     FastMCP server as a fallback for external callers that connect
     directly (those genuinely have no orchestrator context and
     correctly surface the ``"unknown"`` tag).

@@ -36,7 +36,7 @@ from t0_agents.compose.builtins import (
     saga,
     sequential,
 )
-from t0_agents.compose.delegation import agent_as_tool
+from t0_agents.delegation.agent_as_tool import agent_as_tool
 from t0_agents.compose.orchestrator import (
     bind_parent_episode_id,
     get_parent_episode_id,

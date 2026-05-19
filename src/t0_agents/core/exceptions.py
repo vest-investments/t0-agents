@@ -39,7 +39,7 @@ class GuardrailBlockedError(T0AgentsFatalError):
 class SubAgentError(T0AgentsError):
     """Wraps a non-fatal error raised by a delegated sub-agent.
 
-    The generated tool handler in ``t0_agents.compose.delegation``
+    The generated tool handler in ``t0_agents.delegation.agent_as_tool``
     catches plain :class:`Exception` and re-raises as ``SubAgentError``
     so the orchestrator's LLM sees a clean, stringifiable tool error
     and can choose to retry or re-delegate.  Subclasses of
