@@ -345,7 +345,111 @@ browser, if used, renders without console errors.
 
 ## Known integration flakies
 
-<!-- documented in the next commit -->
+Two `-m integration` tests are sensitive to Groq's `openai/gpt-oss-20b`
+default model and may fail in ways that are not regressions of the
+code under test.  Both are documented here so the operator
+recognises the symptom, rerolls once, and only declares red if the
+swap-to-alt-model escape hatch also fails.
+
+If the smoke session runs `uv run pytest -m integration` end to end,
+expect to see these two surface intermittently.
+
+### F.1 — `test_require_approval_auto_decline_surfaces_to_llm`
+
+Path: `tests/test_guardrails/test_integration.py`
+
+Symptom (shape):
+
+```
+FAILED tests/test_guardrails/test_integration.py::test_require_approval_auto_decline_surfaces_to_llm
+AssertionError: assert any(e.kind == 'rejection' for e in result.guardrail_log)
+ +  where [] = list(result.guardrail_log)
+```
+
+Root cause: the test asserts the LLM observed a `rejection`
+guardrail entry, which only lands if the model actually invokes the
+gated tool.  `openai/gpt-oss-20b` occasionally answers in plain
+text without calling any tool, so the guardrail log stays empty.
+
+Reroll: re-run once.
+
+```bash
+uv run pytest -m integration -q \
+    tests/test_guardrails/test_integration.py::test_require_approval_auto_decline_surfaces_to_llm
+```
+
+If it fails twice, swap to a non-Groq model per the
+[model-swap escape hatch](#model-swap-escape-hatch) below.
+
+### F.2 — `test_tool_timeout_does_not_crash_run_agent`
+
+Path: `tests/test_mcp/test_integration.py`
+
+Symptom (shape):
+
+```
+FAILED tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent
+tensorzero.types.TensorZeroError: 502 ... Tool call validation failed ...
+```
+
+Root cause: the test exercises a tool-timeout path that produces an
+error `ToolResult`.  When the loop retries, Groq occasionally emits
+malformed tool-call arguments and rejects them with `400 Tool call
+validation failed`; the gateway re-wraps that as
+`502 TensorZeroError`, which is outside the test's accepted-outcomes
+set.
+
+Reroll: re-run once.
+
+```bash
+uv run pytest -m integration -q \
+    tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent
+```
+
+If it fails twice, swap to a non-Groq model per the
+[model-swap escape hatch](#model-swap-escape-hatch) below.
+
+### Model-swap escape hatch
+
+Both flakes go away on tool-deterministic providers (Claude, GPT-4o,
+Gemini).  To swap the variant used by the dev integration stack:
+
+1. Open `config/tensorzero.toml` at the repo root (this is the file
+   the root `docker-compose.yml` mounts and integration tests hit).
+2. Replace the `openai/gpt-oss-20b` provider block with one of:
+
+   ```toml
+   # Anthropic
+   [models.smoke_alt.providers.anthropic]
+   type = "anthropic"
+   model_name = "claude-3-5-sonnet-latest"
+   ```
+
+   ```toml
+   # OpenAI
+   [models.smoke_alt.providers.openai]
+   type = "openai"
+   model_name = "gpt-4o"
+   ```
+
+   ```toml
+   # Google
+   [models.smoke_alt.providers.google_ai_studio_gemini]
+   type = "google_ai_studio_gemini"
+   model_name = "gemini-2.0-flash"
+   ```
+
+   …and re-point each variant's `model` to `smoke_alt` (or rename
+   in place; either works).
+3. Put the matching API key (`ANTHROPIC_API_KEY`,
+   `OPENAI_API_KEY`, or `GEMINI_API_KEY`) in the repo-root `.env`.
+4. Restart the dev stack: `docker compose down && docker compose up
+   -d`.  Re-run the two tests.
+
+**Revert the TOML before tagging** — the swap is a smoke-time
+expedient only.  Trunk stays pinned to the gpt-oss-20b default.
+Record the reroll (re-run vs swap) in the release notes so future
+operators have the same map.
 
 ---
 
