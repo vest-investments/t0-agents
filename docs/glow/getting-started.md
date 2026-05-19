@@ -49,8 +49,8 @@ The v1.0 `Agent` requires a `tool_provider` (typically a FastMCP
 relaxes that requirement: chat-mode agents constructed without a
 `tool_provider` allocate an ephemeral in-memory FastMCP for the
 invocation's duration.  Concretely, the 4-line hello-world above
-runs without ever touching MCP — the M2 D5 v1.0-core unlock made
-this possible for every `Agent` consumer, not just glow.
+runs without ever touching MCP — and the underlying unlock lives in
+the core `Agent`, so every consumer benefits, not just glow.
 
 When you register tools (`@app.tool`) or mount MCP servers
 (`servers=[MathMCP]`), glow switches to the App-owned in-memory
@@ -275,10 +275,11 @@ spin up multiple `App` instances for strict isolation.  Demo:
 ## Guardrails as type metadata
 
 The v1.0 [guardrail factories](../guardrails.md) (`require_approval`,
-`max_cost`, `max_tool_calls`, `block_tools`, `require_parsed`) plus
-M5's new `regex_guardrail` (importable from both `t0_agents.guardrails`
-and `t0_agents.glow`) can be attached as `Annotated` metadata on
-`@app.agent` parameter or return annotations:
+`max_cost`, `max_tool_calls`, `block_tools`, `require_parsed`,
+`regex_guardrail`) can be attached as `Annotated` metadata on
+`@app.agent` parameter or return annotations.  `regex_guardrail`
+lives in `t0_agents.guardrails` and is also re-exported from
+`t0_agents.glow` so the typed-metadata pattern composes cleanly:
 
 ```python
 from typing import Annotated

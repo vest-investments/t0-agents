@@ -69,11 +69,11 @@ decoration time.  This handles forward refs from
 the resolved type to be importable from the function's module
 globals at decoration time.  Local-scope forward refs (a type
 defined inside an enclosing function) won't resolve; declare such
-types at module scope.  The M3 §2.5 and M4 §3 follow-on
-commits codified this — declaring guardrail instances or
+types at module scope.  Declaring guardrail instances or
 sub-agent wrappers inside an enclosing test function reliably
 trips a `NameError`-based `ConfigurationError` at decoration
-time.
+time — the failure surfaces before any inference call, so the
+fix is always "lift the declaration to module scope".
 
 ## `_AgentWrapper.__call__` dual-personality
 
