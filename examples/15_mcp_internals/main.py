@@ -1,8 +1,12 @@
-"""Adapter basics: explore how t0-agents converts FastMCP tools to TensorZero format.
+"""MCP internals: what Agent does under the hood for tool wiring.
+
+The `t0_agents.mcp` submodule exposes the conversion + serialization
+helpers the canonical `Agent` loop calls into. This script invokes
+them directly so you can see exactly what TensorZero receives.
 
 No Docker, no API keys, no gateway required.
 
-    uv run python examples/15_adapter_low_level/main.py
+    uv run python examples/agent/15_mcp_internals/main.py
 """
 from __future__ import annotations
 
