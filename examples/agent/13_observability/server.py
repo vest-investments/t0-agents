@@ -15,7 +15,7 @@ def get_doc_content(doc_name: str) -> str:
     """Get the content of a specific document."""
     docs = {
         "Getting Started": "Install with pip install t0-agents. See docs for quickstart.",
-        "API Reference": "Agent(config, t0=..., tool_provider=...).invoke(message) -> AgentResult",
+        "API Reference": "await agent.invoke(message) -> AgentResult",
         "FAQ": "Q: Does it require Docker? A: Only for the TensorZero gateway.",
     }
     return docs.get(doc_name, f"Document '{doc_name}' not found.")
