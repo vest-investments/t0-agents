@@ -9,11 +9,6 @@ import pytest
 from fastmcp.tools import Tool
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.delegation.agent_as_tool import agent_as_tool
-from t0_agents.delegation.orchestrator import (
-    PARENT_EPISODE_ID_TAG,
-    bind_parent_episode_id,
-)
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
@@ -21,6 +16,11 @@ from t0_agents.core.exceptions import (
     SubAgentError,
 )
 from t0_agents.core.types import AgentResult, ToolProvider
+from t0_agents.delegation.agent_as_tool import agent_as_tool
+from t0_agents.delegation.orchestrator import (
+    PARENT_EPISODE_ID_TAG,
+    bind_parent_episode_id,
+)
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0
 

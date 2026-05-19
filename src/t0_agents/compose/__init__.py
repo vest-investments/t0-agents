@@ -1,19 +1,15 @@
-"""Multi-agent composition for t0-agents.
+"""Topology composers for t0-agents.
 
-Two layers coexist:
+Nine factories — :func:`sequential`, :func:`parallel`, :func:`race`,
+:func:`consensus`, :func:`map_reduce`, :func:`conditional`,
+:func:`saga`, :func:`retry_chain`, :func:`circuit_breaker` — return
+:class:`Composer` instances whose :meth:`invoke` yields a :class:`Run`
+uniform with :meth:`Agent.invoke`.  Composers compose Composables
+(Agents *or* other Composers); nesting is arbitrary.
 
-- **Declarative sub-agents** — ``AgentConfig.sub_agents=[...]``
-  registers each as an MCP tool via :func:`agent_as_tool` and
-  :func:`install_sub_agents`.  The orchestrator's LLM sees them as
-  ``_ask`` tools and decides when to delegate.
-
-- **Topology composers** — :func:`sequential`, :func:`parallel`,
-  :func:`race`, :func:`consensus`, :func:`map_reduce`,
-  :func:`conditional`, :func:`saga`, :func:`retry_chain`,
-  :func:`circuit_breaker`.  Each returns a :class:`Composer` whose
-  :meth:`invoke` returns a :class:`Run`, uniform with
-  :meth:`Agent.invoke`.  Composers compose Composables (Agents *or*
-  other Composers); nesting is arbitrary.
+Sub-agent orchestration (``AgentConfig.sub_agents=[...]``,
+:func:`agent_as_tool`, :func:`install_sub_agents`) has moved to
+:mod:`t0_agents.delegation`; this submodule no longer re-exports it.
 """
 
 from t0_agents.compose.builtins import (
@@ -43,14 +39,6 @@ from t0_agents.compose.topology import (
     ComposerError,
     CompositeRun,
 )
-from t0_agents.delegation.agent_as_tool import agent_as_tool
-from t0_agents.delegation.orchestrator import (
-    bind_parent_episode_id,
-    get_parent_episode_id,
-    install_sub_agents,
-    update_parent_episode_id,
-)
-from t0_agents.delegation.routing import assert_unique_names, default_tool_name
 
 __all__ = [
     "DEFAULT_CANCEL_TIMEOUT",
@@ -67,20 +55,13 @@ __all__ = [
     "RetryChainComposer",
     "SagaComposer",
     "SequentialComposer",
-    "agent_as_tool",
-    "assert_unique_names",
-    "bind_parent_episode_id",
     "circuit_breaker",
     "conditional",
     "consensus",
-    "default_tool_name",
-    "get_parent_episode_id",
-    "install_sub_agents",
     "map_reduce",
     "parallel",
     "race",
     "retry_chain",
     "saga",
     "sequential",
-    "update_parent_episode_id",
 ]

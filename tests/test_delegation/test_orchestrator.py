@@ -26,14 +26,6 @@ from fastmcp.tools import Tool as FastMCPTool
 from mcp.types import TextContent
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 
-from t0_agents.delegation.orchestrator import (
-    PARENT_EPISODE_ID_TAG,
-    _OrchestrationToolProvider,
-    bind_parent_episode_id,
-    get_parent_episode_id,
-    install_sub_agents,
-    update_parent_episode_id,
-)
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
@@ -42,6 +34,14 @@ from t0_agents.core.exceptions import (
     SubAgentError,
 )
 from t0_agents.core.types import AgentResult, ToolProvider
+from t0_agents.delegation.orchestrator import (
+    PARENT_EPISODE_ID_TAG,
+    _OrchestrationToolProvider,
+    bind_parent_episode_id,
+    get_parent_episode_id,
+    install_sub_agents,
+    update_parent_episode_id,
+)
 from t0_agents.stream.events import AgentEvent, DoneEvent
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
