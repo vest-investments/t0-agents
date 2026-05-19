@@ -13,10 +13,9 @@ The example here:
     pessimist ┼─▶  asyncio.gather  ──▶  (ad-hoc reducer)  ──▶  merged text
     pragmatist┘
 
-Each agent is toolless chat (M3 glow milestone unlocked
-``tool_provider=None`` for chat mode).  The reducer joins the three
-takes with a ``\\n---\\n`` separator and gracefully drops any
-branches that raised.
+Each agent is toolless chat (chat-mode ``AgentConfig`` accepts
+``tool_provider=None``).  The reducer joins the three takes with a
+``\\n---\\n`` separator and gracefully drops any branches that raised.
 
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.

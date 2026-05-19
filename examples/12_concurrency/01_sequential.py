@@ -10,9 +10,9 @@ The pipeline here:
 
     summarizer  ──▶  (ad-hoc truncate)  ──▶  translator
 
-Both agents are toolless chat: the M3 glow milestone unlocked
-``tool_provider=None`` for chat-mode AgentConfig, so you can pipeline
-two LLM calls without standing up a FastMCP server.
+Both agents are toolless chat: chat-mode ``AgentConfig`` accepts
+``tool_provider=None``, so you can pipeline two LLM calls without
+standing up a FastMCP server.
 
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.

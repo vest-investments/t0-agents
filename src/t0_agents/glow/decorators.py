@@ -20,9 +20,11 @@ and ``await tutor("hi")`` typed as ``R``.  The runtime body never
 calls the decorated function — its signature is the public interface,
 its docstring is the system prompt.
 
-M2 scope: ``__call__`` accepts exactly one positional argument (the
-user message); kwargs or extra positionals raise ``TypeError``.  M3
-lifts this when ``Depends(...)`` introspection lands.
+Calling contract: ``__call__`` accepts exactly one positional argument
+(the user message); kwargs or extra positionals raise ``TypeError``.
+``Depends(<agent_wrapper>)`` defaults are recognised at decoration time
+and installed as sub-agents on the parent's :class:`AgentConfig` rather
+than injected as a value.
 """
 
 from __future__ import annotations
@@ -94,13 +96,13 @@ class _AgentWrapper(Generic[P, R]):
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> FluentRun[R]:
         """Invoke the agent with a user message.
 
-        M3 scope: exactly one positional argument (the message);
-        kwargs and additional positionals raise ``TypeError``.
-        Sub-agent ``Depends(agent_wrapper)`` parameters declared on
-        the decorated function are consumed at decoration time and
-        compiled into ``AgentConfig.sub_agents``; the runtime call
-        signature has no slots for them, so the user never passes
-        them through ``__call__``.
+        Exactly one positional argument (the message); kwargs and
+        additional positionals raise ``TypeError``.  Sub-agent
+        ``Depends(agent_wrapper)`` parameters declared on the decorated
+        function are consumed at decoration time and compiled into
+        ``AgentConfig.sub_agents``; the runtime call signature has no
+        slots for them, so the user never passes them through
+        ``__call__``.
         """
         if kwargs:
             raise TypeError(
@@ -171,10 +173,10 @@ def _make_decorator(
 
         sub_agent_specs = _collect_sub_agent_specs(fn, app, name, hints)
 
-        # M4: harvest any MCPServer specs reachable through the
-        # decorated function's parameter annotations and append them
-        # to the App's spec list.  The actual ``FastMCP.mount`` happens
-        # in ``app.build()`` BEFORE the owned client is entered; the
+        # Harvest any MCPServer specs reachable through the decorated
+        # function's parameter annotations and append them to the App's
+        # spec list.  The actual ``FastMCP.mount`` happens in
+        # ``app.build()`` BEFORE the owned client is entered; the
         # decorator only records the spec.  Forward-ref failures inside
         # ``_extract_mcp_specs`` are silently no-ops there — but
         # ``get_type_hints`` above already raised for the same case if
@@ -183,20 +185,19 @@ def _make_decorator(
         for mcp_spec in _extract_mcp_specs(fn, hints):
             app._mcp_specs.append(mcp_spec)
 
-        # M4: harvest ``Annotated[T, Guardrail(...)]`` metadata from the
+        # Harvest ``Annotated[T, Guardrail(...)]`` metadata from the
         # decorated function's parameter and return annotations.  The
         # collected guardrails are folded into the per-agent spec, then
         # into ``AgentConfig.guardrails`` on first build, where the
-        # existing v1.0 ``GuardrailsMiddleware`` picks them up.
+        # canonical ``GuardrailsMiddleware`` picks them up.
         guardrails = _extract_guardrails(fn, hints)
 
-        # ``value_transform`` is the M1 carry-forward §4(d) hook: when
-        # the return annotation is ``list[BaseModel]``,
-        # ``output_mode_from_return_type`` chose a ``StructuredOutput``
-        # over the synthetic single-field wrapper model (``items:
-        # list[T]``).  The wrapper layer must hand the user the inner
-        # list, not the wrapper, so the user-visible value matches
-        # ``list[T]`` exactly.
+        # ``value_transform`` handles the ``list[BaseModel]`` return
+        # case: ``output_mode_from_return_type`` chose a
+        # ``StructuredOutput`` over the synthetic single-field wrapper
+        # model (``items: list[T]``).  The wrapper layer must hand the
+        # user the inner list, not the wrapper, so the user-visible
+        # value matches ``list[T]`` exactly.
         value_transform: Callable[[Any], Any] | None = None
         if _is_list_of_pydantic(return_type):
             value_transform = _unwrap_wrapper_items
@@ -227,11 +228,11 @@ def _collect_sub_agent_specs(
     """Walk ``fn``'s signature and return the sub-agent specs declared via ``Depends``.
 
     The decoration-time contract for ``@app.agent`` parameters is
-    deliberately narrow at M3:
+    deliberately narrow:
 
     * The first positional parameter is the user message; type
       annotation must be ``str`` (or ``Annotated[str, ...]`` — the
-      Annotated wrapper is peeled before comparison so M4's
+      Annotated wrapper is peeled before comparison so the
       guardrail-on-message pattern lands cleanly without rewriting
       this check).
     * Every subsequent parameter MUST have a :func:`Depends` default
@@ -244,7 +245,7 @@ def _collect_sub_agent_specs(
 
     * Value-style ``Depends(get_db)`` on an ``@app.agent`` param:
       point the user at ``@app.tool`` (the correct surface for tool
-      dependencies at M3).
+      dependencies).
     * ``Depends(other_wrapper)`` where ``other_wrapper`` is not in
       ``app._agent_registry``: order-of-registration mistake; ask
       the user to register the sub-agent BEFORE the orchestrator.
@@ -259,7 +260,7 @@ def _collect_sub_agent_specs(
 
     Returns the sub-agent specs in the order their parameters appear
     on the user function.  Empty list when the function has only a
-    message parameter (the M2 case).
+    message parameter.
     """
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
@@ -284,7 +285,7 @@ def _collect_sub_agent_specs(
         # ``hints`` was resolved with ``include_extras=True``, so an
         # ``Annotated[str, ...]`` parameter survives as a real
         # ``_AnnotatedAlias`` here.  Peel one layer of ``Annotated`` —
-        # the underlying type must be ``str``.  This makes M4's
+        # the underlying type must be ``str``.  This keeps the
         # ``Annotated[T, Guardrail(...)]`` pattern compatible at the
         # message position without revisiting this check.
         message_hint: Any = hints[message_param.name]
@@ -299,10 +300,10 @@ def _collect_sub_agent_specs(
 
     sub_agent_specs: list[_AgentSpec] = []
     for param in params[1:]:
-        # M4: MCP-typed parameters are pure decoration metadata (the
-        # spec is harvested separately by ``_extract_mcp_specs``); they
-        # have no runtime binding and no default, so we skip them here
-        # rather than demanding a ``Depends`` default.  The wrapper's
+        # MCP-typed parameters are pure decoration metadata (the spec
+        # is harvested separately by ``_extract_mcp_specs``); they have
+        # no runtime binding and no default, so we skip them here rather
+        # than demanding a ``Depends`` default.  The wrapper's
         # ``__call__`` continues to accept only the user message — the
         # MCP parameter slot is never populated at invocation.
         if _is_mcp_parameter(hints.get(param.name)):
@@ -313,7 +314,7 @@ def _collect_sub_agent_specs(
                 f"no default — every parameter beyond the user message must "
                 f"declare ``= Depends(<glow agent wrapper>)`` (the sub-agent "
                 f"special case).  Value-style dependencies belong on "
-                f"``@app.tool`` at M3."
+                f"``@app.tool``."
             )
         default = param.default
         if not isinstance(default, _Depends):
@@ -330,7 +331,7 @@ def _collect_sub_agent_specs(
                 f"@app.agent({agent_name!r}): parameter {param.name!r} uses "
                 f"Depends({provider!r}), a value-style provider.  "
                 f"@app.agent only accepts Depends(<glow agent wrapper>) for "
-                f"non-message parameters at M3 (the sub-agent special case); "
+                f"non-message parameters (the sub-agent special case); "
                 f"use @app.tool for value-style dependencies."
             )
 

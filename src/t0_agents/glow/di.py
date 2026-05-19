@@ -10,9 +10,9 @@ argument.  Two integration points exist in glow:
   from the FastMCP-introspected schema and re-injects them at call
   time inside the tool wrapper.
 * :func:`~t0_agents.glow.app.App.agent` — only accepts
-  ``Depends(glow_wrapper)`` (the sub-agent special case) at M3; every
-  other ``Depends`` shape is rejected at decoration time with a
-  pointer to ``@app.tool``.
+  ``Depends(glow_wrapper)`` (the sub-agent special case); every other
+  ``Depends`` shape is rejected at decoration time with a pointer to
+  ``@app.tool``.
 
 The resolver is intentionally a small class (not free functions) so
 the per-call cache lives on the resolver between recursive calls
@@ -91,9 +91,9 @@ class DependencyResolver:
 
     Stateless beyond the per-call cache passed in.  One instance is
     owned by each :class:`~t0_agents.glow.app.App`; callers don't
-    interact with it directly — the ``@app.tool`` decorator and (M4+)
-    the agent-side `Depends` plumbing call ``resolve`` from inside
-    their own wrappers.
+    interact with it directly — the ``@app.tool`` decorator and the
+    agent-side ``Depends`` plumbing call ``resolve`` from inside their
+    own wrappers.
     """
 
     async def resolve(

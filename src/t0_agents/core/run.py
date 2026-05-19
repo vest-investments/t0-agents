@@ -2,7 +2,7 @@
 
 :class:`Run` represents one live or completed agent invocation.  It
 is the value returned by :meth:`t0_agents.core.agent.Agent.invoke`
-and the type Middleware, OutputMode, and Composer build on.
+and the type Middleware and OutputMode build on.
 
 The Run drives in one of two modes: the first consumer's call
 (``result()`` vs ``events()``) picks it.  ``result()`` runs the
@@ -106,11 +106,10 @@ class Run(Generic[T]):
         context: Mapping[str, Any] | None = None,
         middleware: Sequence[Any] | None = None,
     ) -> None:
-        # ``agent=None`` is the composite-mode path used by
-        # :class:`~t0_agents.compose.topology.CompositeRun`, whose
-        # ``_drive()`` does not touch ``self._agent_ref``.  Every
-        # Agent-backed Run continues to use ``weakref.ref(agent)`` so
-        # the gateway lifetime is not extended.
+        # ``agent=None`` is supported for third-party Run-subclass
+        # authors whose ``_drive()`` implementation does not touch
+        # ``self._agent_ref``.  Every Agent-backed Run continues to use
+        # ``weakref.ref(agent)`` so the gateway lifetime is not extended.
         self._agent_ref: Callable[[], Agent | None] = (
             weakref.ref(agent) if agent is not None else (lambda: None)
         )

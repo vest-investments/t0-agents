@@ -2,8 +2,8 @@
 
 Six small predicates / peelers operating on the runtime type objects that
 :func:`typing.get_type_hints` returns.  They underpin the return-type →
-:class:`OutputMode` mapping; M4 will extend this surface with metadata
-extraction for :class:`Annotated[T, Guardrail(...)]`.
+:class:`OutputMode` mapping and also feed the ``Annotated[T, Guardrail(...)]``
+metadata extraction used by the decorator surface.
 """
 
 from __future__ import annotations
@@ -46,10 +46,10 @@ def _unwrap_optional(tp: Any) -> Any:
 def _peel_to_core(tp: Any) -> Any:
     """Iteratively strip ``Annotated[...]`` and ``Optional[...]`` wrappers.
 
-    Resolves the M1 §3.1 carry-forward: a single composition of
-    :func:`_strip_annotated` and :func:`_unwrap_optional` only handles one
-    ordering — ``Optional[Annotated[T, m]]`` works under ``strip(unwrap(...))``
-    but ``Annotated[Optional[T], m]`` does not (the ``Annotated`` wrapper
+    A single composition of :func:`_strip_annotated` and
+    :func:`_unwrap_optional` only handles one ordering —
+    ``Optional[Annotated[T, m]]`` works under ``strip(unwrap(...))`` but
+    ``Annotated[Optional[T], m]`` does not (the ``Annotated`` wrapper
     hides the ``Union`` from ``_unwrap_optional`` on the first pass).
     Looping until convergence handles every nesting shape including
     ``Optional[Annotated[Optional[T], m]]``.
@@ -87,9 +87,9 @@ def _wrap_list_model(tp: Any) -> type[BaseModel]:
 
     :class:`~t0_agents.core.outputs.structured.StructuredOutput` needs a
     Pydantic class to derive the JSON schema from; a bare ``list[T]``
-    annotation has no model, so we mint one at registration time.  M2's
-    ``@app.agent`` will unwrap ``result.value.items`` so the user-facing
-    return matches the original ``list[T]`` annotation.
+    annotation has no model, so we mint one at registration time.  The
+    ``@app.agent`` decorator then unwraps ``result.value.items`` so the
+    user-facing return matches the original ``list[T]`` annotation.
 
     The synthesised class is named ``<T>List`` (e.g. ``ItemList`` for
     ``list[Item]``) so schema titles read sensibly.

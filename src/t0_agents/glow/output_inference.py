@@ -1,7 +1,7 @@
 """Map a function's return annotation to a v1.0 :class:`OutputMode`.
 
 The bridge between glow's type-hint-driven DX and v1.0's polymorphic
-output surface.  M2's ``@app.agent`` calls
+output surface.  The ``@app.agent`` decorator calls
 :func:`output_mode_from_return_type` at decoration time to derive the
 ``OutputMode`` for the wrapped function; failures (e.g. unresolvable
 forward refs) surface as :class:`ConfigurationError` so the user sees
@@ -45,15 +45,15 @@ def output_mode_from_return_type(fn: Callable[..., Any]) -> OutputMode[Any]:
     - Pydantic ``BaseModel`` subclass →
       :class:`~t0_agents.core.outputs.structured.StructuredOutput`.
     - ``list[T]`` with ``T`` a Pydantic model →
-      :class:`StructuredOutput` over a synthesised wrapper (M2's
-      ``@app.agent`` unwraps ``result.value.items``).
+      :class:`StructuredOutput` over a synthesised wrapper (the
+      ``@app.agent`` decorator unwraps ``result.value.items``).
     - ``Optional[T]`` / ``T | None`` → as ``T``.
     - Everything else → :class:`ChatOutput` (the helper is also called
       for explicit chat agents; no warning).
 
     Forward-ref failures (``NameError`` / ``TypeError`` from
     :func:`typing.get_type_hints`) re-raise as :class:`ConfigurationError`
-    so M2's ``@app.agent`` can surface them at registration time.
+    so ``@app.agent`` can surface them at registration time.
     """
     try:
         hints = get_type_hints(
@@ -74,8 +74,7 @@ def output_mode_from_return_type(fn: Callable[..., Any]) -> OutputMode[Any]:
         return ChatOutput()
 
     # Iterative peel: handles ``Annotated[Optional[T], meta]``,
-    # ``Optional[Annotated[T, meta]]``, and deeper nesting equally
-    # (resolves M1 §3.1 carry-forward).
+    # ``Optional[Annotated[T, meta]]``, and deeper nesting equally.
     rt = _peel_to_core(hints["return"])
 
     if rt is str or rt is type(None):

@@ -7,9 +7,7 @@ Two pieces:
    ``Annotated[str, regex_guardrail(...)]`` directly on a parameter or
    return type.  The factory itself lives at
    ``src/t0_agents/guardrails/regex.py`` and is the canonical home —
-   every ``Agent`` consumer can use it, not just glow agents.  The
-   v1.0 module migration landed in M5 (analog to the M2 D5
-   toolless-chat unlock).
+   every ``Agent`` consumer can use it, not just glow agents.
 
 2. :func:`_extract_guardrails` — walks ``@app.agent`` parameter
    annotations and the return annotation; harvests every

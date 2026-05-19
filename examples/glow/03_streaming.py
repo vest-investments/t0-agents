@@ -16,9 +16,9 @@ are in flight at once:
   ``Selector(TextDeltaEvent).map(lambda e: e.delta)`` instead.
 
 The agent's loop reaches the tool through the App-owned in-memory
-FastMCP server (M3 wiring); the ``@app.tool`` decorator registers
-``get_weather`` against that server so the LLM can call it without
-any explicit MCP plumbing.
+FastMCP server; the ``@app.tool`` decorator registers ``get_weather``
+against that server so the LLM can call it without any explicit MCP
+plumbing.
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
