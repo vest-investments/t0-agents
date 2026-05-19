@@ -8,7 +8,6 @@ from t0_agents.compose import (
     Composable,
     Composer,
     ComposerError,
-    agent_as_tool,
     circuit_breaker,
     conditional,
     consensus,
@@ -70,6 +69,7 @@ from t0_agents.core.types import (
     RunUsage,
     ToolProvider,
 )
+from t0_agents.delegation import agent_as_tool
 from t0_agents.mcp import run_agent
 from t0_agents.stream import (
     AgentEvent,
