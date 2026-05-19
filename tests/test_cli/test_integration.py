@@ -24,7 +24,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_EXAMPLE_SPEC = "examples.10_cli.agent:assistant"
+_EXAMPLE_SPEC = "examples.agent.10_cli.agent:assistant"
 
 
 def test_info_subcommand_against_live_example() -> None:

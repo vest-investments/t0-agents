@@ -1,32 +1,27 @@
-# `glow` examples (experimental)
+# glow examples (experimental)
 
-Runnable examples for the `t0_agents.glow` sub-package — a Pythonic
-high-level surface over t0-agents v1.0.
+The 4-line "hello agent" lives here.
 
-The layer is experimental. Public API is unstable until further
-notice.
+```python
+from t0_agents.glow import App
+app = App(t0=t0)
 
-## Layout
+@app.agent("tutor")
+async def tutor(query: str) -> str:
+    """An English tutor that explains grammar like you're 12."""
 
-A self-contained TensorZero gateway boots from this directory:
+await tutor("How do I say hello in formal Japanese?")  # -> str
+```
+
+One `docker-compose.yml` + one `config/tensorzero.toml` power all
+eight examples. Boot the gateway once from this directory:
 
 ```bash
 docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
 ```
 
-Three TZ functions are pre-configured under `config/`:
-
-- `agent` — chat (used by `01_hello.py`, `04_sequential.py`,
-  `05_parallel.py`, and the glow-integration test's researcher /
-  writer sub-agents).
-- `plan_trip` — JSON-structured (used by `02_structured.py`); schema
-  matches the `TripPlan(BaseModel)` defined in the example.
-- `orchestrator` — chat (used by `06_orchestrator.py` and the glow
-  integration test `test_orchestrator_with_glow_sub_agents`).
-
-Once the gateway is up, run any example as
-`uv run python examples/glow/<name>.py`. Each prints a `SUCCESS:`
-banner on completion.
+Then run any example with `uv run python examples/glow/<name>.py`.
+Each prints a `SUCCESS:` banner on completion.
 
 ## Examples
 
@@ -41,8 +36,19 @@ banner on completion.
 | 07 | `07_di_tools.py`       | `@app.tool` + `Depends` injection                                                                  |
 | 08 | `08_mcp_typing.py`     | `MCPServer` class + `Annotated` MCP injection                                                      |
 
+The same three patterns (sequential, parallel, orchestrator) are
+spelled out without glow under
+[`../agent/12_concurrency/`](../agent/12_concurrency/) — useful
+side-by-side reading for the "what does the decorator actually do?"
+question.
+
 When you're done:
 
 ```bash
 docker compose -f examples/glow/docker-compose.yml --env-file .env down
 ```
+
+> **Experimental.** The `t0_agents.glow` public surface is unstable
+> until further notice; expect breaking changes between minor
+> releases. The explicit `Agent` track in
+> [`../agent/`](../agent/) is the canonical, supported surface.

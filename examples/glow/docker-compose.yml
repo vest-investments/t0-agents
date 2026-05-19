@@ -16,7 +16,7 @@ services:
       timeout: 1s
 
   gateway:
-    image: tensorzero/gateway:2026.4.0
+    image: tensorzero/gateway:${T0_GATEWAY_VERSION:-2026.4.0}
     volumes:
       - ./config:/app/config:ro
     command: --config-file /app/config/tensorzero.toml

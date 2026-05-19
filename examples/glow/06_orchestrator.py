@@ -1,7 +1,7 @@
 """Canonical Orchestrator pattern (glow API).
 
 The glow counterpart of
-``examples/12_concurrency/03_orchestrator.py``.  Declare each
+``examples/agent/12_concurrency/03_orchestrator.py``.  Declare each
 sub-agent as a normal ``@app.agent``; declare the orchestrator with
 ``Depends(<wrapper>)`` parameters for each sub-agent.  Glow records
 the dependencies on the orchestrator's ``_AgentSpec.sub_agent_specs``

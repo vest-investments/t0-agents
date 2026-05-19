@@ -3,7 +3,7 @@
 # Two functions:
 #
 # 1. `agent` (chat) — drives `examples/glow/01_hello.py`'s hello-world.
-#    Identical shape to `examples/02_agent_class/config/tensorzero.toml`
+#    Identical shape to `examples/agent/02_agent_class/config/tensorzero.toml`
 #    so the chat path uses the same model and variant as the canonical
 #    Agent-class demo.
 #

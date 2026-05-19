@@ -1,7 +1,7 @@
 """Canonical Sequential pattern (glow API).
 
 The glow counterpart of
-``examples/12_concurrency/01_sequential.py``: two ``@app.agent``-decorated
+``examples/agent/12_concurrency/01_sequential.py``: two ``@app.agent``-decorated
 callables chained as a pipeline.  The output of ``summarizer`` becomes the
 input of ``translator``; an ad-hoc truncate step sits in between.
 

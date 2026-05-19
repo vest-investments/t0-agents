@@ -6,7 +6,7 @@ Requires the glow gateway up:
 
 The M2 tests mirror ``examples/glow/01_hello.py`` and
 ``examples/glow/02_structured.py`` end-to-end.  The M3 test mirrors
-``examples/08_multi_agent`` but every node is declared via glow
+``examples/agent/08_multi_agent`` but every node is declared via glow
 (``@app.agent`` + ``Depends(<wrapper>)`` for the sub-agent special
 case).
 """
@@ -99,7 +99,7 @@ async def test_structured_output_returns_pydantic_instance() -> None:
 async def test_orchestrator_with_glow_sub_agents() -> None:
     """Orchestrator with ``Depends(researcher), Depends(writer)`` end-to-end.
 
-    Mirrors ``examples/08_multi_agent`` but declares every node via
+    Mirrors ``examples/agent/08_multi_agent`` but declares every node via
     glow.  The orchestrator's ``AgentConfig.sub_agents`` is populated
     at decoration time from the ``Depends(<wrapper>)`` defaults; v1.0
     ``install_sub_agents`` registers each as a ``<name>_ask`` MCP tool
