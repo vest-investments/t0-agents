@@ -57,6 +57,10 @@ docker compose -f examples/agent/01_first_agent/docker-compose.yml down
   `agent.invoke(..., episode_id=...)` next time you want continuity
   (memory, follow-ups), and use it to grep the ClickHouse dashboard.
 
+If you only need conversational LLM access without tools, see
+[`../00_chat_only/`](../00_chat_only/) for the same `Agent` surface
+with no MCP plumbing.
+
 Once this works, head to [`02_agent_class`](../02_agent_class/) for
 configuration shapes, then [`03_output_modes`](../03_output_modes/)
 for typed JSON / Pydantic extraction.
