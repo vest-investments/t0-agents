@@ -72,7 +72,7 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
 
 
 async def _execute_single_tool_call(
-    mcp_client: Client[Any], block: ToolCall, timeout: float
+    tool_provider: Client[Any], block: ToolCall, timeout: float
 ) -> ToolResult:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
 
@@ -119,7 +119,7 @@ async def _execute_single_tool_call(
     logger.debug("Executing tool %r with args: %s", name, block.arguments)
     start = time.monotonic()
     try:
-        mcp_result = await mcp_client.call_tool(
+        mcp_result = await tool_provider.call_tool(
             block.name, block.arguments, timeout=timeout
         )
     except T0AgentsFatalError:
@@ -163,7 +163,7 @@ async def _execute_single_tool_call(
 
 
 async def execute_tool_calls(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -173,14 +173,14 @@ async def execute_tool_calls(
     The output preserves the input order of the ``ToolCall`` blocks.
     """
     return [
-        await _execute_single_tool_call(mcp_client, b, timeout)
+        await _execute_single_tool_call(tool_provider, b, timeout)
         for b in content_blocks
         if isinstance(b, ToolCall)
     ]
 
 
 async def execute_tool_calls_parallel(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -196,16 +196,16 @@ async def execute_tool_calls_parallel(
         return []
     return list(
         await asyncio.gather(
-            *[_execute_single_tool_call(mcp_client, tc, timeout) for tc in tool_calls]
+            *[_execute_single_tool_call(tool_provider, tc, timeout) for tc in tool_calls]
         )
     )
 
 
 async def run_agent(
     t0: AsyncTensorZeroGateway,
-    mcp_client: Client[Any],
-    user_message: str,
-    function_name: str,
+    tool_provider: Client[Any] | None = None,
+    user_message: str = "",
+    function_name: str = "",
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
@@ -233,9 +233,14 @@ async def run_agent(
 
     Args:
         t0: A connected ``AsyncTensorZeroGateway`` (already inside ``async with``).
-        mcp_client: A connected ``fastmcp.Client`` (already inside ``async with``).
-            Per FastMCP's documentation, the client context **must** span the
-            full loop; ``run_agent`` does not wrap it in its own ``async with``.
+        tool_provider: Optional connected ``fastmcp.Client`` (already inside
+            ``async with``). When ``None`` (the default), no tools are
+            advertised to the LLM — the loop runs a single inference and
+            returns the resulting text without ever calling ``list_tools``.
+            When provided, the client context **must** span the full loop;
+            ``run_agent`` does not wrap it in its own ``async with``, and it
+            is forwarded to ``execute_tool_calls`` /
+            ``execute_tool_calls_parallel`` on every tool-dispatch turn.
         user_message: The user's query as a plain string.
         function_name: Name of the chat function defined in ``tensorzero.toml``.
         episode_id: Existing T0 episode id to continue, or ``None`` for a fresh
@@ -312,15 +317,24 @@ async def run_agent(
     Raises:
         MaxTurnsExceededError: If the loop runs ``max_turns`` times without the
             LLM producing a tool-call-free response.
-        ValueError: If both ``system`` and ``system_arguments`` are set.
+        ValueError: If both ``system`` and ``system_arguments`` are set,
+            or if ``user_message`` / ``function_name`` are left at their
+            empty-string defaults (those defaults exist only as a
+            Python-syntax workaround for the optional ``tool_provider``).
     """
     if system is not None and system_arguments is not None:
         raise ValueError(
             "Pass either `system` (raw string for input.system) or "
             "`system_arguments` (dict for template variables), not both."
         )
+    if not user_message or not function_name:
+        raise ValueError(
+            "`run_agent` requires non-empty `user_message` and `function_name`. "
+            "Their `\"\"` defaults exist only as a Python-syntax workaround so "
+            "`tool_provider` can default to `None` at position 2."
+        )
 
-    mcp_tools = await mcp_client.list_tools()
+    mcp_tools = await tool_provider.list_tools() if tool_provider is not None else []
     t0_tools = convert_tools(mcp_tools)
     messages: list[Message] = list(prior_messages) if prior_messages else []
     messages.append(Message(role="user", content=user_message))
@@ -456,7 +470,14 @@ async def run_agent(
             turn + 1, len(tool_calls_in_turn), tool_names,
         )
 
-        tool_results = await executor(mcp_client, response.content, tool_timeout)
+        if tool_provider is None:
+            raise T0AgentsFatalError(
+                "Agent loop received tool calls from the LLM but no "
+                "`tool_provider` was configured. Pass a connected "
+                "`fastmcp.Client` to `run_agent(..., tool_provider=...)` "
+                "if your agent is expected to dispatch tools."
+            )
+        tool_results = await executor(tool_provider, response.content, tool_timeout)
         # N tool results MUST go into a single user message, not N.
         messages.append(Message(role="user", content=tool_results))
 
