@@ -16,7 +16,11 @@ removed: `Agent.run()` / `Agent.stream()` (replaced by
 JSON-only `AgentConfig` kwargs (replaced by `output=JsonOutput(...)`).
 Both are one-line migrations per call site; the migration walkthrough
 is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
-`mcp/` is untouched across the entire refactor.
+`mcp/` is largely untouched across the refactor — the only signature
+change is that `run_agent` (and `StreamingAgentLoop.stream`) rename
+their second parameter from `mcp_client` to `tool_provider` and
+default it to `None`, so chat-only callers no longer need to allocate
+a FastMCP server (see the `Changed` section below).
 
 ### Added
 
@@ -274,9 +278,9 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
 - **App-owned FastMCP server + Client lifecycle.**
   `App.__init__` allocates a long-lived in-memory `FastMCP("glow-app")`
   + `Client`; every glow agent is constructed with
-  `tool_provider=app._owned_client`, so the v1.0 toolless-chat
-  fallback at `core/agent.py:_resolve_chat_tool_provider` is never
-  reached for glow agents.
+  `tool_provider=app._owned_client`, so glow agents never run the
+  v1.0 core's toolless-chat short-circuit — they always have a real
+  `Client` to call into.
   `app.build()` enters the Client once (idempotent); `app.shutdown()`
   closes it; `app.lifespan()` does `build → yield → shutdown` in a
   `try/finally`.  Examples and integration tests are updated to wrap
@@ -355,20 +359,45 @@ is at [`docs/migration-v0.12-to-v1.0.md`](docs/migration-v0.12-to-v1.0.md).
 
 ### Changed
 
+- **Breaking — `mcp_client` → `tool_provider` rename on low-level
+  entry points.**  `run_agent` (in `t0_agents.mcp.loop`) and
+  `StreamingAgentLoop.stream` (in `t0_agents.stream.runner`) rename
+  their second positional parameter from `mcp_client` to
+  `tool_provider`; the type widens to `Client[Any] | None` and the
+  default is `None`.  Positional callers (the vast majority) keep
+  working unchanged; keyword callers must update
+  `mcp_client=client` → `tool_provider=client`.  Both `run_agent`
+  and the streaming runner skip `list_tools()` when
+  `tool_provider is None`, advertise an empty tool list to
+  TensorZero, and return after a single inference.  If the LLM
+  emits a `ToolCall` while `tool_provider` is `None`, the loop
+  raises `T0AgentsFatalError` rather than stringifying the policy
+  violation into a `ToolResult`.  The low-level helpers
+  `execute_tool_calls` and `execute_tool_calls_parallel` rename
+  the same parameter in lock-step but stay non-optional — they
+  only run inside the tool-dispatch branch, after the optional
+  guard has already proven a provider is present.  Since v1.0 is
+  still Unreleased, no deprecation shim ships.
+
 - **`Agent.__init__` accepts `tool_provider=None` for chat-mode
-  agents.** v1.0 originally rejected chat configs (`output=ChatOutput()`,
-  the default) constructed without a tool provider; that rule is
-  relaxed so `Agent(config, t0=t0)` works for every output mode.
-  When chat-mode is selected and the caller passes `None`, the chat
-  terminals allocate an ephemeral `Client(FastMCP("agent-default"))`
-  for the duration of each invocation — the in-memory MCP server
-  advertises zero tools, so `run_agent` sees an empty tool list, the
-  LLM produces a text response, and the loop terminates after the
-  first turn.  This is the "toolless chat" convenience for thin
-  chatbot-style use cases.  Single-shot output modes (`JsonOutput`,
+  agents — no MCP allocation behind the scenes.** v1.0 originally
+  rejected chat configs (`output=ChatOutput()`, the default)
+  constructed without a tool provider; that rule is relaxed so
+  `Agent(config, t0=t0)` works for every output mode.  When
+  chat-mode is selected and the caller passes `None`, the chat
+  terminals forward `None` directly to `run_agent` /
+  `StreamingAgentLoop.stream`; the loop skips `list_tools()`,
+  advertises an empty tool list, runs a single inference, and
+  returns the text response.  No FastMCP server is allocated;
+  no `Client` lifecycle is implied.  If the LLM ever emits a
+  `ToolCall` under these conditions, `T0AgentsFatalError`
+  surfaces the policy violation instead of being stringified into
+  a tool error.  Single-shot output modes (`JsonOutput`,
   `StructuredOutput`, `ToolCallOutput`) were already tolerant of
-  `tool_provider=None`.  The `mcp/` standalone-submodule invariant is
-  preserved (no change to `mcp/loop.run_agent`'s signature).
+  `tool_provider=None`.  The `mcp/` standalone-submodule invariant
+  is preserved — `run_agent` and `StreamingAgentLoop.stream`
+  share a `Client[Any] | None`-typed `tool_provider` parameter and
+  do not import any higher-layer protocol.
 
 - **`Agent` internals** refactored to a middleware pipeline.
   `core/agent.py` shrinks from ~1670 LoC (v0.12) to ~870 LoC.
