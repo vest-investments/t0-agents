@@ -1,7 +1,7 @@
 # Release-gate smoke verification
 
 Manual checklist run by a single operator before tagging each release.
-Covers all 24 example scripts in `examples/` plus four manual UI
+Covers all 25 example scripts in `examples/` plus four manual UI
 checks.  **Not CI** — these runs consume real Groq tokens, two
 batches drive scripts whose default model is occasionally
 non-deterministic, and two scripts shell out to interactive
@@ -86,7 +86,7 @@ uv run python examples/agent/15_mcp_internals/main.py
 
 Each folder has its own `docker-compose.yml` because the
 `config/tensorzero.toml` differs.  Cycle them one at a time.
-Eight cycles, ~13 minutes if every run is first-try green.
+Nine cycles, ~14 minutes if every run is first-try green.
 
 Per-folder pattern:
 
@@ -98,6 +98,17 @@ docker compose -f examples/agent/<folder>/docker-compose.yml ps
 <python invocations>
 docker compose -f examples/agent/<folder>/docker-compose.yml down
 ```
+
+### B.0 — `00_chat_only` (1 script)
+
+```bash
+uv run python examples/agent/00_chat_only/main.py
+```
+
+Signal: stdout shows `Response:` (non-empty), `Turns: 1`, `Episode
+ID:`, `Inference IDs: [<uuid>]`.  Exit 0.  `Turns: 1` is the
+load-bearing signature for the toolless-chat path: a single
+inference, zero tool-call turns.
 
 ### B.1 — `01_first_agent` (1 script)
 
@@ -472,6 +483,7 @@ before declaring red.
 
 | ✓ | Row | Compose | Cmd |
 |---|---|---|---|
+| ☐ | B.0 | 00_chat_only | `…/00_chat_only/main.py` |
 | ☐ | B.1 | 01_first_agent | `…/01_first_agent/main.py` |
 | ☐ | B.2a | 02_agent_class | `…/02_agent_class/basic.py` |
 | ☐ | B.2b | 02_agent_class | `…/02_agent_class/intermediate.py` |
