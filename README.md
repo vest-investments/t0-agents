@@ -76,6 +76,18 @@ parsed = (await extractor.invoke("Sarah <sarah@example.com>")).value
 parsed.email                            # statically typed Customer
 ```
 
+And toolless chat works the same way — drop `tool_provider`,
+get a pure-conversation `Agent` with zero MCP plumbing:
+
+```python
+chat = Agent(AgentConfig(name="tutor", function_name="agent"), t0=t0)
+result = await chat.invoke("Explain monads in two sentences.")
+print(result.response)
+```
+
+No `Client`, no FastMCP server, no `list_tools()` roundtrip per turn —
+the loop runs one inference and returns the text response.
+
 Glow compiles down to exactly this `Agent`.  Every glow wrapper
 exposes `_agent` — the same v1.0 surface — for the moments the
 decorator is in your way.  See

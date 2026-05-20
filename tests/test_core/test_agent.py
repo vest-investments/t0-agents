@@ -146,10 +146,14 @@ class TestAgent:
         v1.0 originally rejected this combination eagerly; the
         ``feat(agent): make tool_provider optional for chat-mode agents``
         change relaxes the rule.  The constructor stores
-        ``_tool_provider = None``; the chat terminals allocate an
-        ephemeral in-memory ``FastMCP("agent-default")`` (zero tools)
-        for the duration of each invocation, so the LLM produces a
-        text response and the loop terminates after the first turn.
+        ``_tool_provider = None`` and the chat terminals forward that
+        ``None`` straight into ``run_agent`` / ``StreamingAgentLoop.stream``;
+        no MCP server is allocated.  The loop sees an empty tool list,
+        the LLM produces a text response, and termination happens after
+        the first turn.  See
+        :func:`test_toolless_chat_invoke_returns_text` below for the
+        end-to-end assertion that no ``FastMCP.__init__`` runs during
+        a toolless invoke.
         """
         config = AgentConfig(name="a", function_name="f")
         agent = Agent(

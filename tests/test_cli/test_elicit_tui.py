@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from fastmcp.client.elicitation import ElicitResult
@@ -323,7 +323,7 @@ async def test_handler_pauses_active_renderer_during_prompt(
 
     class _TrackingRenderer:
         console = _console()
-        pauses: list[str] = []
+        pauses: ClassVar[list[str]] = []
 
         def pause(self) -> None:
             _TrackingRenderer.pauses.append("pause")

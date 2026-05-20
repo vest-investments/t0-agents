@@ -13,7 +13,6 @@ from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.types import ToolProvider
 from t0_agents.stream.events import DoneEvent
-from tests.server import mcp
 
 pytestmark = pytest.mark.integration
 

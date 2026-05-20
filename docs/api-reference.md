@@ -87,9 +87,9 @@ responds without tool calls or `max_turns` is reached.
 ```python
 async def run_agent(
     t0: AsyncTensorZeroGateway,
-    mcp_client: Client[Any],
-    user_message: str,
-    function_name: str,
+    tool_provider: Client[Any] | None = None,
+    user_message: str = "",
+    function_name: str = "",
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
@@ -108,9 +108,9 @@ async def run_agent(
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `t0` | `AsyncTensorZeroGateway` | *(required)* | Connected TensorZero gateway instance (already inside `async with`). |
-| `mcp_client` | `Client[Any]` | *(required)* | Connected FastMCP client (already inside `async with`). Must remain connected for the full loop. |
-| `user_message` | `str` | *(required)* | The user's query as a plain string. |
-| `function_name` | `str` | *(required)* | Name of the chat function defined in `tensorzero.toml`. |
+| `tool_provider` | `Client[Any] \| None` | `None` | Optional connected FastMCP client (already inside `async with`). When `None` (or omitted), no tools are advertised, `list_tools()` is never called, and the loop runs a single inference and returns the text response — the "toolless chat" path. When provided, must remain connected for the full loop. If the LLM emits a tool call while `tool_provider` is `None`, the loop raises `T0AgentsFatalError` rather than stringifying the policy violation into a tool error. |
+| `user_message` | `str` | `""` | The user's query as a plain string. Non-empty in practice; defaults to `""` so `tool_provider` can default to `None` ahead of it in the positional signature (Python forbids a required positional after a defaulted one). |
+| `function_name` | `str` | `""` | Name of the chat function defined in `tensorzero.toml`. Defaulted to `""` for the same positional-signature reason. |
 | `episode_id` | `str \| None` | `None` | Existing episode ID to continue. `None` starts a fresh episode; TensorZero allocates one and the loop captures it. |
 | `max_turns` | `int` | `20` | Maximum inference turns before aborting with `MaxTurnsExceededError`. |
 | `tool_timeout` | `float` | `30.0` | Per-tool-call timeout in seconds, forwarded to `Client.call_tool(timeout=...)`. Covers the **entire** `call_tool()` duration including any [elicitation](elicitation.md) wait time. When using elicitation-enabled tools, set to `None` (no timeout) or a generous value (e.g., `300.0`). Only applies to foreground execution. |
@@ -130,11 +130,19 @@ IDs, turn count, and response source.
 
 - `MaxTurnsExceededError` -- Loop ran `max_turns` times without a
   tool-call-free response.
+- `T0AgentsFatalError` -- The LLM emitted a `ToolCall` while
+  `tool_provider` was `None`. The optional contract requires the
+  caller to wire a tool provider whenever tool dispatch is expected;
+  a hallucinated tool call against a toolless configuration is
+  surfaced as a fatal policy violation rather than stringified into
+  a `ToolResult` error so the run aborts cleanly.
 - `TensorZeroError` -- Non-recoverable inference error from TensorZero
   (propagated). Recoverable errors (matching `RECOVERABLE_INFERENCE_PATTERNS`)
   trigger an automatic retry with a corrective user message.
 - `ValueError` -- Both `system` and `system_arguments` were supplied
-  (they're mutually exclusive — both target `input.system`).
+  (they're mutually exclusive — both target `input.system`), or
+  `user_message` / `function_name` was left at the empty-string
+  default.
 
 ### Behavior notes
 
@@ -378,7 +386,7 @@ Executes every `ToolCall` in a list of content blocks sequentially.
 
 ```python
 async def execute_tool_calls(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -388,7 +396,7 @@ async def execute_tool_calls(
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `mcp_client` | `Client[Any]` | *(required)* | Connected FastMCP client. |
+| `tool_provider` | `Client[Any]` | *(required)* | Connected FastMCP client. Non-optional — this helper only runs inside the tool-dispatch branch of `run_agent`, after the optional contract has already proven `tool_provider is not None`. |
 | `content_blocks` | `list[Any]` | *(required)* | Content blocks from the inference response (mix of `Text`, `Thought`, `ToolCall`). |
 | `timeout` | `float` | `30.0` | Per-tool-call timeout in seconds. |
 
@@ -420,7 +428,7 @@ Executes `ToolCall` blocks concurrently via `asyncio.gather`.
 
 ```python
 async def execute_tool_calls_parallel(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -430,7 +438,7 @@ async def execute_tool_calls_parallel(
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `mcp_client` | `Client[Any]` | *(required)* | Connected FastMCP client. |
+| `tool_provider` | `Client[Any]` | *(required)* | Connected FastMCP client. Non-optional — same contract as `execute_tool_calls`. |
 | `content_blocks` | `list[Any]` | *(required)* | Content blocks from the inference response. |
 | `timeout` | `float` | `30.0` | Per-tool-call timeout in seconds. |
 

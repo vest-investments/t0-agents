@@ -109,7 +109,7 @@ class TestMemoryHydrationAndPersistence:
         assert r1.episode_id == ep
 
         # Second run — pass episode_id so memory loads
-        r2 = await agent.invoke("What is my name?", episode_id=ep)
+        await agent.invoke("What is my name?", episode_id=ep)
 
         # The second inference call should have the memory prefix
         second_call = t0.calls[1]

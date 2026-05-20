@@ -13,8 +13,6 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.types import ToolProvider
-from t0_agents.memory.in_memory import InMemoryMemory
-from tests.server import mcp
 
 pytestmark = pytest.mark.integration
 
