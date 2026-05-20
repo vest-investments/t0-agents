@@ -220,6 +220,14 @@ spot in CI output.
   `TensorZeroError`, pattern-match the validation/`tool_use_failed`
   fragment, and `pytest.skip`.  Any other `TensorZeroError` is
   re-raised so a genuine regression is still loud.
+- **gpt-oss-20b sometimes serialises tool calls as plain text** in the
+  legacy OpenAI `{"function_call": {...}}` shape instead of emitting a
+  structured `ToolCall` block.  The agent loop sees no tool call,
+  terminates on turn 1, and surfaces the JSON-as-text as `response`.
+  Same family of "model didn't actually invoke the tool this run" —
+  handled by the same `if result.turns < 2: pytest.skip(...)` convention
+  in `test_tool_timeout_does_not_crash_run_agent`,
+  `test_run_agent_allows_llm_retry`, and the other tests listed above.
 
 Both classes of flake disappear when the integration suite runs
 against a frontier model (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Pro).
