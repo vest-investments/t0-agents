@@ -26,7 +26,7 @@ docker compose down                # Stop containers (ClickHouse data persists i
 
 ## Architecture
 
-**Agent loop flow:** User query → TensorZero inference (with tool list) → LLM returns text + tool calls → execute tools via FastMCP client → feed results back → loop until done or max turns → return `AgentResult`.
+**Agent loop flow:** User query → TensorZero inference (with tool list) → LLM returns text + tool calls → execute tools via FastMCP client → feed results back → loop until done or max turns → return `AgentResult`. Tools and the MCP `Client` are optional; single-shot output modes and chat-only agents work without them (`run_agent(..., tool_provider=None)` skips `list_tools()` and never allocates a FastMCP server).
 
 Two key modules under `src/t0_agents/`:
 

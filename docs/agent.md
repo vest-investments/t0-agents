@@ -113,7 +113,7 @@ For the end-to-end runnable project (tensorzero.toml, docker-compose.yml, MCP se
 
 | Collaborator | Lives on | Enabled when | Behaviour when absent |
 |---|---|---|---|
-| `ToolProvider` | `Agent(tool_provider=...)` | chat-mode agents | required when `AgentConfig.output` is a `ChatOutput` (default); optional (and unused) for single-shot output modes like `JsonOutput` / `StructuredOutput` |
+| `ToolProvider` | `Agent(tool_provider=...)` | tool-dispatching agents | optional in every output mode; pass `None` (or omit) when the agent never needs tools (toolless chat, single-shot `JsonOutput` / `StructuredOutput`). A defensive guard raises `T0AgentsFatalError` if the LLM emits a tool call while `tool_provider` is `None`. |
 | `MemoryProvider` | `AgentConfig.memory` | non-`None` | no load/save, no context injection |
 | `Guardrail` list | `AgentConfig.guardrails` | non-empty | provider passed through unwrapped, no cost tracking |
 | Sub-agents | `AgentConfig.sub_agents` | non-empty | no additional MCP tools registered |
@@ -134,7 +134,7 @@ async with await AsyncTensorZeroGateway.build_http(...) as t0, Client(mcp) as to
 
 `Agent` does not install signal handlers, configure logging, spawn threads, or touch the filesystem on your behalf.
 
-JSON-mode agents (configured via `AgentConfig(output=JsonOutput(...))` or `StructuredOutput(...)`) never dispatch tools, so the `tool_provider` kwarg is optional — drop it and let the constructor short-circuit the MCP plumbing entirely. See [output-modes.md](output-modes.md) and [structured-outputs.md](structured-outputs.md) for the full pattern.
+JSON-mode agents (`AgentConfig(output=JsonOutput(...))` or `StructuredOutput(...)`) never dispatch tools, and chat-mode agents *also* accept `tool_provider=None` for pure-conversation use cases — drop it and the constructor short-circuits the MCP plumbing entirely. No ephemeral FastMCP server is allocated behind the scenes; the chat terminal forwards `None` straight into `run_agent`, which skips `list_tools()` and returns the first text response. See [output-modes.md](output-modes.md), [structured-outputs.md](structured-outputs.md), and [getting-started.md](getting-started.md) for the full pattern.
 
 ```python
 from t0_agents import JsonOutput

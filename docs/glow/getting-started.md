@@ -48,13 +48,13 @@ and run each with `uv run python examples/glow/<NN>_*.py`.
 
 ## Toolless chat — no MCP plumbing needed
 
-The v1.0 `Agent` requires a `tool_provider` (typically a FastMCP
-`Client`) so the chat loop can advertise an empty tool list.  glow
-relaxes that requirement: chat-mode agents constructed without a
-`tool_provider` allocate an ephemeral in-memory FastMCP for the
-invocation's duration.  Concretely, the 4-line hello-world above
-runs without ever touching MCP — and the underlying unlock lives in
-the core `Agent`, so every consumer benefits, not just glow.
+The v1.0 `Agent` accepts `tool_provider=None` directly: chat-mode
+agents constructed without a `tool_provider` skip the MCP plumbing
+entirely.  No FastMCP server is allocated, no `list_tools()`
+roundtrip per turn — the loop runs a single inference and returns
+the text response.  The 4-line hello-world above takes this path
+by default, and the unlock lives in the core `Agent`, so every
+consumer benefits, not just glow.
 
 When you register tools (`@app.tool`) or mount MCP servers
 (`servers=[MathMCP]`), glow switches to the App-owned in-memory

@@ -84,7 +84,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Both the `AsyncTensorZeroGateway` and `Client` must be entered as async context managers **before** calling `run_agent`. The caller owns the lifecycle of both clients.
+`AsyncTensorZeroGateway` must be entered as an async context manager **before** calling `run_agent`. The optional `tool_provider` (typically a `fastmcp.Client`) is only required when the agent dispatches tools; pass `tool_provider=None` (or omit it) for a chat-only inference loop — no FastMCP server is allocated and `list_tools()` is never called. The caller owns the lifecycle of whichever clients it provides.
 
 ## What just happened?
 
