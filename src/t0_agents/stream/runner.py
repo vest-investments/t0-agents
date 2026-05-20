@@ -41,7 +41,7 @@ from tensorzero.types import (
     TensorZeroError,
 )
 
-from t0_agents.core.exceptions import MaxTurnsExceededError
+from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
 from t0_agents.core.types import AgentResult
 from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
@@ -73,9 +73,9 @@ class StreamingAgentLoop:
     async def stream(
         self,
         t0: AsyncTensorZeroGateway,
-        tool_provider: Client[Any],
-        user_message: str,
-        function_name: str,
+        tool_provider: Client[Any] | None = None,
+        user_message: str = "",
+        function_name: str = "",
         *,
         episode_id: str | None = None,
         max_turns: int = 20,
@@ -96,6 +96,18 @@ class StreamingAgentLoop:
         accumulated :class:`AgentResult`.  Raises :class:`MaxTurnsExceededError`
         if ``max_turns`` is exhausted without a tool-call-free turn.
 
+        ``tool_provider`` mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        ``tool_provider`` kwarg: an already-connected ``fastmcp.Client``
+        (or ``None``).  When ``None`` (the default), no tools are
+        advertised to the LLM — the loop runs a single streamed inference
+        and yields the resulting text without ever calling
+        ``list_tools``.  If the LLM emits a tool call anyway, a
+        :class:`~t0_agents.core.exceptions.T0AgentsFatalError` is raised
+        before any dispatch is attempted.  When a client is provided, it
+        **must** already be inside ``async with`` for the lifetime of
+        the stream; it is forwarded to ``execute_tool_calls`` /
+        ``execute_tool_calls_parallel`` on every tool-dispatch turn.
+
         ``prior_messages`` mirrors the kwarg of the same name on
         :func:`~t0_agents.mcp.loop.run_agent` — when supplied, the loop
         seeds ``messages`` with the prior conversation before appending
@@ -105,13 +117,26 @@ class StreamingAgentLoop:
         ``system`` kwarg: a raw string forwarded as ``input.system``.
         Mutually exclusive with ``system_arguments``; a ``ValueError``
         is raised before the first chunk is yielded when both are set.
+        ``user_message`` and ``function_name`` also raise ``ValueError``
+        if left at their ``""`` defaults — those defaults exist solely
+        as a Python-syntax workaround that lets ``tool_provider`` default
+        to ``None`` at position 2.
         """
         if system is not None and system_arguments is not None:
             raise ValueError(
                 "Pass either `system` (raw string for input.system) or "
                 "`system_arguments` (dict for template variables), not both."
             )
-        mcp_tools = await tool_provider.list_tools()
+        if not user_message or not function_name:
+            raise ValueError(
+                "`StreamingAgentLoop.stream` requires non-empty "
+                "`user_message` and `function_name`. Their `\"\"` defaults "
+                "exist only as a Python-syntax workaround so `tool_provider`"
+                " can default to `None` at position 2."
+            )
+        mcp_tools = (
+            await tool_provider.list_tools() if tool_provider is not None else []
+        )
         t0_tools = convert_tools(mcp_tools)
         messages: list[Message] = list(prior_messages) if prior_messages else []
         messages.append(Message(role="user", content=user_message))
@@ -239,6 +264,14 @@ class StreamingAgentLoop:
             tool_call_blocks = [
                 b for b in assistant_blocks if isinstance(b, ToolCall)
             ]
+            if tool_provider is None:
+                raise T0AgentsFatalError(
+                    "Agent loop received tool calls from the LLM but no "
+                    "`tool_provider` was configured. Pass a connected "
+                    "`fastmcp.Client` to "
+                    "`StreamingAgentLoop.stream(..., tool_provider=...)` "
+                    "if your agent is expected to dispatch tools."
+                )
             tool_results = await executor(
                 tool_provider, tool_call_blocks, tool_timeout
             )
