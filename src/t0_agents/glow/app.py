@@ -98,10 +98,11 @@ class App:
         # App-owned FastMCP server + matching Client.  The server starts
         # empty; ``@app.tool`` registers tools onto it.  Every glow agent
         # is constructed with ``tool_provider=self._owned_client``, so
-        # the v1.0 toolless-chat fallback at
-        # ``core/agent.py:_resolve_chat_tool_provider`` is never reached
-        # for glow agents.  The Client is connected by :meth:`build`
-        # (idempotent); :meth:`shutdown` exits the matching ``__aexit__``.
+        # glow agents always run with a concrete in-process FastMCP
+        # server even when the user registers no tools — toolless-chat
+        # semantics are handled by the v1.0 core directly.  The Client
+        # is connected by :meth:`build` (idempotent); :meth:`shutdown`
+        # exits the matching ``__aexit__``.
         self._mcp_server: FastMCP[Any] = FastMCP("glow-app")
         self._owned_client: Client[Any] = Client(self._mcp_server)
         self._exit_stack: AsyncExitStack = AsyncExitStack()
