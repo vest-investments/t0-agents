@@ -3,7 +3,7 @@
 **Date**: 2026-05-20
 **Base branch**: main
 **Branch**: `milestone/5-example-chat-only-showcase`
-**PR**: <filled after Phase 5>
+**PR**: https://github.com/sproutfi/t0-agents/pull/55
 
 ## Implemented
 
