@@ -12,7 +12,6 @@ import asyncio
 from typing import Any, cast
 from uuid import uuid4
 
-from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
