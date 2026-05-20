@@ -203,9 +203,9 @@ async def execute_tool_calls_parallel(
 
 async def run_agent(
     t0: AsyncTensorZeroGateway,
-    mcp_client: Client[Any],
-    user_message: str,
-    function_name: str,
+    tool_provider: Client[Any] | None = None,
+    user_message: str = "",
+    function_name: str = "",
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
@@ -233,9 +233,14 @@ async def run_agent(
 
     Args:
         t0: A connected ``AsyncTensorZeroGateway`` (already inside ``async with``).
-        mcp_client: A connected ``fastmcp.Client`` (already inside ``async with``).
-            Per FastMCP's documentation, the client context **must** span the
-            full loop; ``run_agent`` does not wrap it in its own ``async with``.
+        tool_provider: Optional connected ``fastmcp.Client`` (already inside
+            ``async with``). When ``None`` (the default), no tools are
+            advertised to the LLM — the loop runs a single inference and
+            returns the resulting text without ever calling ``list_tools``.
+            When provided, the client context **must** span the full loop;
+            ``run_agent`` does not wrap it in its own ``async with``, and it
+            is forwarded to ``execute_tool_calls`` /
+            ``execute_tool_calls_parallel`` on every tool-dispatch turn.
         user_message: The user's query as a plain string.
         function_name: Name of the chat function defined in ``tensorzero.toml``.
         episode_id: Existing T0 episode id to continue, or ``None`` for a fresh
@@ -320,7 +325,7 @@ async def run_agent(
             "`system_arguments` (dict for template variables), not both."
         )
 
-    mcp_tools = await mcp_client.list_tools()
+    mcp_tools = await tool_provider.list_tools() if tool_provider is not None else []
     t0_tools = convert_tools(mcp_tools)
     messages: list[Message] = list(prior_messages) if prior_messages else []
     messages.append(Message(role="user", content=user_message))
@@ -456,7 +461,14 @@ async def run_agent(
             turn + 1, len(tool_calls_in_turn), tool_names,
         )
 
-        tool_results = await executor(mcp_client, response.content, tool_timeout)
+        if tool_provider is None:
+            raise T0AgentsFatalError(
+                "Agent loop received tool calls from the LLM but no "
+                "`tool_provider` was configured. Pass a connected "
+                "`fastmcp.Client` to `run_agent(..., tool_provider=...)` "
+                "if your agent is expected to dispatch tools."
+            )
+        tool_results = await executor(tool_provider, response.content, tool_timeout)
         # N tool results MUST go into a single user message, not N.
         messages.append(Message(role="user", content=tool_results))
 
