@@ -3,7 +3,7 @@
 **Date**: 2026-05-19
 **Base branch**: main
 **Branch**: `milestone/3-agent-drop-ephemeral-fallback`
-**PR**: <filled after gh pr create>
+**PR**: https://github.com/sproutfi/t0-agents/pull/53
 
 ## Implemented
 
