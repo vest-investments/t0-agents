@@ -72,7 +72,7 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
 
 
 async def _execute_single_tool_call(
-    mcp_client: Client[Any], block: ToolCall, timeout: float
+    tool_provider: Client[Any], block: ToolCall, timeout: float
 ) -> ToolResult:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
 
@@ -119,7 +119,7 @@ async def _execute_single_tool_call(
     logger.debug("Executing tool %r with args: %s", name, block.arguments)
     start = time.monotonic()
     try:
-        mcp_result = await mcp_client.call_tool(
+        mcp_result = await tool_provider.call_tool(
             block.name, block.arguments, timeout=timeout
         )
     except T0AgentsFatalError:
@@ -163,7 +163,7 @@ async def _execute_single_tool_call(
 
 
 async def execute_tool_calls(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -173,14 +173,14 @@ async def execute_tool_calls(
     The output preserves the input order of the ``ToolCall`` blocks.
     """
     return [
-        await _execute_single_tool_call(mcp_client, b, timeout)
+        await _execute_single_tool_call(tool_provider, b, timeout)
         for b in content_blocks
         if isinstance(b, ToolCall)
     ]
 
 
 async def execute_tool_calls_parallel(
-    mcp_client: Client[Any],
+    tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
 ) -> list[ToolResult]:
@@ -196,7 +196,7 @@ async def execute_tool_calls_parallel(
         return []
     return list(
         await asyncio.gather(
-            *[_execute_single_tool_call(mcp_client, tc, timeout) for tc in tool_calls]
+            *[_execute_single_tool_call(tool_provider, tc, timeout) for tc in tool_calls]
         )
     )
 
