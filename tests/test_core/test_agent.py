@@ -158,20 +158,42 @@ class TestAgent:
         )
         assert agent.config.output.name == "chat"
         # Internal attribute mirrors the json-mode parity case below:
-        # toolless chat keeps ``_tool_provider = None``; the fallback
-        # is allocated lazily per invocation by ``_resolve_chat_tool_provider``.
+        # toolless chat keeps ``_tool_provider = None`` and flows the
+        # ``None`` straight into ``run_agent`` — no MCP server is built.
         assert agent._tool_provider is None
 
-    async def test_toolless_chat_invoke_returns_text(self) -> None:
+    async def test_toolless_chat_invoke_returns_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """End-to-end: toolless chat completes the inference loop.
 
-        With ``tool_provider=None``, the chat terminal wraps the run in
-        an ephemeral ``Client(FastMCP("agent-default"))`` — a real
-        in-memory FastMCP that advertises zero tools.  The fake
-        ``run_agent`` upstream (driven by ``FakeT0``) receives an empty
-        tool list, the response has no tool calls, and the loop
-        terminates after the first turn returning the LLM's text.
+        With ``tool_provider=None``, the chat terminal passes ``None``
+        straight into :func:`run_agent`; no ``FastMCP`` server is
+        instantiated.  The fake ``run_agent`` upstream (driven by
+        ``FakeT0``) receives an empty tool list, the response has no
+        tool calls, and the loop terminates after the first turn
+        returning the LLM's text.
+
+        Anchors the M3 invariant: a toolless ``Agent.invoke`` does not
+        allocate ``FastMCP``.  The spy on ``FastMCP.__init__`` raises
+        on any construction attempt, so the test would fail loudly if
+        an ephemeral-fallback regression were reintroduced.
         """
+        import fastmcp
+
+        def _fastmcp_init_must_not_be_called(
+            *_args: object, **_kwargs: object
+        ) -> None:
+            raise AssertionError(
+                "FastMCP() was instantiated during a toolless "
+                "Agent.invoke; the ephemeral fallback was deleted "
+                "in M3 and must not be reintroduced."
+            )
+
+        monkeypatch.setattr(
+            fastmcp.FastMCP, "__init__", _fastmcp_init_must_not_be_called
+        )
+
         t0 = FakeT0([FakeChatResponse(content=[Text(text="hello world")])])
         config = AgentConfig(name="toolless", function_name="agent")
         agent = Agent(config, t0=cast(AsyncTensorZeroGateway, t0))

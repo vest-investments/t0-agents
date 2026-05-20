@@ -137,9 +137,10 @@ def install_sub_agents(parent: Agent) -> None:
     client = parent._tool_provider
     if not isinstance(client, Client):
         raise ConfigurationError(
-            "AgentConfig.sub_agents only supports a fastmcp.Client as "
-            f"tool_provider, got {type(client).__name__}. Remote tool "
-            "providers cannot host runtime tools."
+            "AgentConfig.sub_agents requires the parent's tool_provider "
+            f"to be a fastmcp.Client (got {type(client).__name__}). Pass "
+            "tool_provider=Client(FastMCP(...)) when constructing the "
+            "parent Agent."
         )
 
     transport = getattr(client, "transport", None)
