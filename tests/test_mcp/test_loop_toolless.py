@@ -107,6 +107,35 @@ class TestRunAgentToolless:
         # Never name the legacy kwarg in the new error path.
         assert "mcp_client" not in message
 
+    async def test_run_agent_empty_user_message_raises_value_error(
+        self,
+    ) -> None:
+        """Dummy-default footgun: omitting ``user_message`` (or leaving it
+        as the empty string that exists only as a Python-syntax
+        workaround) must surface as a clear ``ValueError`` instead of a
+        cryptic gateway failure."""
+        t0 = FakeT0([])
+        with pytest.raises(ValueError, match="requires non-empty"):
+            await run_agent(
+                cast(AsyncTensorZeroGateway, t0),
+                None,
+                "",
+                "agent",
+            )
+
+    async def test_run_agent_empty_function_name_raises_value_error(
+        self,
+    ) -> None:
+        """Same guard for ``function_name``."""
+        t0 = FakeT0([])
+        with pytest.raises(ValueError, match="requires non-empty"):
+            await run_agent(
+                cast(AsyncTensorZeroGateway, t0),
+                None,
+                "hello",
+                "",
+            )
+
     async def test_run_agent_toolless_with_spy_client_passed_in(self) -> None:
         """Sanity flip-side: when the spy is passed as ``tool_provider``,
         the loop *does* hit ``list_tools`` (so the spy raises). Anchors the

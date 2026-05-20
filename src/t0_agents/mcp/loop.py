@@ -317,12 +317,21 @@ async def run_agent(
     Raises:
         MaxTurnsExceededError: If the loop runs ``max_turns`` times without the
             LLM producing a tool-call-free response.
-        ValueError: If both ``system`` and ``system_arguments`` are set.
+        ValueError: If both ``system`` and ``system_arguments`` are set,
+            or if ``user_message`` / ``function_name`` are left at their
+            empty-string defaults (those defaults exist only as a
+            Python-syntax workaround for the optional ``tool_provider``).
     """
     if system is not None and system_arguments is not None:
         raise ValueError(
             "Pass either `system` (raw string for input.system) or "
             "`system_arguments` (dict for template variables), not both."
+        )
+    if not user_message or not function_name:
+        raise ValueError(
+            "`run_agent` requires non-empty `user_message` and `function_name`. "
+            "Their `\"\"` defaults exist only as a Python-syntax workaround so "
+            "`tool_provider` can default to `None` at position 2."
         )
 
     mcp_tools = await tool_provider.list_tools() if tool_provider is not None else []
