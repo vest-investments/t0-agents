@@ -13,13 +13,14 @@ async with await gateway as t0, mcp_client:
     result = await agent.invoke("...")
 ```
 
-15 numbered examples plus two advanced tiers; each adds one concept
+16 numbered examples plus two advanced tiers; each adds one concept
 on top of the previous. Pick a chapter from the table below.
 
 ## Reading path
 
 | # | Folder | Feature (docs chapter) | Docker? |
 |---|---|---|---|
+| 00 | [`00_chat_only`](00_chat_only/)             | Toolless chat — `Agent(config, t0=t0)` without `tool_provider`. The shortest possible agent: one inference, one text response, zero MCP plumbing. | yes |
 | 01 | [`01_first_agent`](01_first_agent/)         | The agent loop, top to bottom — one user message, two tool calls, one final answer. | yes |
 | 02 | [`02_agent_class`](02_agent_class/)         | The declarative `Agent` class. Three tiers: bare config, baked-in system prompt, per-call system override. | yes |
 | 03 | [`03_output_modes`](03_output_modes/)       | `OutputMode[T]` — extract typed JSON, run the recovery ladder offline, hot-swap a schema mid-run, decorate with Pydantic. | yes / no |
