@@ -3,7 +3,7 @@
 **Date**: 2026-05-20
 **Base branch**: main
 **Branch**: `milestone/4-docs-changelog-optional-client`
-**PR**: <filled after push>
+**PR**: https://github.com/sproutfi/t0-agents/pull/54
 
 ## Implemented
 
