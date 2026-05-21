@@ -399,6 +399,44 @@ a FastMCP server (see the `Changed` section below).
   share a `Client[Any] | None`-typed `tool_provider` parameter and
   do not import any higher-layer protocol.
 
+- **`AgentConfig.sub_agents=[...]` no longer requires a FastMCP
+  server.**  `Agent.__init__` auto-allocates a
+  `SubAgentToolProvider` (new public class in
+  `t0_agents.delegation`) that synthesises one
+  `mcp.types.Tool` per sub-agent and dispatches matching
+  `call_tool` invocations inline through `Agent.invoke()`.  Pass
+  `tool_provider=None` when the orchestrator has no MCP tools of
+  its own; pass a real `Client` (or any `ToolProvider`) and it
+  composes as `inner` — `list_tools()` returns the inner tools
+  followed by the synthetic `{name}_ask` entries, and unknown
+  names fall through to `inner.call_tool`.  This collapses the
+  pre-existing dual-vía (server-side `install_sub_agents`
+  registration + middleware-side `_OrchestrationToolProvider`
+  wrap) into a single object the loop consumes directly.  Pure
+  sub-agent orchestrators now pay zero FastMCP cost.
+
+- **`glow.App` lazily allocates `_mcp_server` / `_owned_client`.**
+  The pair was constructed in `App.__init__` unconditionally;
+  apps with no `@app.tool` registrations and no `MCPServer` specs
+  paid for a FastMCP server they never used.  Allocation now
+  happens on first use via `_ensure_mcp_server()` — triggered by
+  `@app.tool` decoration or `build()` when `_mcp_specs` is
+  non-empty.  Sub-agents-only apps leave both `None` and pass
+  `tool_provider=None` to `Agent`, which auto-allocates the
+  `SubAgentToolProvider` for the delegation surface.  Existing
+  apps with `@app.tool` or `MCPServer` specs see no behavioural
+  change.
+
+- **`SubAgentMiddleware` is now ContextVar-only.**  The middleware
+  no longer wraps `ctx.tool_provider` — dispatch lives in
+  `SubAgentToolProvider`, which `Agent.__init__` pre-installs on
+  `self._tool_provider`.  What remains is the
+  `parent_episode_id` ContextVar plumbing (initial bind +
+  `on_inference` refresh hook).  The default middleware chain
+  position (`Memory → SubAgents → Guardrails → CostTracking →
+  JsonRetry`) is unchanged; `SubAgents` precedes `Guardrails` so
+  the parent-episode binding is in scope when guardrails fire.
+
 - **`Agent` internals** refactored to a middleware pipeline.
   `core/agent.py` shrinks from ~1670 LoC (v0.12) to ~870 LoC.
   `_execute_chat_legacy`, `_execute_chat_streaming_legacy`, and
@@ -450,8 +488,17 @@ a FastMCP server (see the `Changed` section below).
 - **`t0_agents.glow.compose`** — removed alongside the underlying
   topology layer.
 - **Sub-agent orchestration relocated** — `agent_as_tool`,
-  `install_sub_agents`, and friends now live in
-  `t0_agents.delegation` (top-level re-exports unchanged).
+  `install_sub_agents`, and friends moved to `t0_agents.delegation`
+  before being deleted (see next entry).
+- **`install_sub_agents`, `agent_as_tool`, `_OrchestrationToolProvider`**
+  — three internal helpers that wired sub-agents into a server-side
+  FastMCP registration plus a middleware-side dispatch wrap.
+  `SubAgentToolProvider` (see `Changed`) replaces all three with a
+  single class.  `t0_agents.agent_as_tool` and
+  `t0_agents.delegation.install_sub_agents` are no longer
+  importable; callers using the declarative
+  `AgentConfig(sub_agents=[...])` path need no change, callers using
+  the internal helpers directly should switch to `SubAgentToolProvider`.
 
 - **`Agent.run(...)`** — replaced by `await agent.invoke(msg, ...)`
   (a `Run` is awaitable and returns the same `AgentResult`).
