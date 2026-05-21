@@ -123,7 +123,6 @@ class SubAgentToolProvider:
         arguments: dict[str, Any] | None = None,
         *,
         timeout: float | None = None,
-        **kwargs: Any,
     ) -> CallToolResult:
         """Dispatch ``name`` to a sub-agent or fall through to ``inner``.
 
@@ -141,7 +140,7 @@ class SubAgentToolProvider:
                 return cast(
                     CallToolResult,
                     await self._inner.call_tool(
-                        name, arguments or {}, timeout=timeout, **kwargs,
+                        name, arguments or {}, timeout=timeout,
                     ),
                 )
             return _error_result(
