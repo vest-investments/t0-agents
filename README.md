@@ -216,12 +216,37 @@ heavier extras live behind named installs.
 | **`OutputMode[T]` polymorphism** | `ChatOutput`, `JsonOutput`, `StructuredOutput[M]` (Pydantic), `ToolCallOutput`, `StreamingOutput`.  Custom modes (YAML, Instructor, SQLAlchemy) plug in via the same protocol. |
 | **glow decorator surface** | FastAPI-style `@app.agent` over the v1.0 primitives.  Docstring = system prompt, return annotation = `OutputMode`, `Depends(...)` for tools and sub-agents, `Annotated[T, guardrail(...)]` for policy as type metadata. |
 | **Cross-run memory** | `InMemoryMemory`, `SqliteMemory`, `TensorZeroMemory`, or your own `MemoryProvider`.  Keyed by TensorZero's `episode_id`. |
+| **Elicitation forwarding** | `ElicitationForwarder` bridges MCP `ctx.elicit()` requests to your transport (FastAPI/SSE, WebSocket, queue). Pause a tool to ask a human, resume the loop with the response. See [`docs/elicitation.md`](docs/elicitation.md) and [`docs/guides/elicitation-in-api.md`](docs/guides/elicitation-in-api.md). |
 | **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules.  Every decision is captured on `AgentResult.guardrail_log` for audit. |
 | **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
 | **HTTP serving** | `create_app(agent)` wraps any agent in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` — plus `/chat/stream` (SSE) and `/chat/ws` (WebSocket) when `streaming=True`. |
 | **Terminal CLI** | `t0-agents run` (interactive streaming TUI), `t0-agents serve` (dev HTTP server), `t0-agents info` (config introspection). |
 | **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
 | **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
+
+## Status & Limitations
+
+t0-agents is **Alpha**.  APIs are stabilising between minor versions
+but may still change; pin to a specific `1.x.y` when consuming from
+another project (e.g. `pip install 't0-agents==1.0.1'` or
+`t0-agents @ git+https://github.com/<owner>/t0-agents.git@v1.0.1`).
+
+Known caveats today:
+
+- **`t0_agents.glow`** ships behind the `[glow]` extra and is marked
+  **Experimental** — its public surface may change in `1.1.x`.  The
+  full list of caveats lives in
+  [`docs/glow/limitations.md`](docs/glow/limitations.md).
+- **JSON output modes do not stream.** `JsonOutput` and
+  `StructuredOutput` are single-shot by design; constructing
+  `StreamingOutput(base=JsonOutput(...))` raises `ConfigurationError`.
+- **Async-only.** The agent loop, `Run`, streaming, serving, and
+  testing surfaces are all `async`-first; there is no sync facade.
+  Bridge with `asyncio.run(...)` at your entry point if you need one.
+- **Multi-agent narrative is moving toward `asyncio`.** The
+  declarative `AgentConfig.sub_agents` path plus the runnable patterns
+  under [`examples/agent/12_concurrency/`](examples/agent/12_concurrency/)
+  are the recommended way to wire orchestrators today.
 
 ## Requirements
 
