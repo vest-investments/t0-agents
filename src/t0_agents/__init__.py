@@ -4,6 +4,8 @@ import logging
 
 from tensorzero import ToolChoice
 
+__version__ = "1.0.1"
+
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.elicitation_forwarder import (
@@ -130,6 +132,7 @@ __all__ = [
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",
+    "__version__",
     "permissive_parse",
     "run_agent",
 ]

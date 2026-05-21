@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.1] — Unreleased
+
+Public-readiness cleanup release.  No source-level changes to the
+`t0_agents` package — every public symbol exported in 1.0.0 is
+byte-identical here.  Pin to `1.0.1` as the first publicly tagged
+version when consuming the library from other projects.
+
+### Added
+
+- **`t0_agents.__version__`** attribute (`str`), kept in sync with
+  `pyproject.toml`.  Lets downstream code do
+  `import t0_agents; t0_agents.__version__` without falling back to
+  `importlib.metadata`.
+
+### Changed
+
+- **README** — Features table now lists `ElicitationForwarder`
+  alongside Memory and Observability so external developers can see
+  human-in-the-loop forwarding is first-class.  New "Status &
+  Limitations" section consolidates the alpha / experimental / known
+  caveats narrative previously scattered across the intro and the glow
+  docs.
+
+### Removed
+
+- Internal workstream planning files (`PLAN.md`, `dev-logs/`) and
+  remaining "milestone", "dev-log", "roadmap", and "experimental
+  branch" references in `CHANGELOG.md` and `CLAUDE.md`.  The
+  external-developer experience no longer surfaces internal milestone
+  vocabulary.
+
 ## [1.0.0] — 2026-05-21
 
 The v1.0 four-abstraction refactor lands as one cumulative release.
