@@ -17,6 +17,20 @@ type = "chat"
 type = "chat_completion"
 model = "gpt_oss_20"
 
+# Orchestrator chat function used by
+# ``tests/test_glow/test_integration.py::test_orchestrator_with_glow_sub_agents``.
+# Glow's ``@app.agent("orchestrator", function_name="orchestrator")``
+# expects a chat-type function it can dispatch sub-agent tools through
+# (the ``researcher_ask`` / ``writer_ask`` ``_ask`` tools installed by
+# ``install_sub_agents``).  Without this entry the test fails with
+# ``Unknown function: orchestrator`` at the first inference call.
+[functions.orchestrator]
+type = "chat"
+
+[functions.orchestrator.variants.gpt_oss_20]
+type = "chat_completion"
+model = "gpt_oss_20"
+
 # Schema-declared variant for integration coverage of `system_arguments`.
 # The strict schema rejects any payload shape other than the one described,
 # which catches the wrapper-bug class of regressions automatically.
