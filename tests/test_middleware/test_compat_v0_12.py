@@ -6,7 +6,7 @@ middleware chain materialised by ``AgentConfig.__post_init__``.  The
 chain must preserve the v0.12 cross-cutting behaviour (memory load
 + inject + save, guardrail before_run/after_run, ``GuardedToolProvider``
 wrapping, cost-tracking, sub-agent dispatch via
-``_OrchestrationToolProvider``).
+:class:`~t0_agents.delegation.SubAgentToolProvider`).
 """
 
 from __future__ import annotations

@@ -130,23 +130,22 @@ class Agent:
             config.max_turns,
         )
 
-        # Register each sub-agent as an MCP tool on the orchestrator's
-        # in-process FastMCP server.  No-op when config.sub_agents is
-        # empty, so single-agent constructions pay no cost.
-        self._sub_agents_by_tool_name: dict[str, Agent] = {}
+        # Wrap the tool provider with SubAgentToolProvider when
+        # ``config.sub_agents`` is non-empty: the provider synthesises a
+        # tool surface from the sub-agent list and dispatches matching
+        # names inline, replacing the legacy server-side ``add_tool``
+        # registration + middleware-side ``_OrchestrationToolProvider``
+        # wrap.  No-op when ``config.sub_agents`` is empty, so
+        # single-agent constructions pay no cost.  ``inner=tool_provider``
+        # preserves any real MCP tools the orchestrator also wants; the
+        # synthetic delegation tools are appended after the inner list.
         if config.sub_agents:
-            from t0_agents.delegation import install_sub_agents
-            from t0_agents.delegation.routing import default_tool_name
+            from t0_agents.delegation.provider import SubAgentToolProvider
 
-            install_sub_agents(self)
-            # Cache the tool-name -> sub-agent map so the
-            # ``SubAgentMiddleware`` (which wraps ``tool_provider`` with
-            # ``_OrchestrationToolProvider``) can dispatch sub-agent
-            # calls inline without crossing FastMCP's transport task
-            # boundary.
-            self._sub_agents_by_tool_name = {
-                default_tool_name(sub): sub for sub in config.sub_agents
-            }
+            self._tool_provider = SubAgentToolProvider(
+                config.sub_agents,
+                inner=tool_provider,
+            )
 
         # JSON-mode safety state.  ``_tool_provider_verified_empty`` is
         # a positive latch — set to ``True`` after the first successful

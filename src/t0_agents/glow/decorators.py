@@ -447,7 +447,9 @@ def _make_tool_decorator(app: App) -> Callable[[ToolFn], ToolFn]:
         # introspects ``wrapper.__signature__`` to build the JSON schema.
         # Strict mypy can't see the Tool branch (no FastMCP stubs +
         # no @overload), so we pick the callable side explicitly.
-        app._mcp_server.add_tool(cast(Callable[..., Any], wrapper))
+        # ``_ensure_mcp_server`` materialises the App-owned FastMCP +
+        # Client pair on first use; idempotent on subsequent calls.
+        app._ensure_mcp_server().add_tool(cast(Callable[..., Any], wrapper))
         return fn
 
     return decorator

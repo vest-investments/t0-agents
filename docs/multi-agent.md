@@ -1,12 +1,14 @@
 # Multi-Agent Composition
 
-Until now every chapter has discussed a single `Agent` instance — one LLM, one tool set, one memory, one guardrail chain. The composition layer lets one agent delegate to others: register sub-agents on `AgentConfig.sub_agents` and they appear as `{name}_ask` tools on the orchestrator's FastMCP server, each invoking its own `invoke()` loop with its own configuration.
+Until now every chapter has discussed a single `Agent` instance — one LLM, one tool set, one memory, one guardrail chain. The composition layer lets one agent delegate to others: register sub-agents on `AgentConfig.sub_agents` and they appear as `{name}_ask` tools the orchestrator LLM can call, each invoking its own `invoke()` loop with its own configuration.
 
 `t0-agents` supports the classic **agent-as-tool** pattern: one `Agent`
-delegates to other `Agent`s by exposing each one as an MCP tool on the
-orchestrator's FastMCP server. The orchestrator's LLM sees the
-sub-agents as ordinary tools; calling one invokes the sub-agent's full
-`invoke()` loop and returns its response text.
+delegates to other `Agent`s through a synthetic MCP-shaped tool surface
+that `Agent.__init__` allocates automatically. The orchestrator's LLM
+sees the sub-agents as ordinary tools; calling one invokes the
+sub-agent's full `invoke()` loop and returns its response text. No
+FastMCP server is required unless the orchestrator also exposes real
+MCP tools of its own.
 
 Ships in the base distribution — no extras, no new dependencies beyond
 the `core` + `mcp` foundation.
@@ -46,7 +48,6 @@ pip install t0-agents
 ## Quickstart
 
 ```python
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
@@ -69,7 +70,7 @@ orchestrator = Agent(
         sub_agents=[researcher, writer],
     ),
     t0=t0,
-    tool_provider=orchestrator_client,
+    # No tool_provider: the orchestrator has no MCP tools of its own.
 )
 
 result = await orchestrator.invoke(
@@ -77,11 +78,14 @@ result = await orchestrator.invoke(
 )
 ```
 
-The orchestrator's `tool_provider` is a `fastmcp.Client` wrapping a
-plain `FastMCP("…")` instance. When the orchestrator is constructed,
-the framework registers a `researcher_ask` and a `writer_ask` tool on
-that server; the orchestrator LLM sees them in every inference's
-`additional_tools` list.
+The orchestrator does not need a `tool_provider`. When `sub_agents` is
+non-empty, `Agent.__init__` auto-allocates a
+[`SubAgentToolProvider`](#subagenttoolprovider) that synthesises a
+`researcher_ask` and `writer_ask` tool from the sub-agent list and
+dispatches matching calls inline. Pass `tool_provider=` only when the
+orchestrator *also* needs real MCP tools — the new provider composes
+them as inner tools that appear alongside the synthetic `{name}_ask`
+entries.
 
 See [`examples/agent/08_multi_agent/`](../examples/agent/08_multi_agent/) for a
 runnable demo with an arXiv-flavoured researcher and a markdown
@@ -89,91 +93,103 @@ writer.
 
 ## Concepts
 
-Each sub-agent is exposed to the orchestrator LLM as an MCP tool
-through FastMCP's runtime-registration API (`Tool.from_function` +
-`server.add_tool`). The generated tool has a single string argument:
+Each sub-agent is exposed to the orchestrator LLM as an MCP tool whose
+input schema is a flat single-string argument:
 
 ```python
 async def researcher_ask(message: str) -> str: ...
 ```
 
-When the orchestrator LLM decides to call the tool, the framework
-runs the sub-agent's full `invoke(message)` loop and returns its
-response. Sub-agents keep all of their usual collaborators — memory,
-guardrails, their own `tool_provider` — so a delegation is
-indistinguishable from calling the sub-agent directly.
+`SubAgentToolProvider.list_tools()` synthesises one `mcp.types.Tool`
+per registered sub-agent, with `name = f"{config.name}_ask"`,
+`description` mentioning the sub-agent's identity, and the
+`message: str` schema above. When the orchestrator LLM decides to
+call the tool, the provider's `call_tool()` runs the sub-agent's
+full `invoke(message)` loop inline (in the orchestrator's asyncio
+task) and returns its response. Sub-agents keep all of their usual
+collaborators — memory, guardrails, their own `tool_provider` — so a
+delegation is indistinguishable from calling the sub-agent directly.
 
-**Inline dispatch.** Each sub-agent is registered on the
-orchestrator's FastMCP server so `list_tools()` advertises it to
-anyone who connects, but when the orchestrator itself makes the
-call, the framework dispatches it in the orchestrator's asyncio
-task rather than through the server sub-task. That is the mechanism
-that keeps the orchestrator's episode id visible to the sub-agent
-run (see [Episode propagation](#episode-propagation) below).
-External callers that reach the orchestrator's MCP server from
-another process still use the server-side handler and see the
-default correlation behaviour.
+**Inline dispatch.** The provider intercepts `call_tool` in the
+orchestrator's task before anything reaches FastMCP, so the
+`parent_episode_id` ContextVar bound by `SubAgentMiddleware` is in
+scope on the delegated `invoke()` and every sub-agent inference is
+tagged with the orchestrator's episode id (see
+[Episode propagation](#episode-propagation) below). No server-side
+handler is registered, so there is no path for an external caller
+to reach a sub-agent through the orchestrator's MCP surface — if you
+need that, expose the sub-agent through its own FastMCP server
+instead.
 
 ## API reference
 
 Public symbols in `t0_agents.delegation`:
 
-### `agent_as_tool(sub_agent, *, tool_name=None, description=None) -> Tool`
+### `SubAgentToolProvider`
 
-Wrap a sub-agent as a `fastmcp.tools.Tool` ready for
-`server.add_tool(...)`. Use this directly when you want to customise
-the tool name or description rather than taking the declarative
-`AgentConfig.sub_agents` path.
-
-| Parameter | Type | Default | Notes |
-|---|---|---|---|
-| `sub_agent` | `Agent` | — | The sub-agent to expose. |
-| `tool_name` | `str \| None` | `None` | Overrides the default `{sub_agent.config.name}_ask`. |
-| `description` | `str \| None` | `None` | Overrides the default tool description (the one the orchestrator LLM sees). |
-
-Also re-exported at the package root:
+The auto-allocated tool surface for sub-agent delegation.
 
 ```python
-from t0_agents import agent_as_tool
+class SubAgentToolProvider:
+    def __init__(
+        self,
+        sub_agents: Sequence[Agent],
+        *,
+        inner: ToolProvider | None = None,
+    ) -> None: ...
+
+    async def list_tools(self) -> list[mcp.types.Tool]: ...
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> fastmcp.client.client.CallToolResult: ...
+```
+
+| Parameter | Type | Notes |
+|---|---|---|
+| `sub_agents` | `Sequence[Agent]` | Each entry surfaces as a `{config.name}_ask` synthetic tool. Duplicate names raise `ConfigurationError`. |
+| `inner` | `ToolProvider \| None` | Optional. When supplied, inner tools come first in `list_tools()` and unknown names fall through to `inner.call_tool`. |
+
+You will usually not construct this class directly — `Agent.__init__`
+allocates one automatically whenever `AgentConfig.sub_agents` is
+non-empty, with `inner=tool_provider`. Constructing it manually is
+useful when you want to share a single sub-agent surface across
+multiple `Agent` instances or layer it onto a custom provider stack.
+
+Re-exported at the package root:
+
+```python
+from t0_agents import SubAgentToolProvider
 ```
 
 ### `AgentConfig.sub_agents: list[Agent]`
 
-Declarative delegation slot. When non-empty, `Agent.__init__`
-registers each sub-agent as a `{sub_agent.config.name}_ask` tool on
-the orchestrator's in-process FastMCP server. Empty (the default)
-preserves the single-agent behaviour unchanged.
+Declarative delegation slot. When non-empty, `Agent.__init__` wraps
+the caller-supplied `tool_provider` (which may be `None`) with a
+`SubAgentToolProvider`. Empty (the default) preserves the
+single-agent behaviour unchanged — no provider is auto-allocated.
 
-The orchestrator's `tool_provider` must be a `fastmcp.Client` backed
-by an in-process `FastMCPTransport`. Any other tool provider raises
-`ConfigurationError` at construction time.
-
-### `install_sub_agents(parent: Agent) -> None`
-
-The hook `Agent.__init__` calls when `AgentConfig.sub_agents` is
-non-empty. Normal code doesn't call this directly; it's exposed for
-advanced integrations that bypass the declarative config. Raises
-`ConfigurationError` on any of:
-
-- A non-`fastmcp.Client` `tool_provider`.
-- A `fastmcp.Client` whose transport is not in-process.
-- Duplicate `config.name` across the sub-agent list.
-- A tool name already present on the orchestrator's FastMCP server.
+The `tool_provider` parameter is now optional regardless of whether
+`sub_agents` is set. Any object that satisfies the `ToolProvider`
+protocol composes; `fastmcp.Client` remains the canonical choice
+when the orchestrator also exposes real MCP server tools.
 
 ### `default_tool_name(sub_agent: Agent) -> str`
 
 Returns `f"{sub_agent.config.name}_ask"`. The `_ask` suffix is a
 convention that hints to the orchestrator LLM that the tool is a
 question-answer delegation, not a side-effecting action. Override by
-passing `tool_name=` to `agent_as_tool`, or by choosing a
-`config.name` that yields the name you want.
+choosing a `config.name` that yields the name you want.
 
 ### `assert_unique_names(sub_agents) -> None`
 
 Raises `ConfigurationError` if any two sub-agents in the iterable
-share a `config.name`. Called inside `install_sub_agents`; useful on
-its own when you are assembling a sub-agent list dynamically and
-want to fail early.
+share a `config.name`. Called inside `SubAgentToolProvider.__init__`;
+useful on its own when you are assembling a sub-agent list
+dynamically and want to fail early.
 
 ### Parent-episode helpers
 
@@ -187,9 +203,9 @@ id.
   binding; returns `None` if called outside a
   `bind_parent_episode_id` block.
 - `update_parent_episode_id(episode_id: str) -> None` — overwrites
-  the binding in place. Used by `Agent.invoke` / `Run.events` to
-  refresh the id once TensorZero allocates the real episode id on
-  the first inference.
+  the binding in place. Used by `SubAgentMiddleware` to refresh the
+  id once TensorZero allocates the real episode id on the first
+  inference.
 
 ### `SubAgentError`
 
@@ -204,23 +220,18 @@ from t0_agents import SubAgentError
 ## Naming and collisions
 
 By default each sub-agent becomes `f"{sub_agent.config.name}_ask"`.
-Override either by picking a different `config.name`, or by calling
-`agent_as_tool(sub_agent, tool_name="...")` directly and registering
-the returned tool yourself.
+Override by picking a different `config.name`.
 
 Collisions are caught eagerly at construction time:
 
 | Failure | Exception raised |
 | --- | --- |
 | Two sub-agents share `config.name` | `ConfigurationError` |
-| Sub-agent tool-name collides with an existing tool on the orchestrator's FastMCP server | `ConfigurationError` |
-| `tool_provider` is not a `fastmcp.Client` | `ConfigurationError` |
-| The `fastmcp.Client`'s transport is not in-process | `ConfigurationError` |
+| `tool_provider` does not satisfy the `ToolProvider` protocol | `ConfigurationError` |
 
-The in-process requirement follows from the FastMCP runtime API —
-`add_tool()` only works on a local `FastMCP` server instance. Remote
-MCP transports (HTTP, SSE, WebSocket) cannot host runtime-registered
-tools from this framework.
+There is no longer an in-process FastMCP requirement; any
+`ToolProvider` may serve as `inner`, and `inner=None` is the common
+case for orchestrators that only delegate.
 
 ## Episode propagation
 
@@ -245,8 +256,8 @@ On a fresh orchestrator run (called without `episode_id=`), the tag
 picks up the gateway-allocated episode id as soon as the first
 inference lands. The `"unknown"` fallback only surfaces when a
 sub-agent is invoked outside an orchestrator context — for example
-when the user connects to the orchestrator's MCP server from another
-process and calls the `{name}_ask` tool directly.
+when calling `sub_agent.invoke(...)` directly without an enclosing
+`bind_parent_episode_id` block.
 
 See [`docs/observability.md`](observability.md) for the wider
 analytics story (episode ids, inference ids, feedback signals,
@@ -287,8 +298,7 @@ library-wide exception taxonomy and recovery patterns.
 ### Easy -- two agents, one tool call
 
 A minimal orchestrator that delegates to a single sub-agent. The
-sub-agent owns one FastMCP tool; the orchestrator's own FastMCP
-server starts empty.
+sub-agent owns one FastMCP tool; the orchestrator has none.
 
 ```python
 import asyncio
@@ -305,8 +315,6 @@ def lookup_topic(query: str) -> str:
     """Return a stub answer for the query."""
     return f"Found 3 references for {query!r}."
 
-orchestrator_server = FastMCP("orchestrator-server")
-
 
 async def main() -> None:
     async with (
@@ -314,7 +322,6 @@ async def main() -> None:
             gateway_url="http://localhost:3000",
         ) as t0,
         Client(tools_server) as tools_client,
-        Client(orchestrator_server) as orch_client,
     ):
         researcher = Agent(
             AgentConfig(name="researcher", function_name="research"),
@@ -328,7 +335,7 @@ async def main() -> None:
                 sub_agents=[researcher],
             ),
             t0=t0,
-            tool_provider=orch_client,
+            # No tool_provider — researcher_ask is auto-synthesised.
         )
         result = await orchestrator.invoke("Find references on RLHF")
         print(result.response)
@@ -337,7 +344,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The orchestrator sees exactly one tool on its server —
+The orchestrator sees exactly one tool —
 `researcher_ask(message: str) -> str` — and decides when to call it.
 
 ### Intermediate -- researcher + writer trio
@@ -350,11 +357,12 @@ orchestrator. It requires `docker compose up` and a
 episodes — one per agent — with sub-agent rows correlated to the
 orchestrator via the `t0_agents.parent_episode_id` tag.
 
-### Advanced -- custom tool names and nested orchestrators
+### Advanced -- nested orchestrators
 
 Compose orchestrators recursively by using one orchestrator as
-another orchestrator's sub-agent — each orchestrator keeps its own
-in-process FastMCP server, so the registration paths don't collide:
+another orchestrator's sub-agent. Each level keeps its own
+auto-allocated `SubAgentToolProvider`; there is no shared server to
+collide on:
 
 ```python
 inner = Agent(
@@ -364,7 +372,6 @@ inner = Agent(
         sub_agents=[researcher, writer],
     ),
     t0=t0,
-    tool_provider=inner_client,
 )
 outer = Agent(
     AgentConfig(
@@ -373,7 +380,6 @@ outer = Agent(
         sub_agents=[inner],
     ),
     t0=t0,
-    tool_provider=outer_client,
 )
 ```
 
@@ -384,29 +390,29 @@ episode, correlated via `parent_episode_id` tags. A runnable
 version of this pattern ships at
 [`examples/agent/08_multi_agent/advanced.py`](../examples/agent/08_multi_agent/advanced.py).
 
-Override the default `{name}_ask` by using `agent_as_tool` directly
-and skipping the declarative `sub_agents=[…]` path:
+### Composing sub-agents with real MCP tools
+
+When the orchestrator should expose both sub-agents *and* tools from a
+real MCP server, pass the server's `Client` as `tool_provider` — it
+becomes the `inner` of the auto-allocated `SubAgentToolProvider`, so
+`list_tools()` returns the inner tools followed by the synthetic
+`{name}_ask` entries:
 
 ```python
-from fastmcp import FastMCP
-from t0_agents import agent_as_tool
-
-server = FastMCP("orchestrator-server")
-tool = agent_as_tool(
-    researcher,
-    tool_name="lookup",
-    description="Find and summarise references for a topic.",
-)
-server.add_tool(tool)
+async with Client(my_mcp_server) as mcp_client:
+    orchestrator = Agent(
+        AgentConfig(
+            name="coordinator",
+            function_name="orchestrator",
+            sub_agents=[researcher, writer],
+        ),
+        t0=t0,
+        tool_provider=mcp_client,  # composes with the synthetic surface
+    )
 ```
 
-The manual registration path bypasses the declarative `sub_agents`
-hook, so the orchestrator won't dispatch calls to it in its own
-asyncio task — those calls cross the FastMCP server sub-task and
-carry `parent_episode_id="unknown"`. Use `tool_name=` overrides only
-when losing the episode correlation is acceptable, or pair each call
-with an explicit [`bind_parent_episode_id`](#parent-episode-helpers)
-context in your own tool handler.
+The orchestrator LLM now sees `<inner-tools...> + researcher_ask +
+writer_ask` in `additional_tools` and can call either kind freely.
 
 ## Caveats
 
@@ -421,19 +427,19 @@ context in your own tool handler.
   orchestrator can have sub-agents that are themselves orchestrators
   with their own sub-agents.
 - **Elicitation inside sub-agents is possible but per-Client.** Every
-  sub-agent owns its own `fastmcp.Client`, so elicitation flows
-  reach the sub-agent's own handler — not the orchestrator's. This
-  is usually the right thing (the researcher's arXiv API key
-  approval shouldn't leak to the writer's renderer) but it means
-  sub-agents in a browser-served deployment need their own
-  `ElicitationForwarder` wiring. See
+  sub-agent owns its own `fastmcp.Client` (or `tool_provider=None`
+  when toolless), so elicitation flows reach the sub-agent's own
+  handler — not the orchestrator's. This is usually the right thing
+  (the researcher's arXiv API key approval shouldn't leak to the
+  writer's renderer) but it means sub-agents in a browser-served
+  deployment need their own `ElicitationForwarder` wiring. See
   [`streaming.md`](streaming.md).
 
 ## Production considerations
 
 - **Single-process deployment.** Orchestrator and sub-agents live in
-  the same Python process — the in-process FastMCP requirement means
-  sub-agents cannot be scaled out as separate services without a
+  the same Python process — `SubAgentToolProvider` dispatches inline,
+  so sub-agents cannot be scaled out as separate services without a
   substantial rewrite. If you need horizontal scaling, split the
   workload at the MCP layer (each sub-agent's internal MCP servers
   can be remote) and keep the orchestrator local.
@@ -471,9 +477,6 @@ Composition gives you an orchestrator that can call sub-agents in-process. The n
 
 ## External references
 
-- [FastMCP — Tools](https://gofastmcp.com/servers/tools) —
-  `Tool.from_function` and `server.add_tool` are the runtime-
-  registration primitives this submodule composes.
 - [TensorZero — Episodes](https://www.tensorzero.com/docs/gateway/guides/episodes)
   — the `parent_episode_id` tag only makes sense against TensorZero's
   episode model.

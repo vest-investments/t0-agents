@@ -91,14 +91,14 @@ class TestDefaultChain:
         ]
 
     def test_sub_agents_inserted_before_guardrails(self) -> None:
-        # Order invariant (contract §3.2): SubAgent wraps tool_provider
-        # INSIDE Guardrails so orchestrator-level guardrails observe
-        # sub-agent calls via their ``before_tool``/``after_tool`` hooks.
-        # Concretely: SubAgent must appear BEFORE Guardrails in chain
-        # order so SubAgent's ``replace_tool_provider`` happens first
-        # (innermost wrap) and Guardrails's happens second (outermost
-        # wrap).  This reproduces the v0.12 wrap order
-        # ``GuardedToolProvider(_OrchestrationToolProvider(client))``.
+        # Order invariant (contract §3.2): SubAgent must appear BEFORE
+        # Guardrails in chain order so the parent_episode_id ContextVar
+        # bound by SubAgentMiddleware is in scope when guardrails fire
+        # their ``before_tool``/``after_tool`` hooks on a delegated
+        # sub-agent call.  Concretely: the chain ends in
+        # ``GuardedToolProvider(SubAgentToolProvider(...))`` because
+        # Guardrails is the only middleware that still wraps
+        # ``tool_provider``; SubAgentMiddleware is ContextVar-only.
         sub = Agent(
             AgentConfig(name="sub", function_name="sub_fn"),
             t0=cast(Any, FakeT0([])),

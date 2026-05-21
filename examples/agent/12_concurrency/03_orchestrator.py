@@ -2,13 +2,15 @@
 
 An orchestrator delegates work to sub-agents declared via
 ``AgentConfig(sub_agents=[...])``.  Each sub-agent is auto-installed
-as a ``<name>_ask`` MCP tool on the orchestrator's tool provider (the
-v1.0 :class:`SubAgentMiddleware` wires this at Agent construction
-time via :func:`t0_agents.delegation.install_sub_agents`).  The
-orchestrator's LLM picks which sub-agent to call and in what order —
-that's the "LLM in the routing decision" model.  Use it when the
-right delegate depends on the input; for fixed topologies, use the
-Sequential or Parallel patterns instead.
+as a ``<name>_ask`` MCP tool on the orchestrator's tool provider — the
+v1.0 :class:`Agent` constructor allocates a
+:class:`~t0_agents.delegation.SubAgentToolProvider` for any agent with
+``sub_agents=[...]`` so no FastMCP server is needed unless the
+orchestrator also exposes real MCP tools.  The orchestrator's LLM picks
+which sub-agent to call and in what order — that's the "LLM in the
+routing decision" model.  Use it when the right delegate depends on the
+input; for fixed topologies, use the Sequential or Parallel patterns
+instead.
 
 Topology:
 
@@ -53,9 +55,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import cast
 
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
@@ -76,32 +77,21 @@ async def main() -> None:
         AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
     )
 
-    # SubAgentMiddleware installs each sub-agent as a `<name>_ask` MCP tool
-    # on the orchestrator's tool_provider.  Empty FastMCP servers are enough —
-    # they expose no tools of their own; only the sub-agent ones.
-    orchestrator_server: FastMCP[Any] = FastMCP("orchestrator-tools")
-    researcher_server: FastMCP[Any] = FastMCP("researcher-noop")
-    writer_server: FastMCP[Any] = FastMCP("writer-noop")
-
-    async with (
-        await gateway as t0,
-        Client(researcher_server) as researcher_client,
-        Client(writer_server) as writer_client,
-        Client(orchestrator_server) as orchestrator_client,
-    ):
+    # No FastMCP allocations: each toolless sub-agent runs chat-only
+    # (Agent.__init__ accepts tool_provider=None) and the orchestrator's
+    # SubAgentToolProvider is auto-allocated from sub_agents=[...].
+    async with await gateway as t0:
         researcher = Agent(
             AgentConfig(
                 name="researcher", function_name="agent", max_turns=4
             ),
             t0=t0,
-            tool_provider=cast(Any, researcher_client),
         )
         writer = Agent(
             AgentConfig(
                 name="writer", function_name="agent", max_turns=4
             ),
             t0=t0,
-            tool_provider=cast(Any, writer_client),
         )
         orchestrator = Agent(
             AgentConfig(
@@ -116,7 +106,6 @@ async def main() -> None:
                 sub_agents=[researcher, writer],
             ),
             t0=t0,
-            tool_provider=cast(Any, orchestrator_client),
         )
 
         topic = "transformer architectures for retrieval-augmented generation"

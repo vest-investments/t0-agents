@@ -56,9 +56,11 @@ def _build_writer_server() -> FastMCP:
 
 
 def _build_orchestrator_server() -> FastMCP:
-    # The orchestrator's FastMCP has no pre-declared tools;
-    # ``install_sub_agents`` adds ``researcher_ask`` and ``writer_ask``
-    # at Agent construction time.
+    # Orchestrator path retained for end-to-end coverage of the
+    # composing case (real MCP tools + sub-agents).  The
+    # ``SubAgentToolProvider`` auto-installed by ``Agent.__init__``
+    # synthesises the ``researcher_ask`` / ``writer_ask`` delegations
+    # on top of any tools this server exposes.
     return FastMCP("orchestrator-server")
 
 
@@ -144,11 +146,10 @@ async def test_subagent_episode_isolation() -> None:
     sub_episode_ids: list[str] = []
 
     class _SpyAgent(Agent):
-        # v1.0 idiom: override the inner terminal (the v0.12 ``run``
-        # override is no longer wired by the
-        # _OrchestrationToolProvider, which dispatches via
-        # ``invoke().result()``).  The terminal sees the final
-        # AgentResult before any outer middleware mutates it.
+        # v1.0 idiom: override the inner terminal.  The terminal sees
+        # the final AgentResult before any outer middleware mutates it.
+        # SubAgentToolProvider dispatches via ``invoke().result()``, so
+        # the terminal runs once per delegated invocation.
         async def _chat_terminal(self, ctx: Any) -> Any:  # type: ignore[override]
             result = await super()._chat_terminal(ctx)
             if result.episode_id is not None:

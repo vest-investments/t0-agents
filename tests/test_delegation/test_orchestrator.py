@@ -1,15 +1,19 @@
 """Unit tests for ``t0_agents.delegation.orchestrator``.
 
-Covers:
+Covers the surfaces that survived the SubAgentToolProvider refactor:
 
-- ``bind_parent_episode_id`` / ``get_parent_episode_id`` — ContextVar
-  semantics (set, nest, reset, None default).
-- ``install_sub_agents`` error branches — non-Client tool provider,
-  non-in-process transport, duplicate sub-agent names, collisions
-  with existing tools.
-- ``Agent.__init__`` integration — the happy-path install registers
-  the expected ``{name}_ask`` tools on the orchestrator's in-process
-  FastMCP server.
+- ``bind_parent_episode_id`` / ``get_parent_episode_id`` /
+  ``update_parent_episode_id`` — ContextVar semantics (set, nest,
+  reset, None default, in-place refresh).
+- ``Agent.__init__`` integration — when ``config.sub_agents`` is set,
+  ``agent._tool_provider`` is auto-allocated as a
+  :class:`SubAgentToolProvider` wrapping any user-supplied inner.
+- ``SubAgentMiddleware`` parent-episode refresh — when the orchestrator
+  starts a fresh episode, the first inference's response refreshes the
+  ContextVar so sub-agent dispatch tags the orchestrator's id.
+
+Tool-call dispatch behaviour (synthesis + inline ``call_tool``) is
+covered exhaustively by :mod:`tests.test_delegation.test_provider`.
 """
 
 from __future__ import annotations
@@ -21,27 +25,19 @@ from uuid import UUID
 
 import pytest
 from fastmcp import Client, FastMCP
-from fastmcp.client.client import CallToolResult
-from fastmcp.tools import Tool as FastMCPTool
-from mcp.types import TextContent
 from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import (
-    ConfigurationError,
-    GuardrailBlockedError,
-    SubAgentError,
-)
+from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import AgentResult, ToolProvider
 from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
-    _OrchestrationToolProvider,
     bind_parent_episode_id,
     get_parent_episode_id,
-    install_sub_agents,
     update_parent_episode_id,
 )
+from t0_agents.delegation.provider import SubAgentToolProvider
 from t0_agents.stream.events import AgentEvent, DoneEvent
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
@@ -63,11 +59,6 @@ def _build_agent(
         t0=cast(AsyncTensorZeroGateway, FakeT0([])),
         tool_provider=tool_provider or cast(ToolProvider, FakeMCPClient()),
     )
-
-
-def _list_tool_names(server: FastMCP) -> set[str]:
-    components = server.local_provider._components
-    return {c.name for c in components.values() if isinstance(c, FastMCPTool)}
 
 
 # ---------------------------------------------------------------------------
@@ -111,82 +102,65 @@ class TestParentEpisodeContextVar:
 
 
 # ---------------------------------------------------------------------------
-# install_sub_agents error branches
+# Agent.__init__ auto-allocates SubAgentToolProvider
 # ---------------------------------------------------------------------------
 
 
-class TestInstallSubAgentsErrors:
-    def test_non_fastmcp_client_provider_raises(self) -> None:
-        # The sub_agents list is populated by the caller; build the
-        # orchestrator Agent with a ``FakeMCPClient`` (not a real
-        # fastmcp.Client) to trigger the Client-isinstance guard.
+class TestSubAgentAutoAllocation:
+    """Construction-time wiring of the new provider on the orchestrator."""
+
+    def test_provider_synthesises_one_tool_per_sub_agent(self) -> None:
         researcher = _build_agent("researcher")
-        with pytest.raises(ConfigurationError, match=r"fastmcp\.Client"):
-            _build_agent(
-                "orch",
-                tool_provider=cast(ToolProvider, FakeMCPClient()),
-                sub_agents=[researcher],
-            )
+        writer = _build_agent("writer")
+        orchestrator = _build_agent(
+            "orch",
+            sub_agents=[researcher, writer],
+        )
 
-    def test_non_inprocess_transport_raises(self) -> None:
-        # Build a real ``Client`` but with a transport that is not a
-        # ``FastMCPTransport``.  Easiest way: a Client that resolves to
-        # an ``mcp://`` transport via infer_transport would require
-        # network calls; instead, stub ``client.transport`` with an
-        # arbitrary object after construction.
-        server = FastMCP("parent-server")
-        client: Client[Any] = Client(server)
+        provider = orchestrator._tool_provider
+        assert isinstance(provider, SubAgentToolProvider)
+        assert set(provider._by_tool_name) == {"researcher_ask", "writer_ask"}
 
-        class _FakeTransport:
-            def __repr__(self) -> str:
-                return "fake"
-
-        client.transport = _FakeTransport()  # type: ignore[assignment]
-
+    def test_provider_carries_inner_when_caller_passes_tool_provider(
+        self,
+    ) -> None:
+        # When the orchestrator also wants real MCP tools, the
+        # caller-supplied tool_provider becomes the provider's ``inner``
+        # so ``list_tools()`` composes both surfaces and ``call_tool``
+        # delegates unknown names to the inner.
         researcher = _build_agent("researcher")
-        with pytest.raises(ConfigurationError, match="in-process FastMCPTransport"):
-            _build_agent(
-                "orch",
-                tool_provider=cast(ToolProvider, client),
-                sub_agents=[researcher],
-            )
+        inner = FakeMCPClient()
+        orchestrator = _build_agent(
+            "orch",
+            tool_provider=cast(ToolProvider, inner),
+            sub_agents=[researcher],
+        )
+
+        provider = orchestrator._tool_provider
+        assert isinstance(provider, SubAgentToolProvider)
+        assert provider._inner is inner
+
+    def test_no_wrap_when_sub_agents_empty(self) -> None:
+        # Empty sub-agent list pays no cost: tool_provider is the bare
+        # one the caller supplied (no SubAgentToolProvider in front).
+        inner = FakeMCPClient()
+        agent = _build_agent("plain", tool_provider=cast(ToolProvider, inner))
+
+        assert agent._tool_provider is inner
 
     def test_duplicate_sub_agent_names_raise(self) -> None:
-        server = FastMCP("parent-server")
-        client: Client[Any] = Client(server)
-
-        researcher_a = _build_agent("researcher")
-        researcher_b = _build_agent("researcher")
-
+        # assert_unique_names runs inside SubAgentToolProvider.__init__,
+        # so the duplicate is caught at orchestrator construction time.
+        a = _build_agent("researcher")
+        b = _build_agent("researcher")
         with pytest.raises(ConfigurationError, match="Duplicate sub-agent names"):
-            _build_agent(
-                "orch",
-                tool_provider=cast(ToolProvider, client),
-                sub_agents=[researcher_a, researcher_b],
-            )
-
-    def test_collision_with_existing_tool_raises(self) -> None:
-        server = FastMCP("parent-server")
-
-        @server.tool
-        def researcher_ask(message: str) -> str:  # pragma: no cover - registered only
-            return "pre-existing"
-
-        client: Client[Any] = Client(server)
-        researcher = _build_agent("researcher")
-
-        with pytest.raises(ConfigurationError, match="collides with an existing tool"):
-            _build_agent(
-                "orch",
-                tool_provider=cast(ToolProvider, client),
-                sub_agents=[researcher],
-            )
+            _build_agent("orch", sub_agents=[a, b])
 
     def test_sub_agents_field_rejects_non_agent_entries(self) -> None:
         # AgentConfig.__post_init__ catches this before Agent.__init__,
-        # so installation never starts.
+        # so SubAgentToolProvider never sees a non-Agent value.
         with pytest.raises(
-            ConfigurationError, match="sub_agents\\[0\\] must be an Agent"
+            ConfigurationError, match=r"sub_agents\[0\] must be an Agent",
         ):
             AgentConfig(
                 name="orch",
@@ -194,65 +168,24 @@ class TestInstallSubAgentsErrors:
                 sub_agents=[cast(Agent, "not-an-agent")],
             )
 
-
-# ---------------------------------------------------------------------------
-# install_sub_agents happy path
-# ---------------------------------------------------------------------------
-
-
-class TestInstallSubAgentsHappyPath:
-    def test_registers_one_tool_per_sub_agent(self) -> None:
-        server = FastMCP("parent-server")
-        client: Client[Any] = Client(server)
-
+    def test_inner_can_be_arbitrary_tool_provider(self) -> None:
+        # No fastmcp.Client constraint anymore: any object satisfying
+        # the ToolProvider protocol (FakeMCPClient here, real Client in
+        # other tests) is accepted as the inner provider.
         researcher = _build_agent("researcher")
-        writer = _build_agent("writer")
-
-        orchestrator = _build_agent(
-            "orch",
-            tool_provider=cast(ToolProvider, client),
-            sub_agents=[researcher, writer],
-        )
-
-        assert isinstance(orchestrator, Agent)
-        registered = _list_tool_names(server)
-        assert {"researcher_ask", "writer_ask"} <= registered
-
-    def test_noop_when_sub_agents_empty(self) -> None:
-        # Direct invocation of install_sub_agents with no sub-agents is
-        # explicitly the no-op path; the Agent need not even have a
-        # fastmcp.Client tool provider in that case.
-        orch = _build_agent("orch")  # FakeMCPClient — invalid if sub_agents set
-        install_sub_agents(orch)  # must not raise
-
-    def test_does_not_pollute_subsequent_servers(self) -> None:
-        # Each construction uses its own FastMCP instance; verify that
-        # installing on one server does not leak to a second.
-        server_a = FastMCP("a")
-        server_b = FastMCP("b")
-        client_a: Client[Any] = Client(server_a)
-        client_b: Client[Any] = Client(server_b)
-
-        researcher = _build_agent("researcher")
-        _build_agent(
-            "orch_a",
-            tool_provider=cast(ToolProvider, client_a),
-            sub_agents=[researcher],
-        )
-
-        writer = _build_agent("writer")
-        _build_agent(
-            "orch_b",
-            tool_provider=cast(ToolProvider, client_b),
-            sub_agents=[writer],
-        )
-
-        assert _list_tool_names(server_a) == {"researcher_ask"}
-        assert _list_tool_names(server_b) == {"writer_ask"}
+        for inner in (FakeMCPClient(), Client(FastMCP("just-a-server"))):
+            orchestrator = _build_agent(
+                "orch",
+                tool_provider=cast(ToolProvider, inner),
+                sub_agents=[researcher],
+            )
+            provider = orchestrator._tool_provider
+            assert isinstance(provider, SubAgentToolProvider)
+            assert provider._inner is inner
 
 
 # ---------------------------------------------------------------------------
-# Agent.run / Agent.stream refresh the parent-episode ContextVar
+# SubAgentMiddleware refreshes the parent-episode ContextVar
 # ---------------------------------------------------------------------------
 
 
@@ -263,21 +196,20 @@ class TestParentEpisodeIdRefresh:
     as soon as it is known — not stay on the ``"unknown"`` fallback for
     the duration of the run.
 
-    Covered by wrapping ``on_inference`` in :meth:`Agent.run` and
-    :meth:`Agent.stream` so the first response refreshes the ContextVar
-    via :func:`update_parent_episode_id`.  Flagged by Gemini on PR #9.
+    Covered by wrapping ``on_inference`` in
+    :class:`SubAgentMiddleware` so the first response refreshes the
+    ContextVar via :func:`update_parent_episode_id`.  Originally
+    flagged by Gemini on PR #9.
     """
 
     _EPISODE = UUID("11111111-2222-3333-4444-555555555555")
 
     @staticmethod
     def _orchestrator_with_sub_agent() -> Agent:
-        server = FastMCP("orch")
-        client: Client[Any] = Client(server)
         researcher = _build_agent("researcher")
         return _build_agent(
             "orch",
-            tool_provider=cast(ToolProvider, client),
+            tool_provider=cast(ToolProvider, FakeMCPClient()),
             sub_agents=[researcher],
         )
 
@@ -351,9 +283,6 @@ class TestParentEpisodeIdRefresh:
         orch = self._orchestrator_with_sub_agent()
         await orch.invoke("delegate", episode_id="ep-explicit")
 
-        # The refresh wrapper was not installed, so the ContextVar
-        # remained at the initial bind ("ep-explicit") even after the
-        # cost-tracker observed the first inference.
         assert observed == ["ep-explicit"]
 
     async def test_stream_refreshes_context_var_on_first_inference(
@@ -403,12 +332,6 @@ class TestParentEpisodeIdRefresh:
     async def test_stream_does_not_refresh_parent_episode_when_episode_id_provided(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Same v1.0 invariant as the non-streaming variant: the refresh
-        # wrapper is not installed when episode_id is explicit, so the
-        # ContextVar remains at the initial bind even after on_inference
-        # observes the first response.  v1.0 ``CostTrackingMiddleware``
-        # always wires on_inference, so the v0.12 ``captured == [None]``
-        # invariant is replaced by the behavioural check below.
         observed: list[str | None] = []
 
         async def fake_stream(
@@ -447,183 +370,20 @@ class TestParentEpisodeIdRefresh:
 
 
 # ---------------------------------------------------------------------------
-# _OrchestrationToolProvider — inline sub-agent dispatch
-# ---------------------------------------------------------------------------
-
-
-class _StubInnerProvider:
-    """Minimal ToolProvider stand-in that records call_tool invocations."""
-
-    def __init__(self, result: CallToolResult) -> None:
-        self._result = result
-        self.list_calls = 0
-        self.tool_calls: list[tuple[str, dict[str, Any] | None]] = []
-
-    async def list_tools(self) -> list[Any]:
-        self.list_calls += 1
-        return []
-
-    async def call_tool(
-        self,
-        name: str,
-        arguments: dict[str, Any] | None = None,
-        *,
-        timeout: float | None = None,
-        **_: Any,
-    ) -> CallToolResult:
-        self.tool_calls.append((name, arguments))
-        return self._result
-
-
-def _ok_call_result(text: str = "inner") -> CallToolResult:
-    return CallToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content=None,
-        meta=None,
-        data=None,
-        is_error=False,
-    )
-
-
-class TestOrchestrationToolProvider:
-    """Unit coverage for the in-process sub-agent dispatcher.
-
-    Regression layer for the bug surfaced against PR #9 where sub-agent
-    rows in ClickHouse were tagged ``parent_episode_id='unknown'``:
-    FastMCP's in-process transport runs the server handler in an anyio
-    sub-task with a ContextVar snapshot taken before Agent.run could
-    bind anything, so the ContextVar-based handoff alone never worked
-    end-to-end.  The wrapper dispatches sub-agents inline instead.
-    """
-
-    @staticmethod
-    def _spy_sub_agent(name: str = "researcher") -> Agent:
-        # v1.0: _OrchestrationToolProvider.call_tool dispatches via
-        # ``sub_agent.invoke(msg, tags=...).result()``.  Spy the invoke
-        # callable (sync) returning a Run-shaped MagicMock with an
-        # async ``.result()``.
-        sub = _build_agent(name)
-        mock_run = MagicMock()
-        mock_run.result = AsyncMock(
-            return_value=AgentResult(
-                response="sub-answer",
-                episode_id="ep-sub",
-                inference_ids=["i-sub"],
-                turns=1,
-            ),
-        )
-        sub.invoke = MagicMock(return_value=mock_run)  # type: ignore[method-assign]
-        return sub
-
-    async def test_forwards_non_subagent_calls_to_inner(self) -> None:
-        inner_result = _ok_call_result("from-inner")
-        inner = _StubInnerProvider(inner_result)
-        sub = self._spy_sub_agent("researcher")
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, inner),
-            {"researcher_ask": sub},
-        )
-
-        result = await provider.call_tool(
-            "add", {"a": 1, "b": 2}, timeout=5.0,
-        )
-
-        assert result is inner_result
-        assert inner.tool_calls == [("add", {"a": 1, "b": 2})]
-        sub.invoke.assert_not_called()
-
-    async def test_intercepts_subagent_calls_with_live_parent_id(
-        self,
-    ) -> None:
-        inner = _StubInnerProvider(_ok_call_result())
-        sub = self._spy_sub_agent("researcher")
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, inner),
-            {"researcher_ask": sub},
-        )
-
-        with bind_parent_episode_id("ep-orch-123"):
-            result = await provider.call_tool(
-                "researcher_ask", {"message": "hi"},
-            )
-
-        # Inner was NOT touched — dispatch bypassed FastMCP.
-        assert inner.tool_calls == []
-        # Sub-agent saw the bound parent id, not 'unknown'.
-        sub.invoke.assert_called_once_with(
-            "hi", tags={PARENT_EPISODE_ID_TAG: "ep-orch-123"},
-        )
-        assert result.is_error is False
-        assert result.content[0].text == "sub-answer"  # type: ignore[union-attr]
-
-    async def test_falls_back_to_unknown_when_no_parent_bound(self) -> None:
-        inner = _StubInnerProvider(_ok_call_result())
-        sub = self._spy_sub_agent()
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, inner),
-            {"researcher_ask": sub},
-        )
-
-        await provider.call_tool("researcher_ask", {"message": "hi"})
-
-        sub.invoke.assert_called_once_with(
-            "hi", tags={PARENT_EPISODE_ID_TAG: "unknown"},
-        )
-
-    async def test_returns_is_error_when_message_missing(self) -> None:
-        sub = self._spy_sub_agent()
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, _StubInnerProvider(_ok_call_result())),
-            {"researcher_ask": sub},
-        )
-
-        result = await provider.call_tool("researcher_ask", {})
-
-        assert result.is_error is True
-        assert "message" in result.content[0].text  # type: ignore[union-attr]
-        sub.invoke.assert_not_called()
-
-    async def test_wraps_non_fatal_exception_in_sub_agent_error(self) -> None:
-        sub = self._spy_sub_agent("researcher")
-        sub.invoke.return_value.result.side_effect = ValueError("boom")
-
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, _StubInnerProvider(_ok_call_result())),
-            {"researcher_ask": sub},
-        )
-
-        with pytest.raises(SubAgentError) as exc_info:
-            await provider.call_tool("researcher_ask", {"message": "hi"})
-
-        assert "researcher" in str(exc_info.value)
-        assert isinstance(exc_info.value.__cause__, ValueError)
-
-    async def test_reraises_fatal_error_unchanged(self) -> None:
-        sub = self._spy_sub_agent("researcher")
-        sub.invoke.return_value.result.side_effect = GuardrailBlockedError(
-            "hard stop",
-        )
-
-        provider = _OrchestrationToolProvider(
-            cast(ToolProvider, _StubInnerProvider(_ok_call_result())),
-            {"researcher_ask": sub},
-        )
-
-        with pytest.raises(GuardrailBlockedError):
-            await provider.call_tool("researcher_ask", {"message": "hi"})
-
-
-# ---------------------------------------------------------------------------
 # End-to-end regression: reproduce the user's ClickHouse spot-check bug
 # ---------------------------------------------------------------------------
 
 
 class TestParentEpisodeIdEndToEnd:
-    """Scripted-T0 regression: an orchestrator with a real FastMCP
-    client must dispatch a scripted sub-agent tool call and tag the
-    sub-agent's ``run`` call with the orchestrator's allocated episode
-    id — not the ``"unknown"`` fallback that surfaced in the user's
-    ClickHouse query pre-fix.
+    """Scripted-T0 regression: an orchestrator must dispatch a scripted
+    sub-agent tool call and tag the sub-agent's ``run`` call with the
+    orchestrator's allocated episode id — not the ``"unknown"`` fallback
+    that surfaced in the user's ClickHouse query pre-fix.
+
+    The orchestrator no longer needs a real ``fastmcp.Client``: the
+    SubAgentToolProvider synthesises the delegation tool surface and
+    dispatches inline.  This test exercises the loop end-to-end against
+    a scripted gateway with a bare ``FakeMCPClient`` as inner.
     """
 
     _ORCH_EPISODE = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -642,10 +402,6 @@ class TestParentEpisodeIdEndToEnd:
             tags: dict[str, str] | None = None,
             **_extra: Any,
         ) -> Any:
-            # v1.0: _OrchestrationToolProvider dispatches via
-            # ``sub.invoke(msg, tags=...).result()``.  The spy records
-            # the kwargs at invoke time and returns a Run-shaped mock
-            # whose ``.result()`` resolves to the stub AgentResult.
             recorded_tags.append(tags)
             mock_run = MagicMock()
             mock_run.result = AsyncMock(
@@ -680,19 +436,16 @@ class TestParentEpisodeIdEndToEnd:
             ],
         )
 
-        server = FastMCP("orch")
-        client: Client[Any] = Client(server)
         orch = _build_agent(
             "orch",
-            tool_provider=cast(ToolProvider, client),
+            tool_provider=cast(ToolProvider, FakeMCPClient()),
             sub_agents=[sub],
         )
         # Inject the scripted T0 — _build_agent's default FakeT0 has an
         # empty queue and would assert on the first inference.
         orch._t0 = cast(AsyncTensorZeroGateway, fake_t0)
 
-        async with client:
-            result = await orch.invoke("go", episode_id=None)
+        result = await orch.invoke("go", episode_id=None)
 
         assert result.response == "final"
         assert result.episode_id == str(self._ORCH_EPISODE)

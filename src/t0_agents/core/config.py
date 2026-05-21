@@ -235,10 +235,11 @@ class AgentConfig:
         via their ``before_tool``/``after_tool`` hooks.  Because each
         middleware contributes one ``replace_tool_provider`` call in
         chain order, the wrap that happens LAST becomes the OUTERMOST.
-        Putting ``SubAgents`` BEFORE ``Guardrails`` in the chain order
-        means SubAgents wraps first (innermost), Guardrails wraps next
-        (outermost) — preserving the v0.12 ``_execute_chat_legacy``
-        wrap order (``GuardedToolProvider(_OrchestrationToolProvider(client))``).
+        :class:`SubAgentMiddleware` is now ContextVar-only and no longer
+        wraps ``tool_provider``, so Guardrails is the sole wrapper at
+        terminal time — running it inside the chain order ensures it
+        wraps the :class:`SubAgentToolProvider` Agent.__init__ pre-installed
+        on ``self._tool_provider``.
 
         Returns the same list :meth:`default_middleware_for` would
         produce for the same field values.
@@ -292,9 +293,8 @@ class AgentConfig:
         chain: list[Middleware] = []
         if memory is not None:
             chain.append(MemoryMiddleware(memory, memory_strategy))
-        # SubAgent MUST appear before Guardrails so the GuardedToolProvider
-        # wraps the _OrchestrationToolProvider — see ``_build_default_chain``
-        # docstring for the wrap-order rationale.
+        # SubAgentMiddleware is ContextVar-only; placed before Guardrails
+        # so the parent-episode binding is in scope when guardrails fire.
         if sub_agents:
             chain.append(SubAgentMiddleware(list(sub_agents)))
         if guardrails:

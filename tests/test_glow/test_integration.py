@@ -101,10 +101,9 @@ async def test_orchestrator_with_glow_sub_agents() -> None:
 
     Mirrors ``examples/agent/08_multi_agent`` but declares every node via
     glow.  The orchestrator's ``AgentConfig.sub_agents`` is populated
-    at decoration time from the ``Depends(<wrapper>)`` defaults; v1.0
-    ``install_sub_agents`` registers each as a ``<name>_ask`` MCP tool
-    on the App-owned FastMCP server (because every glow agent shares
-    ``tool_provider=app._owned_client``, see commit 2).
+    at decoration time from the ``Depends(<wrapper>)`` defaults; the
+    auto-allocated :class:`SubAgentToolProvider` then exposes each as a
+    ``<name>_ask`` MCP tool to the orchestrator LLM.
     """
     async with await _gateway_factory() as t0:
         app = App(t0=t0)

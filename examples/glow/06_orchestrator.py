@@ -4,10 +4,12 @@ The glow counterpart of
 ``examples/agent/12_concurrency/03_orchestrator.py``.  Declare each
 sub-agent as a normal ``@app.agent``; declare the orchestrator with
 ``Depends(<wrapper>)`` parameters for each sub-agent.  Glow records
-the dependencies on the orchestrator's ``_AgentSpec.sub_agent_specs``
-and v1.0 ``install_sub_agents`` (now in ``t0_agents.delegation``)
-installs each as a ``<name>_ask`` MCP tool on the orchestrator's
-shared, App-owned FastMCP server at lifespan time.
+the dependencies on the orchestrator's ``_AgentSpec.sub_agent_specs``;
+``Agent.__init__`` auto-allocates a
+:class:`~t0_agents.delegation.SubAgentToolProvider` that exposes each
+sub-agent as a ``<name>_ask`` MCP tool to the orchestrator LLM.  No
+FastMCP server is needed when the App has no ``@app.tool`` or
+:class:`MCPServer` specs (this example).
 
 Topology:
 

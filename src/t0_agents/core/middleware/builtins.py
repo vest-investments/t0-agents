@@ -11,10 +11,12 @@ right before the terminal.  Each layer's responsibility:
 
 - :class:`MemoryMiddleware` — load prior records, inject summary or
   ``prior_messages``, save the new record in ``finally``.
-- :class:`SubAgentMiddleware` — wrap ``tool_provider`` with
-  :class:`_OrchestrationToolProvider`, bind ``parent_episode_id``
-  ContextVar, refresh it on the first inference when the orchestrator
-  did not pre-allocate an episode.
+- :class:`SubAgentMiddleware` — bind the ``parent_episode_id``
+  ContextVar so delegated sub-agent inferences tag the orchestrator's
+  episode id for ClickHouse correlation; refresh the binding on the
+  first inference when the orchestrator did not pre-allocate an
+  episode.  Tool dispatch lives in :class:`SubAgentToolProvider`,
+  pre-installed by ``Agent.__init__``.
 - :class:`GuardrailsMiddleware` — wrap ``tool_provider`` with
   :class:`GuardedToolProvider`, fire ``before_run``/``after_run`` hooks
   (with ``T0AgentsFatalError`` propagation), populate
@@ -34,11 +36,11 @@ right before the terminal.  Each layer's responsibility:
   ``tracer.start_as_current_span(f"agent.invoke/{name}")``; ``None``
   tracer falls back to a no-op span.
 
-The order is load-bearing: ``SubAgentMiddleware`` must wrap
-``tool_provider`` **inside** ``GuardrailsMiddleware`` so orchestrator-
-level guardrails observe sub-agent delegations as tool calls.  The
-default chain enforces this; custom chains that rearrange them must
-preserve the wrapping invariant manually.
+The order is load-bearing: ``SubAgentMiddleware`` must run **inside**
+``GuardrailsMiddleware`` so guardrails observe the parent_episode_id
+binding for any sub-agent delegations dispatched mid-run.  The default
+chain enforces this; custom chains that rearrange them must preserve
+the invariant manually.
 """
 
 from __future__ import annotations
@@ -416,23 +418,25 @@ class CostTrackingMiddleware:
 
 
 class SubAgentMiddleware:
-    """Wrap ``tool_provider`` for inline sub-agent dispatch.
+    """Bind the ``parent_episode_id`` ContextVar for sub-agent correlation.
 
-    Mirror of v0.12's inline orchestrator setup
-    (``_execute_chat_legacy:664-680, 728-759``):
+    Tool dispatch lives in
+    :class:`~t0_agents.delegation.provider.SubAgentToolProvider` (auto-allocated
+    by :class:`~t0_agents.core.agent.Agent` when ``config.sub_agents`` is
+    non-empty), so this middleware no longer wraps ``ctx.tool_provider``.
+    What remains is the ContextVar plumbing that lets a delegated
+    sub-agent inference tag ``t0_agents.parent_episode_id=<orchestrator-id>``
+    for ClickHouse correlation:
 
-    1. Wrap ``ctx.tool_provider`` with
-       :class:`_OrchestrationToolProvider` so sub-agent tool calls
-       dispatch in-process via the cached ``tool_name → Agent`` map.
-    2. Bind ``parent_episode_id`` ContextVar to the orchestrator's
-       ``episode_id`` so sub-agent inferences tag
-       ``t0_agents.parent_episode_id=<orchestrator-id>`` for
-       ClickHouse correlation.
-    3. When the orchestrator did not pre-allocate an episode
-       (``episode_id is None`` at entry), compose an ``on_inference``
-       hook that refreshes the ContextVar from the first inference's
-       ``response.episode_id``.  Without this refresh every sub-agent
-       call within the orchestrator's first turn would tag
+    1. :func:`bind_parent_episode_id` enters the orchestrator's
+       ``episode_id`` for the duration of the run.  ``None`` is valid;
+       the binder simply re-binds when ``update_parent_episode_id``
+       fires.
+    2. When the orchestrator did not pre-allocate an episode
+       (``ctx.episode_id is None``), a refresh hook on ``ctx.on_inference``
+       updates the bound value from the first inference's
+       ``response.episode_id``.  Without it, every sub-agent call within
+       the orchestrator's first turn would tag
        ``parent_episode_id=unknown``.
 
     Order invariant: must run **inside** :class:`GuardrailsMiddleware`
@@ -448,33 +452,12 @@ class SubAgentMiddleware:
 
     async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         from t0_agents.delegation.orchestrator import (
-            _OrchestrationToolProvider,
             bind_parent_episode_id,
             update_parent_episode_id,
         )
 
-        agent = ctx.run.agent if ctx.run is not None else None
-        if agent is None or ctx.tool_provider is None:
-            # No live agent (GC'd) or no tool provider — SubAgent
-            # orchestration is impossible.  Fall through to surface the
-            # real failure at the terminal.
-            return await next_(ctx)
-
-        sub_agents_by_tool = agent._sub_agents_by_tool_name
-        ctx.replace_tool_provider(
-            cast(
-                ToolProvider,
-                _OrchestrationToolProvider(ctx.tool_provider, sub_agents_by_tool),
-            ),
-        )
-
         captured_episode_id = ctx.episode_id
 
-        # Compose a refresh hook into ctx.on_inference when the
-        # orchestrator did not pre-allocate an episode — the first
-        # inference populates ``response.episode_id`` and the
-        # ContextVar refresh ensures every sub-agent call dispatched
-        # mid-turn correlates against the orchestrator's real id.
         if captured_episode_id is None:
 
             async def _refresh_parent_episode_id(response: Any) -> None:

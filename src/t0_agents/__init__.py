@@ -55,7 +55,7 @@ from t0_agents.core.types import (
     RunUsage,
     ToolProvider,
 )
-from t0_agents.delegation import agent_as_tool
+from t0_agents.delegation import SubAgentToolProvider
 from t0_agents.mcp import run_agent
 from t0_agents.stream import (
     AgentEvent,
@@ -115,6 +115,7 @@ __all__ = [
     "StructuredOutput",
     "SubAgentError",
     "SubAgentMiddleware",
+    "SubAgentToolProvider",
     "T0AgentsError",
     "T0AgentsFatalError",
     "TextDeltaEvent",
@@ -129,7 +130,6 @@ __all__ = [
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",
-    "agent_as_tool",
     "permissive_parse",
     "run_agent",
 ]
