@@ -11,10 +11,12 @@ right before the terminal.  Each layer's responsibility:
 
 - :class:`MemoryMiddleware` — load prior records, inject summary or
   ``prior_messages``, save the new record in ``finally``.
-- :class:`SubAgentMiddleware` — wrap ``tool_provider`` with
-  :class:`_OrchestrationToolProvider`, bind ``parent_episode_id``
-  ContextVar, refresh it on the first inference when the orchestrator
-  did not pre-allocate an episode.
+- :class:`SubAgentMiddleware` — bind the ``parent_episode_id``
+  ContextVar so delegated sub-agent inferences tag the orchestrator's
+  episode id for ClickHouse correlation; refresh the binding on the
+  first inference when the orchestrator did not pre-allocate an
+  episode.  Tool dispatch lives in :class:`SubAgentToolProvider`,
+  pre-installed by ``Agent.__init__``.
 - :class:`GuardrailsMiddleware` — wrap ``tool_provider`` with
   :class:`GuardedToolProvider`, fire ``before_run``/``after_run`` hooks
   (with ``T0AgentsFatalError`` propagation), populate
@@ -34,11 +36,11 @@ right before the terminal.  Each layer's responsibility:
   ``tracer.start_as_current_span(f"agent.invoke/{name}")``; ``None``
   tracer falls back to a no-op span.
 
-The order is load-bearing: ``SubAgentMiddleware`` must wrap
-``tool_provider`` **inside** ``GuardrailsMiddleware`` so orchestrator-
-level guardrails observe sub-agent delegations as tool calls.  The
-default chain enforces this; custom chains that rearrange them must
-preserve the wrapping invariant manually.
+The order is load-bearing: ``SubAgentMiddleware`` must run **inside**
+``GuardrailsMiddleware`` so guardrails observe the parent_episode_id
+binding for any sub-agent delegations dispatched mid-run.  The default
+chain enforces this; custom chains that rearrange them must preserve
+the invariant manually.
 """
 
 from __future__ import annotations

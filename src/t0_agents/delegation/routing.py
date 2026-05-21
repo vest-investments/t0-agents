@@ -23,9 +23,9 @@ def default_tool_name(sub_agent: Agent) -> str:
 def assert_unique_names(sub_agents: Iterable[Agent]) -> None:
     """Reject sub-agent :attr:`AgentConfig.name` collisions early.
 
-    Runs at :func:`install_sub_agents` time so the orchestrator never
-    reaches ``server.add_tool`` with two handlers that would derive the
-    same MCP tool name via :func:`default_tool_name`.
+    Runs at :class:`SubAgentToolProvider` construction time so the
+    orchestrator never builds a tool surface with two handlers that
+    would derive the same MCP tool name via :func:`default_tool_name`.
     """
     counts = Counter(sa.config.name for sa in sub_agents)
     duplicates = sorted(n for n, c in counts.items() if c > 1)
