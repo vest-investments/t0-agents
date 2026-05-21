@@ -191,6 +191,50 @@ For per-invocation budgets (cost cap, tool-call cap), use the t0-agents
 [Guardrails vs. TensorZero rate limits](guardrails.md#guardrails-vs-tensorzero-rate-limits)
 for the layered model.
 
+## Integration-test sensitivities by model
+
+The integration suite (`pytest -m integration`) is smoke-validated against
+Groq's `openai/gpt-oss-20b`.  Two model-specific failure modes are
+handled with `pytest.skip` (not `assert`) so the gate is not held hostage
+by the LLM picking a flake path on any given run.  Both skips include
+the recognised Groq error fragment in the message so they are easy to
+spot in CI output.
+
+- **gpt-oss-20b sometimes short-circuits trivial arithmetic** and
+  answers `"5"` as plain text when asked to `add 2 + 3` — no tool call
+  is emitted, so any test that asserts a guardrail/audit-log entry for
+  the tool invocation cannot run.  Pinned by
+  `tests/test_guardrails/test_integration.py::test_require_approval_auto_decline_surfaces_to_llm`:
+  the test uses non-trivial operands (`1247 + 8932`) and skips if the
+  rejection branch still wasn't exercised.  Strict mechanism pinning
+  lives in the offline `tests/test_guardrails/test_require_approval.py`.
+- **gpt-oss-20b sometimes emits malformed retry arguments** after a
+  tool failure (timeout, MCP error).  Groq's *own* server-side validator
+  rejects these with `400 Tool call validation failed`, which the
+  TensorZero gateway forwards as `502 TensorZeroError`.  Pinned by
+  `tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent`
+  and four sibling tests
+  (`test_run_agent_survives_failing_tool`, `test_run_agent_allows_llm_retry`,
+  `test_max_turns_raises_against_live_gateway`,
+  `test_none_description_tool_is_usable_end_to_end`): all catch
+  `TensorZeroError`, pattern-match the validation/`tool_use_failed`
+  fragment, and `pytest.skip`.  Any other `TensorZeroError` is
+  re-raised so a genuine regression is still loud.
+- **gpt-oss-20b sometimes serialises tool calls as plain text** in the
+  legacy OpenAI `{"function_call": {...}}` shape instead of emitting a
+  structured `ToolCall` block.  The agent loop sees no tool call,
+  terminates on turn 1, and surfaces the JSON-as-text as `response`.
+  Same family of "model didn't actually invoke the tool this run" —
+  handled by the same `if result.turns < 2: pytest.skip(...)` convention
+  in `test_tool_timeout_does_not_crash_run_agent`,
+  `test_run_agent_allows_llm_retry`, and the other tests listed above.
+
+Both classes of flake disappear when the integration suite runs
+against a frontier model (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Pro).
+Swap the model in `examples/agent/01_first_agent/config/tensorzero.toml`
+(or whichever compose your run targets) if you want the
+zero-skip variant for a release-gate signal.
+
 ## Monitoring checklist
 
 - Enable Python logging at INFO level in production (`t0_agents.mcp.loop` logger)
