@@ -1,31 +1,33 @@
-"""Order invariant: ``GuardrailsMiddleware`` wraps ``SubAgentMiddleware``.
+"""Order invariant: ``GuardrailsMiddleware`` wraps ``SubAgentToolProvider``.
 
-Contract §3.2 invariant: ``SubAgentMiddleware`` wraps ``tool_provider``
-INSIDE ``GuardrailsMiddleware`` so orchestrator-level guardrails
-observe sub-agent delegations via their ``before_tool``/``after_tool``
-hooks.
+Contract §3.2 invariant: orchestrator-level guardrails must observe
+sub-agent delegations as tool calls.  Post-refactor the wiring is:
 
-Concretely: at terminal time ``ctx.tool_provider`` must be a
-:class:`GuardedToolProvider` wrapping a :class:`_OrchestrationToolProvider`
-wrapping the bare client.  The default chain order ``Memory →
-SubAgents → Guardrails → CostTracking → JsonRetry`` produces exactly
-this because each middleware's ``replace_tool_provider`` runs in
-chain order — SubAgents wraps first (innermost), Guardrails wraps
-next (outermost).
+- :class:`Agent` auto-allocates a :class:`SubAgentToolProvider` at
+  construction time and stores it on ``self._tool_provider``.
+- The middleware chain (``Memory → SubAgents → Guardrails → ...``) runs
+  with ``ctx.tool_provider`` initialised from ``self._tool_provider``.
+- :class:`GuardrailsMiddleware` is the only middleware that *still*
+  wraps the provider — :class:`SubAgentMiddleware` is now ContextVar-only
+  and never touches ``ctx.tool_provider``.
+
+Concretely: at terminal time ``ctx.tool_provider`` is a
+:class:`GuardedToolProvider` wrapping the auto-allocated
+:class:`SubAgentToolProvider`.  Without guardrails it is the bare
+:class:`SubAgentToolProvider`.
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
 
-from fastmcp import Client, FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.middleware.base import Middleware, RunContext
 from t0_agents.core.types import AgentResult, Guardrail, ToolProvider
-from t0_agents.delegation.orchestrator import _OrchestrationToolProvider
+from t0_agents.delegation.provider import SubAgentToolProvider
 from t0_agents.guardrails.runtime import GuardedToolProvider
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0
@@ -75,20 +77,15 @@ def _build_orchestrator(
 ) -> Agent:
     """Build an orchestrator agent with sub-agent + optional guardrail.
 
-    Uses a real ``fastmcp.Client(FastMCP(...))`` because
-    ``install_sub_agents`` requires the orchestrator's tool_provider to
-    be a fastmcp Client instance (it registers each sub-agent as a tool
-    on the FastMCP server).  The sub-agent itself uses
-    :class:`FakeMCPClient` since it has no nested sub-agents.
+    The orchestrator's ``tool_provider`` is a bare :class:`FakeMCPClient`
+    — :class:`SubAgentToolProvider` is auto-allocated by ``Agent.__init__``
+    and wraps it as ``inner``.  No real fastmcp server is needed.
     """
     sub = Agent(
         AgentConfig(name="sub", function_name="sub_fn"),
         t0=cast(AsyncTensorZeroGateway, FakeT0([])),
         tool_provider=cast(ToolProvider, FakeMCPClient()),
     )
-
-    server = FastMCP("orch")
-    client: Client[Any] = Client(server)
 
     guards: list[Guardrail] = (
         [cast(Guardrail, _NoopGuardrail())] if with_guardrails else []
@@ -114,12 +111,12 @@ def _build_orchestrator(
     return Agent(
         cfg,
         t0=cast(AsyncTensorZeroGateway, FakeT0([])),  # never reached
-        tool_provider=cast(ToolProvider, client),
+        tool_provider=cast(ToolProvider, FakeMCPClient()),
     )
 
 
 class TestToolProviderWrapOrder:
-    async def test_guardrails_wraps_orchestration_outermost(self) -> None:
+    async def test_guardrails_wraps_sub_agent_provider_outermost(self) -> None:
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=True)
 
@@ -130,26 +127,9 @@ class TestToolProviderWrapOrder:
         # including sub-agent delegations.
         assert isinstance(inspector.seen_tool_provider, GuardedToolProvider)
 
-    async def test_stack_records_orchestration_inside_guardrails(self) -> None:
-        # ``_tool_provider_stack`` is the audit trail of prior
-        # providers in chain order — index 0 is the original client
-        # (replaced first by SubAgent's wrap), index 1 is the
-        # ``_OrchestrationToolProvider`` (replaced next by
-        # Guardrails's wrap).  ``GuardedToolProvider`` is the current
-        # ``ctx.tool_provider`` so it does NOT appear in the stack.
-        inspector = _StackInspector()
-        agent = _build_orchestrator(inspector, with_guardrails=True)
-
-        await agent.invoke("delegate").result()
-
-        assert len(inspector.seen_stack) == 2
-        # Index 1: _OrchestrationToolProvider (SubAgent's wrap, INNER
-        # of GuardedToolProvider but OUTER relative to the raw client).
-        assert isinstance(inspector.seen_stack[1], _OrchestrationToolProvider)
-
-    async def test_outer_guarded_wraps_inner_orchestration(self) -> None:
+    async def test_guarded_wraps_sub_agent_provider(self) -> None:
         # Direct structural check via the GuardedToolProvider's
-        # ``_inner`` attribute (private but stable in v0.12).
+        # ``_inner`` attribute (private but stable contract).
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=True)
 
@@ -157,14 +137,32 @@ class TestToolProviderWrapOrder:
 
         guarded = inspector.seen_tool_provider
         assert isinstance(guarded, GuardedToolProvider)
-        # Peek at the wrapped provider — should be the orchestration
-        # wrap, NOT the bare client.
+        # Peek at the wrapped provider — should be the auto-allocated
+        # SubAgentToolProvider, NOT the bare client.
         inner = getattr(guarded, "_inner", None)
-        assert isinstance(inner, _OrchestrationToolProvider)
+        assert isinstance(inner, SubAgentToolProvider)
+
+    async def test_stack_records_sub_agent_provider_inside_guardrails(
+        self,
+    ) -> None:
+        # ``_tool_provider_stack`` is the audit trail of prior providers
+        # in chain order.  Post-refactor only Guardrails wraps; the
+        # SubAgentToolProvider is already on the agent itself and never
+        # gets replaced mid-chain.  So the stack length is 1 (the
+        # original SubAgentToolProvider, replaced by GuardedToolProvider).
+        inspector = _StackInspector()
+        agent = _build_orchestrator(inspector, with_guardrails=True)
+
+        await agent.invoke("delegate").result()
+
+        assert len(inspector.seen_stack) == 1
+        # Index 0: the SubAgentToolProvider that was on the agent
+        # before GuardrailsMiddleware wrapped it.
+        assert isinstance(inspector.seen_stack[0], SubAgentToolProvider)
 
 
-class TestNoGuardrailsLeavesOrchestrationOutermost:
-    """When guardrails are absent, sub-agents are the only wrap."""
+class TestNoGuardrailsLeavesSubAgentProviderOutermost:
+    """When guardrails are absent, the auto-allocated provider is exposed directly."""
 
     async def test_no_guardrails_no_guarded_wrap(self) -> None:
         inspector = _StackInspector()
@@ -172,8 +170,9 @@ class TestNoGuardrailsLeavesOrchestrationOutermost:
 
         await agent.invoke("delegate").result()
 
-        # Only one wrap applied: _OrchestrationToolProvider.
+        # No wrap applied: the agent's auto-allocated provider IS the
+        # terminal's tool_provider.
         assert isinstance(
             inspector.seen_tool_provider,
-            _OrchestrationToolProvider,
+            SubAgentToolProvider,
         )
