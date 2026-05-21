@@ -8,11 +8,13 @@ Pattern lift from FastAPI's ``app = FastAPI()`` followed by
 - The agent registry (``name -> _AgentSpec``).
 - The :attr:`dependency_overrides` mapping consulted on every
   ``Depends(...)`` resolution by :class:`~t0_agents.glow.di.DependencyResolver`.
-- A long-lived in-memory ``fastmcp.FastMCP`` server (``_mcp_server``)
-  and the matching ``fastmcp.Client`` (``_owned_client``).  ``@app.tool``
-  registers user tools on the server; every glow agent is constructed
-  with ``tool_provider=self._owned_client`` so the toolless-chat
-  fallback in ``core/agent.py`` is never reached for glow agents.
+- A lazy in-memory ``fastmcp.FastMCP`` server (``_mcp_server``) and
+  matching ``fastmcp.Client`` (``_owned_client``).  Only allocated when
+  the App needs a real MCP surface: at least one ``@app.tool``
+  registration or one :class:`MCPServer` spec.  Apps that only register
+  sub-agent orchestrators pay zero FastMCP cost — every glow agent is
+  constructed with ``tool_provider=None`` and the v1.0 core auto-allocates
+  a :class:`SubAgentToolProvider` for any agent with ``sub_agents=[...]``.
 - The lazy build path: each ``_AgentSpec`` materialises its underlying
   :class:`Agent` on first ``await wrapper(msg)`` *or* eagerly via
   ``await app.build()``.  ``app.lifespan()`` is the recommended entry
@@ -95,16 +97,16 @@ class App:
         # the lifecycle.
         self.dependency_overrides: dict[Callable[..., Any], Callable[..., Any]] = {}
 
-        # App-owned FastMCP server + matching Client.  The server starts
-        # empty; ``@app.tool`` registers tools onto it.  Every glow agent
-        # is constructed with ``tool_provider=self._owned_client``, so
-        # glow agents always run with a concrete in-process FastMCP
-        # server even when the user registers no tools — toolless-chat
-        # semantics are handled by the v1.0 core directly.  The Client
-        # is connected by :meth:`build` (idempotent); :meth:`shutdown`
-        # exits the matching ``__aexit__``.
-        self._mcp_server: FastMCP[Any] = FastMCP("glow-app")
-        self._owned_client: Client[Any] = Client(self._mcp_server)
+        # App-owned FastMCP server + matching Client, lazily allocated.
+        # ``@app.tool`` and :class:`MCPServer` mounts go through
+        # :meth:`_ensure_mcp_server`, which creates the pair on first
+        # use.  Apps without ``@app.tool`` or ``MCPServer`` specs (the
+        # sub-agents-only orchestration case) leave both ``None`` —
+        # ``_lookup_or_build`` then passes ``tool_provider=None`` to
+        # :class:`Agent`, and the v1.0 core auto-allocates a
+        # :class:`SubAgentToolProvider` for the delegation surface.
+        self._mcp_server: FastMCP[Any] | None = None
+        self._owned_client: Client[Any] | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_entered: bool = False
 
@@ -187,6 +189,19 @@ class App:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def _ensure_mcp_server(self) -> FastMCP[Any]:
+        """Lazily allocate the App-owned FastMCP server + Client.
+
+        Called from :meth:`tool` (the ``@app.tool`` decorator) at
+        decoration time and from :meth:`build` when there are
+        :class:`MCPServer` specs to mount.  Idempotent — subsequent
+        calls reuse the already-allocated pair.
+        """
+        if self._mcp_server is None:
+            self._mcp_server = FastMCP("glow-app")
+            self._owned_client = Client(self._mcp_server)
+        return self._mcp_server
+
     def _lookup_or_build(self, spec: _AgentSpec) -> Agent:
         """Return the underlying :class:`Agent`, constructing it if needed.
 
@@ -219,10 +234,19 @@ class App:
             # ``GuardrailsMiddleware`` picks them up at runtime without
             # further glow plumbing.
             config_kwargs["guardrails"] = spec.guardrails
+        # tool_provider is the App-owned client when at least one tool
+        # or MCP server is configured; otherwise None lets Agent.__init__
+        # auto-allocate a SubAgentToolProvider for the sub-agents-only
+        # case (or run toolless for the chat-only case).
+        tool_provider: ToolProvider | None = (
+            cast(ToolProvider, self._owned_client)
+            if self._owned_client is not None
+            else None
+        )
         agent = Agent(
             AgentConfig(**config_kwargs),
             t0=self._t0,
-            tool_provider=cast(ToolProvider, self._owned_client),
+            tool_provider=tool_provider,
         )
         spec.agent = agent
         return agent
@@ -265,27 +289,34 @@ class App:
         off network traffic.
         """
         if not self._client_entered:
-            # Mount every typed MCP server BEFORE entering the
-            # client so the mounted tools surface on the first
-            # ``list_tools()`` call.  ``FastMCP.mount`` is sync and
-            # immediate — no client re-entry required.  ``url``-based
-            # specs are wrapped via ``create_proxy`` (FastMCP's
-            # canonical bridge from a URL / Client / Transport into a
-            # mountable ``FastMCP`` instance); in-memory ``server``
-            # specs are mounted directly (the ``examples/14_multi_server``
-            # pattern).
-            for mcp_spec in self._mcp_specs:
-                backend: FastMCP[Any]
-                if mcp_spec.server is not None:
-                    backend = mcp_spec.server
-                else:
-                    # ``mcp_spec.url`` is guaranteed non-None when
-                    # ``mcp_spec.server`` is None — MCPServer's
-                    # ``__init__`` / ``__init_subclass__`` enforces
-                    # the xor.
-                    backend = create_proxy(mcp_spec.url)  # type: ignore[arg-type]
-                self._mcp_server.mount(backend, namespace=mcp_spec.namespace)
-            await self._exit_stack.enter_async_context(self._owned_client)
+            # Materialise the FastMCP pair only when there's at least
+            # one MCP spec to mount.  ``@app.tool`` registrations already
+            # ensured allocation at decoration time; this branch covers
+            # the ``MCPServer``-only case.
+            if self._mcp_specs:
+                server = self._ensure_mcp_server()
+                # ``FastMCP.mount`` is sync and immediate.  ``url``-based
+                # specs are wrapped via ``create_proxy`` (FastMCP's
+                # canonical bridge from a URL / Client / Transport into a
+                # mountable ``FastMCP`` instance); in-memory ``server``
+                # specs are mounted directly (the ``examples/14_multi_server``
+                # pattern).
+                for mcp_spec in self._mcp_specs:
+                    backend: FastMCP[Any]
+                    if mcp_spec.server is not None:
+                        backend = mcp_spec.server
+                    else:
+                        # ``mcp_spec.url`` is guaranteed non-None when
+                        # ``mcp_spec.server`` is None — MCPServer's
+                        # ``__init__`` / ``__init_subclass__`` enforces
+                        # the xor.
+                        backend = create_proxy(mcp_spec.url)  # type: ignore[arg-type]
+                    server.mount(backend, namespace=mcp_spec.namespace)
+            # Enter the owned Client only if it exists — sub-agents-only
+            # apps that never registered a tool or an MCPServer spec
+            # leave it ``None`` and skip the FastMCP transport entirely.
+            if self._owned_client is not None:
+                await self._exit_stack.enter_async_context(self._owned_client)
             self._client_entered = True
         for agent_spec in self._agent_registry.values():
             self._lookup_or_build(agent_spec)
