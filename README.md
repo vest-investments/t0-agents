@@ -224,6 +224,30 @@ heavier extras live behind named installs.
 | **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
 | **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
 
+## Status & Limitations
+
+t0-agents is **Alpha**.  APIs are stabilising between minor versions
+but may still change; pin to a specific `1.x.y` when consuming from
+another project (e.g. `pip install 't0-agents==1.0.1'` or
+`t0-agents @ git+https://github.com/<owner>/t0-agents.git@v1.0.1`).
+
+Known caveats today:
+
+- **`t0_agents.glow`** ships behind the `[glow]` extra and is marked
+  **Experimental** — its public surface may change in `1.1.x`.  The
+  full list of caveats lives in
+  [`docs/glow/limitations.md`](docs/glow/limitations.md).
+- **JSON output modes do not stream.** `JsonOutput` and
+  `StructuredOutput` are single-shot by design; constructing
+  `StreamingOutput(base=JsonOutput(...))` raises `ConfigurationError`.
+- **Async-only.** The agent loop, `Run`, streaming, serving, and
+  testing surfaces are all `async`-first; there is no sync facade.
+  Bridge with `asyncio.run(...)` at your entry point if you need one.
+- **Multi-agent narrative is moving toward `asyncio`.** The
+  declarative `AgentConfig.sub_agents` path plus the runnable patterns
+  under [`examples/agent/12_concurrency/`](examples/agent/12_concurrency/)
+  are the recommended way to wire orchestrators today.
+
 ## Requirements
 
 - Python 3.11, 3.12, or 3.13
