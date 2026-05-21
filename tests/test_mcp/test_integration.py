@@ -685,8 +685,12 @@ async def test_tool_timeout_does_not_crash_run_agent(
                 # the model's retry args after the timeout — McpError
                 # was still caught; the leak path under test is
                 # exclusively about McpError, not about the LLM
-                # emitting garbage on its retry.
-                msg = str(e)
+                # emitting garbage on its retry.  Use ``e.text`` to
+                # match the framework's own recovery logic in
+                # ``src/t0_agents/mcp/loop.py:369-377`` — the provider
+                # detail is canonically on ``.text``, while ``str(e)``
+                # additionally wraps it with the status-code prefix.
+                msg = e.text or ""
                 if "Tool call validation failed" in msg or "tool_use_failed" in msg:
                     pytest.skip(
                         "Groq gpt-oss-20b emitted malformed retry args "
