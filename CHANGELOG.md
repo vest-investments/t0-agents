@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.0.0] — Unreleased
+## [1.0.0] — 2026-05-21
 
 The v1.0 four-abstraction refactor lands as one cumulative release.
 Four new abstractions — `Run[T]`, `Middleware`, `OutputMode[T]`,
@@ -152,6 +152,143 @@ a FastMCP server (see the `Changed` section below).
   re-exports the same callable for the
   `Annotated[T, Guardrail(...)]` typed-metadata pattern.
 
+#### Runtime system prompt — the `system=` escape hatch
+
+Expose TensorZero's raw-string `input.system` form on every public
+inference surface as the escape hatch for prompt-as-a-service flows
+where the prompt body itself is runtime data.  The existing
+`system_arguments` (template-variable dict) stays the recommended
+default; the new `system` kwarg is layered alongside it, with up-front
+validation that catches the combinations TensorZero would reject on
+the wire.  Backwards compatible: any caller that does not pass
+`system=` keeps today's behaviour byte-for-byte.
+
+- **`system: str | None = None`** kwarg on every public inference
+  surface: `run_agent`, `Agent.run`, `Agent.stream`,
+  `run_structured_inference`, and `StreamingAgentLoop.stream`.  When
+  set, the string is forwarded as `input.system` (raw form) to
+  TensorZero on every inference call.  Only valid when the configured
+  function does **not** declare `schemas.system.path`; the gateway
+  returns HTTP 400 otherwise.  Documented as an escape hatch — prefer
+  `system_arguments` (with a configured system template) for
+  production code so ClickHouse captures structured prompt variables
+  for fine-tuning, A/B testing, and observability.
+- **`docs/api-reference.md` § "Runtime system prompt: `system` vs
+  `system_arguments`"** — decision matrix for the two kwargs across
+  schema'd / schema-less functions, plus guidance on when to reach
+  for each.
+- **`examples/agent/02_agent_class/`** — runnable PaaS-style demo:
+  the same `Agent` is invoked three times with three runtime-supplied
+  personalities (haiku, pirate, lawyer), driving the model purely
+  through `system="..."`.  Companion to the templated, recommended
+  pattern that the same example folder demonstrates via
+  `system_template`.
+
+Up-front validation:
+
+- `system` and `system_arguments` are mutually exclusive on every
+  surface — passing both raises `ValueError` before any inference is
+  issued.  Both kwargs target `input.system`, so the gateway would
+  reject the mixed shape anyway; t0-agents fails fast with a clearer
+  message.
+- `Agent.run` / `Agent.stream` additionally reject `system=<str>` when
+  `memory_strategy="system_template"` is in effect.  That strategy
+  injects `memory_context` into `input.system` via the configured
+  template (dict shape), which is incompatible with a raw string.
+  Callers needing raw `system` alongside memory should switch to
+  `memory_strategy="prepended_message"` (the default) or
+  `memory_strategy="messages"`; both leave `input.system` untouched.
+
+#### TensorZeroMemory backend and the agent testing framework
+
+- **`TensorZeroMemory` backend**
+  (`from t0_agents.memory import TensorZeroMemory`).  Reads cross-turn
+  memory directly from TensorZero's `list_inferences` observability API
+  instead of running a parallel store.  Ships in the base distribution —
+  no new extra, no new dependency, because `tensorzero` is already
+  required.  `save()` is a no-op (TZ is the writer); `load()` returns
+  one `MemoryRecord` per chat inference that emitted text, oldest-first.
+  Multi-tenant filtering via `tag_filter: dict[str, str]` (equality,
+  AND-combined) plus `extra_filters: InferenceFilter` passthrough for
+  time/AND/OR/NOT predicates.  `search()` returns `[]` by default; pass
+  `experimental_search=True` to forward the query to TZ's
+  `search_query_experimental` endpoint (flagged experimental in the SDK).
+- **`memory_strategy="messages"`** — fourth `AgentConfig.memory_strategy`
+  option, paired with the `MemoryProvider.load_history` extension
+  method.  When set, the `Agent` skips the records-shaped `load()` and
+  instead calls `memory.load_history(episode_id) -> list[Message] | None`
+  and threads the result through `input.messages` as a TZ-native
+  conversation history.  Sidesteps the unbounded summary growth that
+  `prepended_message` exhibits when the backend reads its own writes
+  back from the TZ log; preserves tool calls and tool results across
+  turns so the model can reason about its own prior work.  Validated at
+  `AgentConfig.__post_init__` — picking `"messages"` against a backend
+  that does not implement `load_history` raises `ConfigurationError`.
+- **`run_agent(prior_messages=...)`** — optional kwarg on the
+  low-level loop (mirrored on `StreamingAgentLoop.stream`) that seeds
+  the conversation with a TZ-native message history before the new user
+  prompt is appended.  Default `None` preserves byte-identical
+  behaviour, honouring the frozen-signature invariant of the `mcp/`
+  submodule.
+- **Agent testing framework** (`from t0_agents.testing import MockGateway,
+  MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
+  Ships from the base distribution — no new extra, no new dependency.
+  Three complementary primitives:
+  - **`MockGateway`** — duck-typed `AsyncTensorZeroGateway` with three
+    construction modes.  `script(turns)` pops a pre-scripted content
+    list per `inference()` call; `canned(fn)` delegates to a callable
+    receiving the full kwargs; `recording(real_gateway)` forwards to a
+    real gateway and captures `(kwargs, response)` pairs that
+    `.replay()` converts into a deterministic replay `MockGateway`.
+    Records `.calls` (kwargs) and `.responses`
+    (`ChatInferenceResponse`) in parallel so assertions can inspect
+    both what the loop asked for and what the model decided.
+  - **`MockToolProvider`** — dict-backed `ToolProvider` Protocol
+    implementation.  Sync + async handlers; unknown tool raises
+    `KeyError`; schemas configurable via the `schemas=` constructor
+    kwarg.  Returns a real `fastmcp.CallToolResult` so the production
+    `serialize_tool_result` handles the mock output with the exact same
+    rules as a real tool.
+  - **`EmbeddedGatewayHelper`** — async-context wrappers around
+    `AsyncTensorZeroGateway.build_embedded` (source-validated at
+    `tensorzero.pyi:1016-1035`).  `from_config(path)`,
+    `with_clickhouse(path, url)`, `with_postgres(path, url)` for
+    increasingly-observable integration tests that still don't need
+    Docker.
+- **Assertion helpers** — `assert_tool_called`, `assert_tool_not_called`,
+  `assert_tool_args_equal`, `assert_max_turns`, `assert_response_contains`.
+  The tool-call assertions accept exclusive `gateway=` (inspects what
+  the model emitted) or `tool_provider=` (inspects what actually
+  executed after guardrails + the loop).
+- **Reusable scenarios** (`t0_agents.testing.scenarios`) —
+  `single_tool_happy`, `tool_error_recovery`, `max_turns_exhausted`
+  canned `MockGateway` factories for the three most common loop shapes.
+- **Streaming mocks** (`t0_agents.testing.streaming_mocks`) —
+  `fake_event_stream(events)` wraps an iterable into
+  `AsyncIterator[AgentEvent]` (ideal for testing consumers of
+  `Agent.stream`); `MockStreamingGateway` yields scripted `ChatChunk`s
+  from `inference(stream=True)` for basic streaming round-trip tests.
+- **Pytest fixtures** (`t0_agents.testing.fixtures`) — `mock_t0`,
+  `mock_tool_provider`, `embedded_t0`, `agent_test_factory`.  Registered
+  by adding `pytest_plugins = ["t0_agents.testing.fixtures"]` to a
+  project's `conftest.py`.
+- **`embedded` pytest marker** registered in `pyproject.toml` — opt-in
+  via `RUN_EMBEDDED_TESTS=1` so contributor CI stays fast.
+- **Shape-contract test** at
+  [`tests/test_testing/test_mock_shape.py`](tests/test_testing/test_mock_shape.py)
+  asserts every kwarg the agent loop passes to
+  `AsyncTensorZeroGateway.inference` is accepted by `MockGateway`, that
+  `MockToolProvider` satisfies the runtime-checkable `ToolProvider`
+  Protocol, and that `MockToolProvider.call_tool` returns a real
+  `fastmcp.CallToolResult`.  Fails fast on any future drift between
+  mocks and the real surfaces.
+- **Public docs** [`docs/testing.md`](docs/testing.md) and
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) — two-mode comparison table,
+  `MockGateway` / `MockToolProvider` guides, assertion reference,
+  scenarios, embedded setup, three test modes
+  (unit / integration / embedded), and a skeleton for writing a new
+  test with `MockGateway`.
+
 #### Documentation
 
 - **`docs/run.md`** — canonical user-facing guide for the `Run`
@@ -195,9 +332,10 @@ a FastMCP server (see the `Changed` section below).
   `experimental/glow` branch. Purely additive Pythonic skin over v1.0
   primitives (FastAPI-style decorators, type-hint-driven OutputMode
   inference, fluent `Run` wrapper, native-collection composition,
-  typed MCP). Public API is **unstable**; ships as the future
-  `t0-agents[glow]` extra. The implementation roadmap and DX design
-  live on the experimental branch.
+  typed MCP). Public API is **unstable**; ships behind the
+  `t0-agents[glow]` extra so the canonical v1.0 surface stays clean.
+  See [`docs/glow/limitations.md`](docs/glow/limitations.md) for the
+  known caveats.
 - **Output-mode inference from return-type hints**
   (`t0_agents.glow.output_inference`, internal). `str` /
   `dict[*]` / `BaseModel` / `list[BaseModel]` / `Optional[*]` /
@@ -376,8 +514,9 @@ a FastMCP server (see the `Changed` section below).
   `execute_tool_calls` and `execute_tool_calls_parallel` rename
   the same parameter in lock-step but stay non-optional — they
   only run inside the tool-dispatch branch, after the optional
-  guard has already proven a provider is present.  Since v1.0 is
-  still Unreleased, no deprecation shim ships.
+  guard has already proven a provider is present.  v1.0 is the
+  first stable release, so no deprecation shim for the prior
+  `mcp_client` name ships.
 
 - **`Agent.__init__` accepts `tool_provider=None` for chat-mode
   agents — no MCP allocation behind the scenes.** v1.0 originally
@@ -549,6 +688,24 @@ a FastMCP server (see the `Changed` section below).
   TestRecoverableInferenceError::test_429_rate_limit_re_raised`
   locks in the "propagate, never auto-retry" contract.  Closes the
   parked rate-limit follow-up.
+- **Reasoning models that emit content via the summary channel no longer
+  yield empty responses.** ``ThoughtChunk.summary_text`` (streaming) and
+  ``Thought.summary[*].text`` (non-streaming) — populated by OpenAI
+  o-series reasoning summaries and harmony-format providers in some
+  configurations — were previously silently dropped because the
+  assembler and the ``mcp/loop.py`` thought-fallback only read the
+  ``text`` field.  Symptom: ``DoneEvent.result.response == ""`` and
+  no ``ThoughtDeltaEvent``s emitted for affected providers.
+  - The streaming assembler now folds ``text + summary_text`` into a
+    single ``ThoughtDeltaEvent`` delta.  When a chunk carries both, a
+    ``"\n"`` is interposed so the streamed content matches the
+    non-streaming path's ``"\n".join(...)`` of the same logical entries.
+  - The non-streaming Thought-fallback now mines
+    ``Thought.summary[*].text`` alongside ``Thought.text``.
+  - No public API or wire-format change; consumers that already render
+    ``thought_delta`` events automatically receive the recovered
+    content, and ``AgentResult.response_source`` correctly reports
+    ``"thought"`` when only summary content is present.
 
 ### Notes
 
@@ -568,55 +725,6 @@ a FastMCP server (see the `Changed` section below).
   (`test_require_approval_auto_decline_surfaces_to_llm`,
   `test_tool_timeout_does_not_crash_run_agent`) are documented with
   reroll guidance and a non-Groq model-swap escape hatch.
-
-## [0.13.0] — Unreleased
-
-Expose TensorZero's raw-string `input.system` form on every public
-inference surface as the escape hatch for prompt-as-a-service flows
-where the prompt body itself is runtime data.  The existing
-`system_arguments` (template-variable dict) stays the recommended
-default; the new `system` kwarg is layered alongside it, with up-front
-validation that catches the combinations TensorZero would reject on
-the wire.  Backwards compatible: any caller that does not pass
-`system=` keeps today's behaviour byte-for-byte.
-
-### Added
-
-- **`system: str | None = None`** kwarg on every public inference
-  surface: `run_agent`, `Agent.run`, `Agent.stream`,
-  `run_structured_inference`, and `StreamingAgentLoop.stream`.  When
-  set, the string is forwarded as `input.system` (raw form) to
-  TensorZero on every inference call.  Only valid when the configured
-  function does **not** declare `schemas.system.path`; the gateway
-  returns HTTP 400 otherwise.  Documented as an escape hatch — prefer
-  `system_arguments` (with a configured system template) for
-  production code so ClickHouse captures structured prompt variables
-  for fine-tuning, A/B testing, and observability.
-- **`docs/api-reference.md` § "Runtime system prompt: `system` vs
-  `system_arguments`"** — decision matrix for the two kwargs across
-  schema'd / schema-less functions, plus guidance on when to reach
-  for each.
-- **`examples/agent/02_agent_class/`** — runnable PaaS-style demo:
-  the same `Agent` is invoked three times with three runtime-supplied
-  personalities (haiku, pirate, lawyer), driving the model purely
-  through `system="..."`.  Companion to `examples/agent/02_agent_class/`
-  (which demonstrates the templated, recommended pattern via
-  `system_template`).
-
-### Validated
-
-- `system` and `system_arguments` are mutually exclusive on every
-  surface — passing both raises `ValueError` before any inference is
-  issued.  Both kwargs target `input.system`, so the gateway would
-  reject the mixed shape anyway; t0-agents fails fast with a clearer
-  message.
-- `Agent.run` / `Agent.stream` additionally reject `system=<str>` when
-  `memory_strategy="system_template"` is in effect.  That strategy
-  injects `memory_context` into `input.system` via the configured
-  template (dict shape), which is incompatible with a raw string.
-  Callers needing raw `system` alongside memory should switch to
-  `memory_strategy="prepended_message"` (the default) or
-  `memory_strategy="messages"`; both leave `input.system` untouched.
 
 ## [0.12.0] — 2026-05-15
 
@@ -893,135 +1001,6 @@ is bit-for-bit untouched.
   depend on the old swallow-everything behaviour can replace the
   hard-raise with a `logger.error` in their own implementation to
   retain the pre-realignment semantics.
-
-## [0.9.0] — Unreleased
-
-### Fixed
-
-- **Reasoning models that emit content via the summary channel no longer
-  yield empty responses.** ``ThoughtChunk.summary_text`` (streaming) and
-  ``Thought.summary[*].text`` (non-streaming) — populated by OpenAI
-  o-series reasoning summaries and harmony-format providers in some
-  configurations — were previously silently dropped because the
-  assembler and the ``mcp/loop.py`` thought-fallback only read the
-  ``text`` field.  Symptom: ``DoneEvent.result.response == ""`` and
-  no ``ThoughtDeltaEvent``s emitted for affected providers.
-  - The streaming assembler now folds ``text + summary_text`` into a
-    single ``ThoughtDeltaEvent`` delta.  When a chunk carries both, a
-    ``"\n"`` is interposed so the streamed content matches the
-    non-streaming path's ``"\n".join(...)`` of the same logical entries.
-  - The non-streaming Thought-fallback now mines
-    ``Thought.summary[*].text`` alongside ``Thought.text``.
-  - No public API or wire-format change; consumers that already render
-    ``thought_delta`` events automatically receive the recovered
-    content, and ``AgentResult.response_source`` correctly reports
-    ``"thought"`` when only summary content is present.
-
-### Added
-
-- **`TensorZeroMemory` backend**
-  (`from t0_agents.memory import TensorZeroMemory`).  Reads cross-turn
-  memory directly from TensorZero's `list_inferences` observability API
-  instead of running a parallel store.  Ships in the base distribution —
-  no new extra, no new dependency, because `tensorzero` is already
-  required.  `save()` is a no-op (TZ is the writer); `load()` returns
-  one `MemoryRecord` per chat inference that emitted text, oldest-first.
-  Multi-tenant filtering via `tag_filter: dict[str, str]` (equality,
-  AND-combined) plus `extra_filters: InferenceFilter` passthrough for
-  time/AND/OR/NOT predicates.  `search()` returns `[]` by default; pass
-  `experimental_search=True` to forward the query to TZ's
-  `search_query_experimental` endpoint (flagged experimental in the SDK).
-- **`memory_strategy="messages"`** — fourth `AgentConfig.memory_strategy`
-  option, paired with the new `MemoryProvider.load_history` extension
-  method.  When set, the `Agent` skips the records-shaped `load()` and
-  instead calls `memory.load_history(episode_id) -> list[Message] | None`
-  and threads the result through `input.messages` as a TZ-native
-  conversation history.  Sidesteps the unbounded summary growth that
-  `prepended_message` exhibits when the backend reads its own writes
-  back from the TZ log; preserves tool calls and tool results across
-  turns so the model can reason about its own prior work.  Validated at
-  `AgentConfig.__post_init__` — picking `"messages"` against a backend
-  that does not implement `load_history` raises `ConfigurationError`.
-- **`run_agent(prior_messages=...)`** — new optional kwarg on the
-  low-level loop (mirrored on `StreamingAgentLoop.stream`) that seeds
-  the conversation with a TZ-native message history before the new user
-  prompt is appended.  Default `None` preserves byte-identical
-  behaviour, honouring the frozen-signature invariant of the `mcp/`
-  submodule.
-- **Agent testing framework** (`from t0_agents.testing import MockGateway,
-  MockToolProvider, EmbeddedGatewayHelper, assert_tool_called, …`).
-  Ships from the base distribution — no
-  new extra, no new dependency.  Two complementary paths:
-  - **`MockGateway`** — duck-typed `AsyncTensorZeroGateway` with three
-    construction modes.  `script(turns)` pops a pre-scripted content
-    list per `inference()` call; `canned(fn)` delegates to a callable
-    receiving the full kwargs; `recording(real_gateway)` forwards to a
-    real gateway and captures `(kwargs, response)` pairs that
-    `.replay()` converts into a deterministic replay `MockGateway`.
-    Records `.calls` (kwargs) and `.responses`
-    (`ChatInferenceResponse`) in parallel so assertions can inspect
-    both what the loop asked for and what the model decided.
-  - **`MockToolProvider`** — dict-backed `ToolProvider` Protocol
-    implementation.  Sync + async handlers; unknown tool raises
-    `KeyError`; schemas configurable via the `schemas=` constructor
-    kwarg.  Returns a real `fastmcp.CallToolResult` so the production
-    `serialize_tool_result` handles the mock output with the exact same
-    rules as a real tool.
-  - **`EmbeddedGatewayHelper`** — async-context wrappers around
-    `AsyncTensorZeroGateway.build_embedded` (source-validated at
-    `tensorzero.pyi:1016-1035`).  `from_config(path)`,
-    `with_clickhouse(path, url)`, `with_postgres(path, url)` for
-    increasingly-observable integration tests that still don't need
-    Docker.  Resolves the final open question (T0 Q7) in the
-    agentic-feature roadmap.
-- **Assertion helpers** — `assert_tool_called`, `assert_tool_not_called`,
-  `assert_tool_args_equal`, `assert_max_turns`, `assert_response_contains`.
-  The tool-call assertions accept exclusive `gateway=` (inspects what
-  the model emitted) or `tool_provider=` (inspects what actually
-  executed after guardrails + the loop).
-- **Reusable scenarios** (`t0_agents.testing.scenarios`) —
-  `single_tool_happy`, `tool_error_recovery`, `max_turns_exhausted`
-  canned `MockGateway` factories for the three most common loop shapes.
-- **Streaming mocks** (`t0_agents.testing.streaming_mocks`) —
-  `fake_event_stream(events)` wraps an iterable into
-  `AsyncIterator[AgentEvent]` (ideal for testing consumers of
-  `Agent.stream`); `MockStreamingGateway` yields scripted `ChatChunk`s
-  from `inference(stream=True)` for basic streaming round-trip tests.
-- **Pytest fixtures** (`t0_agents.testing.fixtures`) — `mock_t0`,
-  `mock_tool_provider`, `embedded_t0`, `agent_test_factory`.  Registered
-  by adding `pytest_plugins = ["t0_agents.testing.fixtures"]` to a
-  project's `conftest.py`.
-- **`embedded` pytest marker** registered in `pyproject.toml` — opt-in
-  via `RUN_EMBEDDED_TESTS=1` so contributor CI stays fast.
-- **Shape-contract test** at
-  [`tests/test_testing/test_mock_shape.py`](tests/test_testing/test_mock_shape.py)
-  asserts every kwarg the agent loop passes to
-  `AsyncTensorZeroGateway.inference` is accepted by `MockGateway`, that
-  `MockToolProvider` satisfies the runtime-checkable `ToolProvider`
-  Protocol, and that `MockToolProvider.call_tool` returns a real
-  `fastmcp.CallToolResult`.  Fails fast on any future drift between
-  mocks and the real surfaces.
-- **Example** [`examples/11_testing/`](examples/11_testing/) — a
-  three-tool demo agent (`agent.py`) with both `test_agent_unit.py`
-  (runs in < 1 s, no Docker, no API keys) and `test_agent_embedded.py`
-  (opt-in via `RUN_EMBEDDED_TESTS=1`), plus a self-contained
-  `pytest.ini` and `tensorzero.toml`.
-- **Public doc** [`docs/testing.md`](docs/testing.md) — two-mode
-  comparison table, `MockGateway` / `MockToolProvider` guides,
-  assertion reference, scenarios, embedded setup, and a `dryrun=True`
-  comparison.
-- **`CONTRIBUTING.md`** (new) — prerequisites, three test modes
-  (unit / integration / embedded), style gates, single-test commands,
-  and a skeleton for writing a new test with `MockGateway`.
-
-### Changed
-
-- The testing release does not modify `core/`, `mcp/`, `stream/`,
-  `serve/`, `memory/`, `guardrails/`, `compose/`, or `cli/`.
-  `run_agent`, `AgentResult`, `Agent`, and every pre-existing public
-  symbol are byte-identical to 0.8.0.  All 399 prior offline tests
-  remain green alongside the 56 new `tests/test_testing/` tests —
-  455 total passing in `-m "not integration and not embedded"`.
 
 ## [0.8.0] — Unreleased
 
