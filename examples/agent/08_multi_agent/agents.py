@@ -8,9 +8,12 @@ Invoked via:
 
 The factory yields an orchestrator :class:`Agent` that has been wired
 with two sub-agents (``researcher``, ``writer``).  Each sub-agent has
-its own FastMCP server + ``fastmcp.Client``; the ``install_sub_agents``
-hook registers a ``researcher_ask`` and ``writer_ask`` tool on the
-orchestrator's own in-process FastMCP server at construction time.
+its own FastMCP server + ``fastmcp.Client`` because they expose real
+tools (arxiv, markdown).  The orchestrator itself has no MCP tools of
+its own — :class:`Agent` auto-allocates a
+:class:`~t0_agents.delegation.SubAgentToolProvider` from
+``sub_agents=[researcher, writer]`` that exposes ``researcher_ask`` and
+``writer_ask`` as the only tools the orchestrator LLM sees.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
-from fastmcp import Client, FastMCP
+from fastmcp import Client
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
@@ -32,18 +35,6 @@ from t0_agents import Agent, AgentConfig
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from arxiv_server import mcp as arxiv_server  # type: ignore[import-not-found]
 from markdown_server import mcp as markdown_server  # type: ignore[import-not-found]
-
-
-def _build_orchestrator_server() -> FastMCP:
-    """Return a bare FastMCP for the orchestrator.
-
-    The server starts empty; ``install_sub_agents`` adds the
-    ``researcher_ask`` and ``writer_ask`` tools when the orchestrator
-    :class:`Agent` is constructed.  Leaving it empty here makes the
-    sub-agent registration the sole source of orchestrator-level
-    tools, which keeps the collision-detection code path exercised.
-    """
-    return FastMCP("orchestrator-server")
 
 
 @asynccontextmanager
@@ -57,7 +48,6 @@ async def orchestrator_factory() -> AsyncIterator[Agent]:
         await gateway as t0,
         Client(arxiv_server) as arxiv_client,
         Client(markdown_server) as markdown_client,
-        Client(_build_orchestrator_server()) as orchestrator_client,
     ):
         researcher = Agent(
             AgentConfig(
@@ -88,6 +78,9 @@ async def orchestrator_factory() -> AsyncIterator[Agent]:
                 tags={"example": "08_multi_agent", "role": "orchestrator"},
             ),
             t0=t0,
-            tool_provider=cast(Any, orchestrator_client),
+            # No tool_provider: the orchestrator has no MCP tools of
+            # its own.  Agent.__init__ auto-allocates a
+            # SubAgentToolProvider that exposes researcher_ask /
+            # writer_ask synthetically.
         )
         yield orchestrator
