@@ -209,17 +209,29 @@ spot in CI output.
   rejection branch still wasn't exercised.  Strict mechanism pinning
   lives in the offline `tests/test_guardrails/test_require_approval.py`.
 - **gpt-oss-20b sometimes emits malformed retry arguments** after a
-  tool failure (timeout, MCP error).  Groq's *own* server-side validator
-  rejects these with `400 Tool call validation failed`, which the
-  TensorZero gateway forwards as `502 TensorZeroError`.  Pinned by
-  `tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent`
-  and four sibling tests
-  (`test_run_agent_survives_failing_tool`, `test_run_agent_allows_llm_retry`,
-  `test_max_turns_raises_against_live_gateway`,
-  `test_none_description_tool_is_usable_end_to_end`): all catch
-  `TensorZeroError`, pattern-match the validation/`tool_use_failed`
-  fragment, and `pytest.skip`.  Any other `TensorZeroError` is
-  re-raised so a genuine regression is still loud.
+  tool failure (timeout, MCP error, auto-declined approval).  Groq's
+  *own* server-side validator rejects these with `400 Tool call
+  validation failed`, which the TensorZero gateway forwards as
+  `502 TensorZeroError`.  The framework's loop-level recovery logic
+  (`src/t0_agents/mcp/loop.py:369-377`) pattern-matches the
+  `"not in request.tools"` substring (the trailing fragment of
+  Groq's error text — see `RECOVERABLE_INFERENCE_PATTERNS` at
+  `src/t0_agents/mcp/loop.py:49-51`) and continues; if the model
+  keeps retrying with the same garbage, `MaxTurnsExceededError` is
+  raised instead of `TensorZeroError`.  Both shapes are handled by integration tests:
+  - `tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent`
+    and four sibling tests
+    (`test_run_agent_survives_failing_tool`, `test_run_agent_allows_llm_retry`,
+    `test_max_turns_raises_against_live_gateway`,
+    `test_none_description_tool_is_usable_end_to_end`) catch
+    `TensorZeroError`, pattern-match `"Tool call validation failed"`
+    or `"tool_use_failed"` via `e.text`, and `pytest.skip`.
+  - `tests/test_guardrails/test_integration.py::test_require_approval_auto_decline_surfaces_to_llm`
+    catches `MaxTurnsExceededError` and `pytest.skip`s because the
+    framework's loop recovers each malformed retry internally and
+    the test only sees the exhaustion at the end.
+  - Any other `TensorZeroError` is re-raised so a genuine regression
+    is still loud.
 - **gpt-oss-20b sometimes serialises tool calls as plain text** in the
   legacy OpenAI `{"function_call": {...}}` shape instead of emitting a
   structured `ToolCall` block.  The agent loop sees no tool call,
