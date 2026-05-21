@@ -213,10 +213,12 @@ spot in CI output.
   *own* server-side validator rejects these with `400 Tool call
   validation failed`, which the TensorZero gateway forwards as
   `502 TensorZeroError`.  The framework's loop-level recovery logic
-  (`src/t0_agents/mcp/loop.py:369-377`) catalogues this pattern as
-  recoverable and continues; if the model keeps retrying with the
-  same garbage, `MaxTurnsExceededError` is raised instead of
-  `TensorZeroError`.  Both shapes are handled by integration tests:
+  (`src/t0_agents/mcp/loop.py:369-377`) pattern-matches the
+  `"not in request.tools"` substring (the trailing fragment of
+  Groq's error text — see `RECOVERABLE_INFERENCE_PATTERNS` at
+  `src/t0_agents/mcp/loop.py:49-51`) and continues; if the model
+  keeps retrying with the same garbage, `MaxTurnsExceededError` is
+  raised instead of `TensorZeroError`.  Both shapes are handled by integration tests:
   - `tests/test_mcp/test_integration.py::test_tool_timeout_does_not_crash_run_agent`
     and four sibling tests
     (`test_run_agent_survives_failing_tool`, `test_run_agent_allows_llm_retry`,
