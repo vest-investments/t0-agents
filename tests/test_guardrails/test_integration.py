@@ -30,7 +30,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import GuardrailBlockedError
+from t0_agents.core.exceptions import GuardrailBlockedError, MaxTurnsExceededError
 from t0_agents.core.types import ToolProvider
 from t0_agents.guardrails import max_tool_calls, require_approval
 from tests.server import mcp
@@ -51,15 +51,26 @@ async def test_require_approval_auto_decline_surfaces_to_llm() -> None:
     The guardrail mechanism is pinned strictly by the offline unit tests
     in ``tests/test_guardrails/test_require_approval.py`` (driven by
     ``FakeT0``).  This integration test only proves the full live loop
-    surfaces the rejection back to the LLM when Groq actually invokes the
-    guarded tool.  Known flake against ``openai/gpt-oss-20b``: the model
-    occasionally short-circuits trivial arithmetic and returns the answer
-    as plain text without invoking ``add`` — in that run, the rejection
-    branch is never exercised.  We use non-trivial operands to keep the
-    model honest (mirrors ``test_tool_choice_forces_tool_call`` over in
-    ``tests/test_mcp/test_integration.py``) and ``pytest.skip`` when the
-    model still skips the tool, matching the rest of this suite's
-    Groq-flake convention.
+    surfaces the rejection back to the LLM when Groq actually invokes
+    the guarded tool.  Three known ``gpt-oss-20b`` flake paths are
+    skipped rather than asserted (matching the Groq-flake convention
+    shared by ``test_run_agent_survives_failing_tool`` and friends):
+
+    1. **No tool call this run** — the model occasionally answers the
+       arithmetic as plain text without invoking ``add``; the rejection
+       branch is never exercised.  Use non-trivial operands
+       (``1247 + 8932``) to keep the model honest, then
+       ``pytest.skip`` with the ``guardrail_log`` if it still happens.
+    2. **Max-turns exhaustion from malformed retry tool names** — after
+       an auto-declined tool result, gpt-oss-20b sometimes serialises
+       its retry with an invalid tool name (e.g. ``add<|channel|>commentary``)
+       that Groq's own validator rejects as ``Tool call validation
+       failed``.  The framework recovers the inference but the model
+       keeps retrying with the same garbage, eventually hitting
+       ``max_turns``.  At that point the run aborts before the
+       ``AgentResult`` lands, so the ``guardrail_log`` is no longer
+       reachable — ``pytest.skip`` since the rejection branch *may*
+       have been logged but the assertion target is gone.
     """
 
     async def _decline(
@@ -88,7 +99,20 @@ async def test_require_approval_auto_decline_surfaces_to_llm() -> None:
         # Non-trivial operands: gpt-oss-20b reliably memorises 2+3 and
         # answers "5" without a tool call.  1247+8932 is non-trivial
         # enough that the model needs the tool.
-        result = await agent.invoke("Use the add tool to compute 1247 + 8932.")
+        try:
+            result = await agent.invoke(
+                "Use the add tool to compute 1247 + 8932."
+            )
+        except MaxTurnsExceededError as e:
+            # Flake #2: model kept emitting malformed retry tool names
+            # after the auto-decline; the loop recovered each one but
+            # ran out of turns before the model produced a final text.
+            # The rejection branch may or may not have been logged before
+            # the abort — we can't inspect it from the exception.
+            pytest.skip(
+                "Groq gpt-oss-20b exhausted max_turns after the auto-"
+                f"decline (likely malformed retry tool names): {e}"
+            )
 
     assert result.response
     if not any(e.kind == "rejection" for e in result.guardrail_log):
