@@ -45,7 +45,6 @@ from tensorzero import (
     OrderBy,
     RawText,
     Text,
-    Thought,
     ToolCall,
     ToolResult,
 )
@@ -261,6 +260,14 @@ class TensorZeroMemory:
         replay verbatim (templates with arguments, file blocks, opaque
         unknown blocks) are dropped with a single warning per call so
         the model never sees a half-decoded message.
+
+        Assistant ``Thought`` blocks are dropped on this replay path —
+        they remain in the ClickHouse inference store, but re-feeding
+        them to the gateway both triggers groq's input-thought rejection
+        and grows the prompt without bound as the conversation deepens.
+        The drop is silent (no warning) because it is by design, not a
+        decode failure. A turn whose only content was a thought yields no
+        replayed message at all (it is skipped, never emitted empty).
         """
         request = ListInferencesRequest(
             function_name=self._function_name,
@@ -431,6 +438,10 @@ def _to_native_message(
     dropped and their ``type`` recorded in *skipped_kinds* for a
     single-line warning emitted by the caller.
 
+    ``Thought`` blocks are dropped on this replay path (they stay in
+    the store, never replayed) and are NOT recorded in *skipped_kinds*
+    — the drop is intentional, so no warning fires.
+
     Returns ``None`` when no convertible content survives, so the
     message is discarded entirely (no empty-content message in the
     output).
@@ -452,14 +463,8 @@ def _to_native_message(
                 ),
             )
         elif isinstance(block, StoredInputMessageContentThought):
-            converted.append(
-                Thought(
-                    text=getattr(block, "text", None),
-                    summary=getattr(block, "summary", None),
-                    signature=getattr(block, "signature", None),
-                    provider_type=getattr(block, "provider_type", None),
-                ),
-            )
+            # Strip-on-replay: kept in the store, never replayed (groq rejects + unbounded growth).
+            continue
         else:
             kind = getattr(block, "type", type(block).__name__)
             skipped_kinds.add(str(kind))
@@ -503,7 +508,12 @@ def _output_to_content_blocks(output: Any) -> list[Any]:
     The gateway stores chat outputs as
     ``list[ContentBlockChatOutput*]``; we round-trip them through the
     runtime types so they match what ``run_agent`` would have appended
-    on the assistant turn.  Non-chat blocks are skipped.
+    on the assistant turn.  Non-chat blocks are skipped, as are
+    ``Thought`` blocks — the same strip-on-replay rule as
+    :func:`_to_native_message` (see :meth:`TensorZeroMemory.load_history`):
+    thoughts stay in the store but are never replayed. A thought-only
+    output therefore yields ``[]`` and the caller appends no assistant
+    message.
     """
     if not isinstance(output, list):
         return []
@@ -528,15 +538,6 @@ def _output_to_content_blocks(output: Any) -> list[Any]:
                     raw_name=getattr(item, "name", "") or "",
                     arguments=parsed,
                     name=getattr(item, "name", None),
-                ),
-            )
-        elif getattr(item, "type", None) == "thought":
-            blocks.append(
-                Thought(
-                    text=getattr(item, "text", None),
-                    summary=getattr(item, "summary", None),
-                    signature=getattr(item, "signature", None),
-                    provider_type=getattr(item, "provider_type", None),
                 ),
             )
     return blocks

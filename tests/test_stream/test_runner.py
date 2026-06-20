@@ -8,23 +8,28 @@ import pytest
 from fastmcp.client.client import CallToolResult
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
-from tensorzero import AsyncTensorZeroGateway
+from tensorzero import AsyncTensorZeroGateway, Text, Thought
+from tensorzero.types import TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.stream.events import (
     DoneEvent,
+    ErrorEvent,
     TextDeltaEvent,
+    ThoughtDeltaEvent,
+    ThoughtEvent,
     ToolCallEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
-from t0_agents.stream.runner import StreamingAgentLoop
+from t0_agents.stream.runner import StreamingAgentLoop, _final_text
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import (
     FakeT0,
     chat_chunk,
     final_chunk,
     text_chunk,
+    thought_chunk,
     tool_call_chunk,
 )
 
@@ -259,3 +264,245 @@ async def test_streaming_loop_system_and_system_arguments_rejected() -> None:
         ):
             pass
     assert fake_t0.calls == []
+
+
+# ---------------------------------------------------------------------------
+# `_final_text` — text/thought fallback (parity with mcp/loop.py)
+# ---------------------------------------------------------------------------
+
+
+def test_final_text_prefers_text_over_thought() -> None:
+    """A ``Text`` block wins even when ``Thought`` content is present."""
+    blocks = [
+        Thought(text="hidden reasoning", summary=[ThoughtSummaryBlock(text="s")]),
+        Text(text="the answer"),
+    ]
+    assert _final_text(blocks) == ("the answer", "text")
+
+
+def test_final_text_mines_thought_summary() -> None:
+    """With no ``Text``, summary-only ``Thought`` content is mined and the
+    source is flagged ``"thought"`` (the new ``Thought.summary`` branch)."""
+    blocks = [
+        Thought(
+            text=None,
+            summary=[
+                ThoughtSummaryBlock(text="reasoned "),
+                ThoughtSummaryBlock(text="answer"),
+            ],
+        )
+    ]
+    assert _final_text(blocks) == ("reasoned \nanswer", "thought")
+
+
+def test_final_text_mines_thought_text_and_summary_together() -> None:
+    """Raw ``Thought.text`` and ``Thought.summary[*].text`` are both mined."""
+    blocks = [
+        Thought(
+            text="raw thought",
+            summary=[ThoughtSummaryBlock(text="summary tail")],
+        )
+    ]
+    assert _final_text(blocks) == ("raw thought\nsummary tail", "thought")
+
+
+def test_final_text_empty_blocks_returns_empty_text_source() -> None:
+    """No content at all → empty string with the default ``"text"`` source."""
+    assert _final_text([]) == ("", "text")
+
+
+def test_final_text_skips_non_thought_blocks() -> None:
+    """Non-``Thought`` blocks are skipped while mining the fallback — an empty
+    ``Text`` block contributes nothing, the ``Thought`` supplies the answer."""
+    blocks = [Text(text=""), Thought(text="answer")]
+    assert _final_text(blocks) == ("answer", "thought")
+
+
+# ---------------------------------------------------------------------------
+# Thought-only final turn — framework boundary (assembler → runner)
+# ---------------------------------------------------------------------------
+
+
+async def test_streaming_loop_thought_only_summary_yields_response() -> None:
+    """AC2 boundary: a turn whose ONLY content is a reasoning summary
+    (gpt-oss harmony analysis channel via ``summary_text``) drives a
+    non-empty thought-sourced response through the full assembler→runner
+    boundary, so the projector is never handed silence."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [thought_chunk(summary_text="the reasoned answer", block_id="r1")]
+                ),
+                final_chunk(),
+            ]
+        ],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    events = [
+        ev
+        async for ev in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        )
+    ]
+
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "the reasoned answer"
+    assert done[0].result.response_source == "thought"
+
+
+async def test_streaming_loop_thought_only_raw_text_yields_response() -> None:
+    """AC2 boundary: a thought-only turn carrying raw ``text`` (analysis
+    channel, no ``final`` channel) still yields a non-empty thought-sourced
+    response rather than an empty bubble."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [thought_chunk(text="raw analysis answer", block_id="th1")]
+                ),
+                final_chunk(),
+            ]
+        ],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    events = [
+        ev
+        async for ev in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        )
+    ]
+
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "raw analysis answer"
+    assert done[0].result.response_source == "thought"
+
+
+async def test_streaming_loop_still_emits_thought_events_for_devui() -> None:
+    """DevUI no-regression: a thought+text turn still surfaces
+    ThoughtDeltaEvent/ThoughtEvent so the cli/tui devui surface keeps
+    rendering reasoning — the final response is the ``Text`` block and the
+    ``_final_text`` change does not suppress thought events."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([thought_chunk(text="my reasoning", block_id="th1")]),
+                chat_chunk([text_chunk("final answer", block_id="t1")]),
+                final_chunk(),
+            ]
+        ],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    events = [
+        ev
+        async for ev in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        )
+    ]
+
+    thought_deltas = [e for e in events if isinstance(e, ThoughtDeltaEvent)]
+    thought_ends = [e for e in events if isinstance(e, ThoughtEvent)]
+    assert [d.delta for d in thought_deltas] == ["my reasoning"]
+    assert len(thought_ends) == 1
+    assert thought_ends[0].text == "my reasoning"
+
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "final answer"
+    assert done[0].result.response_source == "text"
+
+
+# ---------------------------------------------------------------------------
+# Recoverable inference errors — parity with run_agent's corrective retry
+# ---------------------------------------------------------------------------
+
+
+async def test_streaming_loop_recovers_from_recoverable_error() -> None:
+    """A recoverable ``TensorZeroError`` (bad tool name, status 400) is caught,
+    a corrective turn is injected, and the loop recovers to a final answer —
+    parity with the non-streaming ``run_agent`` recoverable contract."""
+    fake_t0 = FakeT0(
+        responses=[
+            TensorZeroError(status_code=400, text="tool 'x' not in request.tools"),
+            [
+                chat_chunk([text_chunk("recovered answer", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    events = [
+        ev
+        async for ev in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        )
+    ]
+
+    errors = [e for e in events if isinstance(e, ErrorEvent)]
+    assert any("recoverable" in (e.message or "") for e in errors)
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "recovered answer"
+    assert any(
+        i.startswith("error-recoverable-turn-")
+        for i in done[0].result.inference_ids
+    )
+
+
+async def test_streaming_loop_reraises_non_recoverable_error() -> None:
+    """A non-recoverable status code (500) is re-raised, never retried."""
+    fake_t0 = FakeT0(
+        responses=[TensorZeroError(status_code=500, text="internal boom")],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    with pytest.raises(TensorZeroError):
+        async for _ in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        ):
+            pass
+
+
+async def test_streaming_loop_reraises_recoverable_status_empty_text() -> None:
+    """A recoverable status (400) with no error text is NOT retried — the
+    pattern match needs text, so the error propagates."""
+    fake_t0 = FakeT0(
+        responses=[TensorZeroError(status_code=400, text="")],
+    )
+    fake_client = FakeMCPClient(tools=[])
+
+    runner = StreamingAgentLoop()
+    with pytest.raises(TensorZeroError):
+        async for _ in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "Q?",
+            "agent",
+        ):
+            pass
