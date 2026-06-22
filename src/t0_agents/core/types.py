@@ -296,6 +296,85 @@ class AgentResult(Generic[T]):
 
 
 @dataclass(frozen=True, slots=True)
+class Usage:
+    """One inference's token usage — a lossless mirror of ``tensorzero.Usage``.
+
+    Where :class:`RunUsage` is the *cumulative* aggregate over a whole
+    :class:`~t0_agents.core.run.Run`, ``Usage`` is the *per-inference*
+    record captured by
+    :class:`~t0_agents.core.middleware.CostTrackingMiddleware` on each
+    ``on_inference`` callback.  It is the element type of
+    :meth:`~t0_agents.core.run.Run.usages` and the return type of
+    :meth:`~t0_agents.core.run.Run.context_footprint`.
+
+    "Lossless" means the three optional fields keep their ``None`` rather
+    than collapsing to ``0`` the way :class:`RunUsage` does for summing:
+    a ``None`` ``cost`` means "the provider did not price this call",
+    distinct from a real ``0.0``.
+
+    The fields mirror ``tensorzero.types.Usage`` exactly; the type is
+    re-derived here (rather than re-exporting the SDK dataclass) so the
+    public surface does not depend on the tensorzero type.  The name
+    deliberately parallels ``tensorzero.Usage`` — ``core/structured.py``
+    imports the SDK type under the same name within its own module, with
+    no collision.
+
+    Fields:
+        input_tokens: Prompt tokens for this inference — for a chat turn,
+            roughly the full conversation re-sent.  ``0`` on a
+            cache-served turn (a whole-response cache hit), which is why
+            :meth:`~t0_agents.core.run.Run.context_footprint` skips zeros.
+        output_tokens: Completion tokens generated.
+        provider_cache_read_input_tokens: Prompt tokens served from the
+            provider's prompt cache (a subset of ``input_tokens``), or
+            ``None`` when the provider does not report it (e.g. Groq).
+        provider_cache_write_input_tokens: Prompt tokens written to the
+            provider's prompt cache, or ``None``.
+        cost: Provider-reported cost (USD) for this inference, or ``None``
+            when unpriced (short-hand models / no ``cost`` config).
+    """
+
+    input_tokens: int
+    output_tokens: int
+    provider_cache_read_input_tokens: int | None = None
+    provider_cache_write_input_tokens: int | None = None
+    cost: float | None = None
+
+    @classmethod
+    def from_tz(cls, usage: Any) -> Usage:
+        """Build a :class:`Usage` from a ``tensorzero.Usage`` (duck-typed).
+
+        Reads fields via ``getattr`` so any object exposing the same
+        attribute names works: the ``on_inference`` callback receives a
+        ``ChatInferenceResponse`` / ``JsonInferenceResponse`` whose
+        ``.usage`` is the SDK dataclass, and tests pass a stand-in.  The
+        two required token counts coerce ``None`` → ``0``; the three
+        optional fields are copied verbatim to stay lossless.
+        """
+        return cls(
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            provider_cache_read_input_tokens=getattr(
+                usage, "provider_cache_read_input_tokens", None
+            ),
+            provider_cache_write_input_tokens=getattr(
+                usage, "provider_cache_write_input_tokens", None
+            ),
+            cost=getattr(usage, "cost", None),
+        )
+
+    @property
+    def total_tokens(self) -> int:
+        """``input_tokens + output_tokens``.
+
+        The two ``provider_cache_*`` fields are a *breakdown* of
+        ``input_tokens`` (cached vs fresh prompt tokens), not additional
+        tokens, so they are not part of the total.
+        """
+        return self.input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True, slots=True)
 class RunUsage:
     """Cumulative usage totals across every inference in a :class:`Run`.
 
@@ -312,8 +391,17 @@ class RunUsage:
         output_tokens: Sum of ``response.usage.output_tokens``.
         cost: Sum of ``response.usage.cost`` (treats ``None`` as ``0.0``
             — local providers may omit pricing).
+        provider_cache_read_input_tokens: Sum of the per-inference
+            ``provider_cache_read_input_tokens`` (``None`` treated as
+            ``0``) — the portion of the prompt served from the provider's
+            cache.
+        provider_cache_write_input_tokens: Sum of the per-inference
+            ``provider_cache_write_input_tokens`` (``None`` treated as
+            ``0``).
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float = 0.0
+    provider_cache_read_input_tokens: int = 0
+    provider_cache_write_input_tokens: int = 0

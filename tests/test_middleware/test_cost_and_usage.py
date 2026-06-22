@@ -15,10 +15,11 @@ from uuid import UUID
 
 from tensorzero import AsyncTensorZeroGateway
 from tensorzero.types import Text
+from tensorzero.types import Usage as TZUsage
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.types import RunUsage, ToolProvider
+from t0_agents.core.types import RunUsage, ToolProvider, Usage
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
 
@@ -231,6 +232,13 @@ class TestRunUsageType:
         assert u.output_tokens == 0
         assert u.cost == 0.0
 
+    def test_runusage_cache_fields_default_zero(self) -> None:
+        # New cache fields are additive + defaulted, so v1.0 construction
+        # (no cache kwargs) stays valid and back-compatible.
+        u = RunUsage()
+        assert u.provider_cache_read_input_tokens == 0
+        assert u.provider_cache_write_input_tokens == 0
+
     def test_runusage_is_frozen(self) -> None:
         u = RunUsage(input_tokens=1, output_tokens=2, cost=0.5)
         # frozen=True ⇒ mutation raises FrozenInstanceError.
@@ -242,5 +250,53 @@ class TestRunUsageType:
             return
         # pragma: no cover — defensive fallback if behaviour changes
         raise AssertionError("RunUsage should be frozen")
+
+
+class TestUsageValueType:
+    """``Usage`` is the per-inference lossless mirror of ``tensorzero.Usage``."""
+
+    def test_from_tz_copies_all_fields(self) -> None:
+        raw = TZUsage(
+            input_tokens=10,
+            output_tokens=5,
+            provider_cache_read_input_tokens=3,
+            provider_cache_write_input_tokens=1,
+            cost=0.5,
+        )
+        u = Usage.from_tz(raw)
+        assert u.input_tokens == 10
+        assert u.output_tokens == 5
+        assert u.provider_cache_read_input_tokens == 3
+        assert u.provider_cache_write_input_tokens == 1
+        assert u.cost == 0.5
+
+    def test_from_tz_is_lossless_for_none(self) -> None:
+        # cache fields + cost default to None on the SDK type; the mirror
+        # must preserve None (distinct from a real 0 / 0.0).
+        raw = TZUsage(input_tokens=0, output_tokens=0)
+        u = Usage.from_tz(raw)
+        assert u.cost is None
+        assert u.provider_cache_read_input_tokens is None
+        assert u.provider_cache_write_input_tokens is None
+
+    def test_total_tokens_excludes_cache_breakdown(self) -> None:
+        u = Usage(
+            input_tokens=7,
+            output_tokens=3,
+            provider_cache_read_input_tokens=5,
+        )
+        # cache tokens are a breakdown of input_tokens, not an addend.
+        assert u.total_tokens == 10
+
+    def test_usage_is_frozen(self) -> None:
+        import dataclasses
+
+        u = Usage(input_tokens=1, output_tokens=1)
+        try:
+            u.input_tokens = 99  # type: ignore[misc]
+        except dataclasses.FrozenInstanceError:
+            return
+        # pragma: no cover — defensive fallback if behaviour changes
+        raise AssertionError("Usage should be frozen")
 
 
