@@ -439,13 +439,14 @@ def encode_usage_meta(usage: RunUsage) -> dict[str, Any]:
 def decode_usage_meta(meta: dict[str, Any] | None) -> RunUsage | None:
     """Recover a :class:`RunUsage` from a ``CallToolResult.meta``, or ``None``.
 
-    Returns ``None`` when ``meta`` is empty/``None``, lacks
+    Returns ``None`` when ``meta`` is ``None`` or not a mapping, lacks
     :data:`USAGE_META_KEY`, or carries a payload that is not a mapping — so a
-    tool result without (or with foreign) ``meta`` folds nothing rather than
-    raising.  Unknown payload keys are ignored and missing ones fall back to the
-    :class:`RunUsage` defaults, keeping decode tolerant of version skew.
+    tool result without (or with foreign / malformed) ``meta`` folds nothing
+    rather than raising.  Unknown payload keys are ignored and missing ones fall
+    back to the :class:`RunUsage` defaults, keeping decode tolerant of version
+    skew.
     """
-    if not meta:
+    if not isinstance(meta, dict):
         return None
     payload = meta.get(USAGE_META_KEY)
     if not isinstance(payload, dict):

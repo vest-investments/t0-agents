@@ -45,9 +45,11 @@ class ConversationUsage:
     Run as it completes::
 
         conv = ConversationUsage(episode_id)
-        run1 = await agent.invoke("hello", episode_id=episode_id).result()
+        run1 = agent.invoke("hello", episode_id=episode_id)
+        await run1.result()
         conv.record(run1)
-        run2 = await agent.invoke("more", episode_id=episode_id).result()
+        run2 = agent.invoke("more", episode_id=episode_id)
+        await run2.result()
         conv.record(run2)
 
         conv.total.input_tokens      # billing: run1 + run2 input tokens

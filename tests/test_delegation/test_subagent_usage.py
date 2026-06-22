@@ -124,6 +124,11 @@ class TestUsageMetaCodec:
     def test_non_mapping_payload_decodes_to_none(self, payload: Any) -> None:
         assert decode_usage_meta({USAGE_META_KEY: payload}) is None
 
+    @pytest.mark.parametrize("meta", [[1, 2], "nope", 123])
+    def test_non_dict_meta_decodes_to_none(self, meta: Any) -> None:
+        # A truthy non-dict ``meta`` must fold to None, not raise AttributeError.
+        assert decode_usage_meta(meta) is None
+
     def test_unknown_keys_ignored_and_missing_default(self) -> None:
         decoded = decode_usage_meta(
             {USAGE_META_KEY: {"input_tokens": 7, "future_field": 99}}
