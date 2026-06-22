@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,7 +59,7 @@ async def test_sse_streams_events_until_done(
             [
                 chat_chunk([text_chunk("hola ", block_id="t1")]),
                 chat_chunk([text_chunk("mundo", block_id="t1")]),
-                final_chunk(),
+                final_chunk(input_tokens=120, output_tokens=8),
             ]
         ]
     )
@@ -101,11 +102,27 @@ async def test_sse_streams_events_until_done(
     )
     assert done_payload["type"] == "done"
     assert done_payload["result"]["response"] == "hola mundo"
+    # Additive usage block on the done frame; the `result` projection above is
+    # unchanged. SSE is single-invoke, so there is no per-session block.
+    usage = done_payload["usage"]
+    assert usage is not None
+    assert usage["footprint"]["input_tokens"] == 120
+    assert usage["footprint"]["output_tokens"] == 8
+    assert usage["cumulative"]["input_tokens"] == 120
+    assert usage["session"] is None
 
 
 # -------------------------------------------------------------------------
 # WebSocket
 # -------------------------------------------------------------------------
+
+
+def _drain_to_done(ws: Any) -> dict[str, Any]:
+    """Read WS frames until the terminal ``done`` frame, which is returned."""
+    while True:
+        frame = ws.receive_json()
+        if frame["type"] == "done":
+            return frame
 
 
 def test_ws_streams_events_and_closes_cleanly(
@@ -115,7 +132,7 @@ def test_ws_streams_events_and_closes_cleanly(
         responses=[
             [
                 chat_chunk([text_chunk("¡listo!", block_id="t1")]),
-                final_chunk(),
+                final_chunk(input_tokens=90, output_tokens=6),
             ]
         ]
     )
@@ -147,6 +164,68 @@ def test_ws_streams_events_and_closes_cleanly(
     assert "turn_end" in types
     assert types[-1] == "done"
     assert collected[-1]["result"]["response"] == "¡listo!"
+    # Additive usage block; `result` keys unchanged. WS carries the per-session
+    # running total — one turn so far, so total == footprint.
+    usage = collected[-1]["usage"]
+    assert usage is not None
+    assert usage["footprint"]["input_tokens"] == 90
+    assert usage["cumulative"]["input_tokens"] == 90
+    assert usage["session"]["total"]["input_tokens"] == 90
+    assert usage["session"]["runs_recorded"] == 1
+
+
+def test_ws_session_usage_accumulates_across_turns(
+    elicitation_client_factory: Callable[[Any], FakeFastMCPClient],
+) -> None:
+    """Two turns on one socket sharing an episode: footprint tracks the latest
+    prompt size (a level) while the per-session billing total accumulates."""
+    episode = uuid4()
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("turn one", block_id="t1")]),
+                final_chunk(input_tokens=100, output_tokens=10, episode_id=episode),
+            ],
+            [
+                chat_chunk([text_chunk("turn two", block_id="t1")]),
+                final_chunk(input_tokens=250, output_tokens=20, episode_id=episode),
+            ],
+        ]
+    )
+    agent = Agent(
+        AgentConfig(name="ws-accum", function_name="agent"),
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=FakeFastMCPClient(),
+    )
+    app = create_app(
+        agent,
+        client_factory=lambda: FakeFastMCPClient(),
+        elicitation_client_factory=elicitation_client_factory,
+        streaming=True,
+    )
+
+    client = TestClient(app)
+    with client.websocket_connect("/chat/ws") as ws:
+        ws.send_json(
+            {"type": "user_message", "message": "uno", "episode_id": str(episode)},
+        )
+        done1 = _drain_to_done(ws)
+        ws.send_json(
+            {"type": "user_message", "message": "dos", "episode_id": str(episode)},
+        )
+        done2 = _drain_to_done(ws)
+
+    u1, u2 = done1["usage"], done2["usage"]
+    # Per-turn footprint is a level — the latest prompt size, not a sum.
+    assert u1["footprint"]["input_tokens"] == 100
+    assert u2["footprint"]["input_tokens"] == 250
+    # Per-session billing total accumulates across both turns of the episode.
+    assert u1["session"]["total"]["input_tokens"] == 100
+    assert u1["session"]["runs_recorded"] == 1
+    assert u2["session"]["total"]["input_tokens"] == 350  # 100 + 250
+    assert u2["session"]["runs_recorded"] == 2
+    # Session footprint is the latest level, not the accumulated sum.
+    assert u2["session"]["footprint"]["input_tokens"] == 250
 
 
 async def test_sse_tags_query_param_reaches_gateway(
