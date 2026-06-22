@@ -64,6 +64,7 @@ from t0_agents.core.types import (
     MemoryProvider,
     RunUsage,
     ToolProvider,
+    Usage,
 )
 from t0_agents.guardrails.base import GuardrailContext
 from t0_agents.guardrails.runtime import GuardedToolProvider
@@ -358,6 +359,8 @@ class _CumulativeUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float = 0.0
+    provider_cache_read_input_tokens: int = 0
+    provider_cache_write_input_tokens: int = 0
 
 
 class CostTrackingMiddleware:
@@ -382,14 +385,29 @@ class CostTrackingMiddleware:
     async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         usage_acc = _CumulativeUsage()
         ctx.extras["cumulative_usage"] = usage_acc
+        # Per-inference usages in order — the raw material for the live
+        # context footprint (latest non-zero turn) that ``usage()`` cannot
+        # provide because it sums.  Exposed on ``ctx.extras`` alongside
+        # ``cumulative_usage`` so other middlewares / observability hooks
+        # can read it mid-run.
+        usages: list[Usage] = []
+        ctx.extras["usages"] = usages
 
         async def _tracker(response: Any) -> None:
-            usage = getattr(response, "usage", None)
-            if usage is None:
+            raw = getattr(response, "usage", None)
+            if raw is None:
                 return
-            usage_acc.input_tokens += getattr(usage, "input_tokens", 0) or 0
-            usage_acc.output_tokens += getattr(usage, "output_tokens", 0) or 0
-            usage_acc.cost += getattr(usage, "cost", 0.0) or 0.0
+            usage = Usage.from_tz(raw)
+            usages.append(usage)
+            usage_acc.input_tokens += usage.input_tokens
+            usage_acc.output_tokens += usage.output_tokens
+            usage_acc.provider_cache_read_input_tokens += (
+                usage.provider_cache_read_input_tokens or 0
+            )
+            usage_acc.provider_cache_write_input_tokens += (
+                usage.provider_cache_write_input_tokens or 0
+            )
+            usage_acc.cost += usage.cost or 0.0
 
         ctx.chain_on_inference(_tracker)
 
@@ -407,9 +425,16 @@ class CostTrackingMiddleware:
                     input_tokens=usage_acc.input_tokens,
                     output_tokens=usage_acc.output_tokens,
                     cost=usage_acc.cost,
+                    provider_cache_read_input_tokens=(
+                        usage_acc.provider_cache_read_input_tokens
+                    ),
+                    provider_cache_write_input_tokens=(
+                        usage_acc.provider_cache_write_input_tokens
+                    ),
                 )
                 ctx.run._set_cost(usage_acc.cost)
                 ctx.run._set_usage(snapshot)
+                ctx.run._set_usages(tuple(usages))
 
 
 # ---------------------------------------------------------------------------

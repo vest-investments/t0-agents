@@ -110,6 +110,37 @@ class TestMissingPricing:
         assert usage.output_tokens == 2
 
 
+class TestCacheTokensTracked:
+    """Prompt-cache tokens fold into the cumulative ``RunUsage``."""
+
+    async def test_single_inference_cache_tokens_captured(self) -> None:
+        t0 = FakeT0(
+            [
+                FakeChatResponse(
+                    content=[Text(type="text", text="cached")],
+                    usage=FakeUsage(
+                        input_tokens=100,
+                        output_tokens=10,
+                        cost=0.005,
+                        provider_cache_read_input_tokens=80,
+                        provider_cache_write_input_tokens=20,
+                    ),
+                ),
+            ],
+        )
+        agent = _build_agent(t0)
+
+        run = agent.invoke("hi")
+        await run.result()
+
+        usage = run.usage()
+        assert isinstance(usage, RunUsage)
+        assert usage.provider_cache_read_input_tokens == 80
+        assert usage.provider_cache_write_input_tokens == 20
+        # Cache tokens are a breakdown of input_tokens, not added to it.
+        assert usage.input_tokens == 100
+
+
 class TestExplicitNoMiddleware:
     """``middleware=[]`` opts out of cost-tracking — placeholders stay zero."""
 
@@ -168,14 +199,21 @@ class TestMultipleInferencesAccumulate:
                     content=[tool_call],
                     episode_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
                     usage=FakeUsage(
-                        input_tokens=10, output_tokens=5, cost=0.001,
+                        input_tokens=10,
+                        output_tokens=5,
+                        cost=0.001,
+                        provider_cache_read_input_tokens=4,
                     ),
                 ),
                 FakeChatResponse(
                     content=[Text(type="text", text="3")],
                     episode_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
                     usage=FakeUsage(
-                        input_tokens=20, output_tokens=2, cost=0.002,
+                        input_tokens=20,
+                        output_tokens=2,
+                        cost=0.002,
+                        provider_cache_read_input_tokens=8,
+                        provider_cache_write_input_tokens=3,
                     ),
                 ),
             ],
@@ -221,6 +259,9 @@ class TestMultipleInferencesAccumulate:
         assert usage.input_tokens == 30
         assert usage.output_tokens == 7
         assert abs(usage.cost - 0.003) < 1e-9
+        # Cache tokens accumulate across turns just like input/output.
+        assert usage.provider_cache_read_input_tokens == 12  # 4 + 8
+        assert usage.provider_cache_write_input_tokens == 3  # 0 + 3
 
 
 class TestRunUsageType:

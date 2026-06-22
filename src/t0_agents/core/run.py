@@ -34,7 +34,7 @@ from t0_agents.core.exceptions import (
 )
 from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
-from t0_agents.core.types import AgentResult, RunUsage
+from t0_agents.core.types import AgentResult, RunUsage, Usage
 from t0_agents.stream.events import AgentEvent, DoneEvent, TextDeltaEvent
 
 if TYPE_CHECKING:
@@ -127,10 +127,13 @@ class Run(Generic[T]):
         self._episode_id: str | None = input_.episode_id
         self._inference_ids: tuple[str, ...] = ()
         self._final_response: str = ""
-        # Cost / usage totals — written by
-        # ``CostTrackingMiddleware`` via ``_set_cost`` / ``_set_usage``.
+        # Cost / usage totals — written by ``CostTrackingMiddleware`` via
+        # ``_set_cost`` / ``_set_usage``.  ``_usages`` is the per-inference
+        # list (written via ``_set_usages``) that backs the live context
+        # footprint, distinct from the summing ``_usage`` aggregate.
         self._cost: float = 0.0
         self._usage: RunUsage | None = None
+        self._usages: tuple[Usage, ...] = ()
         if eager:
             self._start()
 
@@ -641,6 +644,14 @@ class Run(Generic[T]):
     def _set_usage(self, usage: RunUsage) -> None:
         """Private setter used by :class:`CostTrackingMiddleware`."""
         self._usage = usage
+
+    def _set_usages(self, usages: tuple[Usage, ...]) -> None:
+        """Private setter for the per-inference usage list.
+
+        Written by :class:`CostTrackingMiddleware` after the chain
+        unwinds; read by :meth:`usages` / :meth:`context_footprint`.
+        """
+        self._usages = usages
 
 
 def build_run_input(
