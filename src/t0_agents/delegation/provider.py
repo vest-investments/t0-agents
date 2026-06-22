@@ -35,7 +35,7 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from t0_agents.core.exceptions import SubAgentError, T0AgentsFatalError
-from t0_agents.core.types import ToolProvider
+from t0_agents.core.types import ToolProvider, encode_usage_meta
 from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
     get_parent_episode_id,
@@ -159,7 +159,8 @@ class SubAgentToolProvider:
         parent_episode_id = get_parent_episode_id() or "unknown"
         delegation_tags = {PARENT_EPISODE_ID_TAG: parent_episode_id}
         try:
-            result = await sub_agent.invoke(message, tags=delegation_tags).result()
+            child_run = sub_agent.invoke(message, tags=delegation_tags)
+            result = await child_run.result()
         except T0AgentsFatalError:
             raise
         except Exception as exc:
@@ -167,10 +168,19 @@ class SubAgentToolProvider:
                 f"Sub-agent {sub_agent.config.name!r} failed: {exc}"
             ) from exc
 
+        # Carry the child's billing usage home on ``meta`` so the orchestrator's
+        # CostTrackingMiddleware can roll it into the parent Run.  ``None`` until
+        # the child produced an inference (or when its cost-tracking was opted
+        # out).  Only *billing* travels up — the parent's context footprint
+        # stays its own, since the child ran in a separate context window.
+        child_usage = child_run.usage()
+        meta = (
+            encode_usage_meta(child_usage) if child_usage is not None else None
+        )
         return CallToolResult(
             content=[TextContent(type="text", text=result.response)],
             structured_content=None,
-            meta=None,
+            meta=meta,
             data=None,
             is_error=False,
         )
