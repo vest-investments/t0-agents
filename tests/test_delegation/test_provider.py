@@ -62,6 +62,9 @@ def _spy_sub_agent(name: str = "researcher") -> Agent:
             turns=1,
         ),
     )
+    # provider.call_tool now reads child_run.usage() to attach billing to the
+    # result's meta; the spy has no real Run, so report "no usage" (meta=None).
+    mock_run.usage = MagicMock(return_value=None)
     sub.invoke = MagicMock(return_value=mock_run)  # type: ignore[method-assign]
     return sub
 

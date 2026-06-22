@@ -18,7 +18,7 @@ from typing import Any, cast
 
 import pytest
 from tensorzero import AsyncTensorZeroGateway
-from tensorzero.types import Text
+from tensorzero.types import Text, ToolCall
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
@@ -129,3 +129,90 @@ class TestUsageMetaCodec:
             {USAGE_META_KEY: {"input_tokens": 7, "future_field": 99}}
         )
         assert decoded == RunUsage(input_tokens=7)
+
+
+def _orchestrator(child: Agent, turn1: FakeUsage, turn2: FakeUsage) -> Agent:
+    """A parent that delegates to ``child`` on turn 1, then answers on turn 2.
+
+    Turn 1 is a tool call to the child's synthetic tool (so the loop dispatches
+    the sub-agent); turn 2 is text (so the loop ends).
+    """
+    child_tool = default_tool_name(child)
+    parent_t0 = FakeT0(
+        [
+            FakeChatResponse(
+                content=[
+                    ToolCall(
+                        id="tc-1",
+                        raw_name=child_tool,
+                        name=child_tool,
+                        raw_arguments='{"message": "go"}',
+                        arguments={"message": "go"},
+                    ),
+                ],
+                usage=turn1,
+            ),
+            FakeChatResponse(
+                content=[Text(type="text", text="final")], usage=turn2,
+            ),
+        ],
+    )
+    return Agent(
+        AgentConfig(name="orch", function_name="orch_fn", sub_agents=[child]),
+        t0=cast(AsyncTensorZeroGateway, parent_t0),
+        tool_provider=None,
+    )
+
+
+class TestParentBillingRollup:
+    """The orchestrator-side fold (acceptance §7): billing up, footprint not."""
+
+    async def test_parent_usage_includes_child_footprint_excludes(self) -> None:
+        child = _sub_agent_with_usage(
+            FakeUsage(input_tokens=30, output_tokens=5, cost=0.003),
+        )
+        parent = _orchestrator(
+            child,
+            FakeUsage(input_tokens=100, output_tokens=10, cost=0.01),
+            FakeUsage(input_tokens=120, output_tokens=8, cost=0.012),
+        )
+
+        run = parent.invoke("delegate please")
+        result = await run.result()
+        assert result.response == "final"
+
+        usage = run.usage()
+        assert usage is not None
+        # Billing rolls up: parent turns (100 + 120) PLUS the child's 30.
+        # If the child were excluded this would be 220 — the +30 is the proof.
+        assert usage.input_tokens == 250
+        assert usage.output_tokens == 23
+        assert usage.cost == pytest.approx(0.025)
+
+        # Footprint stays parent-only: the parent's latest turn (120), neither
+        # the billing sum (250) nor inflated by the child's 30-token prompt.
+        footprint = run.context_footprint()
+        assert footprint is not None
+        assert footprint.input_tokens == 120
+
+    async def test_child_priced_flag_rolls_up_to_unpriced_parent(self) -> None:
+        # Child reports a real $0.00 (priced); both parent turns are unpriced.
+        child = _sub_agent_with_usage(
+            FakeUsage(input_tokens=10, output_tokens=2, cost=0.0),
+        )
+        parent = _orchestrator(
+            child,
+            FakeUsage(input_tokens=50, output_tokens=5, cost=None),
+            FakeUsage(input_tokens=60, output_tokens=4, cost=None),
+        )
+
+        run = parent.invoke("go")
+        await run.result()
+
+        usage = run.usage()
+        assert usage is not None
+        # The child's priced $0.00 makes the whole run priced (OR rolls up).
+        assert usage.cost_is_priced is True
+        assert usage.cost == pytest.approx(0.0)
+        # Billing tokens still include the child (50 + 60 + 10).
+        assert usage.input_tokens == 120

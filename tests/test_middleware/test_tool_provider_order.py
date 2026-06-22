@@ -7,14 +7,19 @@ sub-agent delegations as tool calls.  Post-refactor the wiring is:
   construction time and stores it on ``self._tool_provider``.
 - The middleware chain (``Memory → SubAgents → Guardrails → ...``) runs
   with ``ctx.tool_provider`` initialised from ``self._tool_provider``.
-- :class:`GuardrailsMiddleware` is the only middleware that *still*
-  wraps the provider — :class:`SubAgentMiddleware` is now ContextVar-only
-  and never touches ``ctx.tool_provider``.
+- :class:`GuardrailsMiddleware` wraps the provider with
+  :class:`GuardedToolProvider`; :class:`SubAgentMiddleware` is now
+  ContextVar-only and never touches ``ctx.tool_provider``.
+- :class:`CostTrackingMiddleware` (always-on, running *inside* Guardrails)
+  then wraps with its ``_UsageRollupToolProvider`` so a delegated sub-agent's
+  billing — carried home on the tool result's ``meta`` — folds into the
+  parent Run.
 
 Concretely: at terminal time ``ctx.tool_provider`` is a
-:class:`GuardedToolProvider` wrapping the auto-allocated
-:class:`SubAgentToolProvider`.  Without guardrails it is the bare
-:class:`SubAgentToolProvider`.
+``_UsageRollupToolProvider`` wrapping a :class:`GuardedToolProvider` wrapping
+the auto-allocated :class:`SubAgentToolProvider`.  Without guardrails the
+Guarded layer is absent and the rollup wraps the
+:class:`SubAgentToolProvider` directly.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.middleware.base import Middleware, RunContext
+from t0_agents.core.middleware.builtins import _UsageRollupToolProvider
 from t0_agents.core.types import AgentResult, Guardrail, ToolProvider
 from t0_agents.delegation.provider import SubAgentToolProvider
 from t0_agents.guardrails.runtime import GuardedToolProvider
@@ -116,63 +122,68 @@ def _build_orchestrator(
 
 
 class TestToolProviderWrapOrder:
-    async def test_guardrails_wraps_sub_agent_provider_outermost(self) -> None:
+    async def test_usage_rollup_wraps_guarded_outermost(self) -> None:
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=True)
 
         await agent.invoke("delegate").result()
 
-        # OUTER wrap (what the terminal sees at ctx.tool_provider) is
-        # GuardedToolProvider — guardrails fire before any tool call,
-        # including sub-agent delegations.
-        assert isinstance(inspector.seen_tool_provider, GuardedToolProvider)
+        # OUTER wrap (what the terminal sees at ctx.tool_provider) is the
+        # always-on usage rollup; it wraps the GuardedToolProvider, so
+        # guardrails still fire before any tool call, including sub-agent
+        # delegations.
+        outer = inspector.seen_tool_provider
+        assert isinstance(outer, _UsageRollupToolProvider)
+        assert isinstance(outer._inner, GuardedToolProvider)
 
     async def test_guarded_wraps_sub_agent_provider(self) -> None:
-        # Direct structural check via the GuardedToolProvider's
+        # Direct structural check, peeling the rollup then the guard via the
         # ``_inner`` attribute (private but stable contract).
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=True)
 
         await agent.invoke("delegate").result()
 
-        guarded = inspector.seen_tool_provider
+        outer = inspector.seen_tool_provider
+        assert isinstance(outer, _UsageRollupToolProvider)
+        guarded = outer._inner
         assert isinstance(guarded, GuardedToolProvider)
-        # Peek at the wrapped provider — should be the auto-allocated
-        # SubAgentToolProvider, NOT the bare client.
+        # Innermost wrapped provider is the auto-allocated SubAgentToolProvider,
+        # NOT the bare client.
         inner = getattr(guarded, "_inner", None)
         assert isinstance(inner, SubAgentToolProvider)
 
-    async def test_stack_records_sub_agent_provider_inside_guardrails(
+    async def test_stack_records_guarded_inside_usage_rollup(
         self,
     ) -> None:
-        # ``_tool_provider_stack`` is the audit trail of prior providers
-        # in chain order.  Post-refactor only Guardrails wraps; the
-        # SubAgentToolProvider is already on the agent itself and never
-        # gets replaced mid-chain.  So the stack length is 1 (the
-        # original SubAgentToolProvider, replaced by GuardedToolProvider).
+        # ``_tool_provider_stack`` is the audit trail of prior providers in
+        # wrap order.  Two wraps now apply: GuardrailsMiddleware replaces the
+        # auto-allocated SubAgentToolProvider, then CostTrackingMiddleware's
+        # always-on usage rollup replaces the GuardedToolProvider.
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=True)
 
         await agent.invoke("delegate").result()
 
-        assert len(inspector.seen_stack) == 1
-        # Index 0: the SubAgentToolProvider that was on the agent
-        # before GuardrailsMiddleware wrapped it.
+        assert len(inspector.seen_stack) == 2
+        # Index 0: the SubAgentToolProvider (replaced by Guarded).
+        # Index 1: the GuardedToolProvider (replaced by the usage rollup).
         assert isinstance(inspector.seen_stack[0], SubAgentToolProvider)
+        assert isinstance(inspector.seen_stack[1], GuardedToolProvider)
 
 
-class TestNoGuardrailsLeavesSubAgentProviderOutermost:
-    """When guardrails are absent, the auto-allocated provider is exposed directly."""
+class TestNoGuardrailsUsageRollupOutermost:
+    """Without guardrails the Guarded layer is absent, but the always-on
+    usage rollup still wraps the auto-allocated SubAgentToolProvider."""
 
-    async def test_no_guardrails_no_guarded_wrap(self) -> None:
+    async def test_no_guardrails_rollup_wraps_sub_agent_provider(self) -> None:
         inspector = _StackInspector()
         agent = _build_orchestrator(inspector, with_guardrails=False)
 
         await agent.invoke("delegate").result()
 
-        # No wrap applied: the agent's auto-allocated provider IS the
-        # terminal's tool_provider.
-        assert isinstance(
-            inspector.seen_tool_provider,
-            SubAgentToolProvider,
-        )
+        # Only the usage rollup wraps; its inner is the agent's auto-allocated
+        # SubAgentToolProvider (no GuardedToolProvider layer).
+        outer = inspector.seen_tool_provider
+        assert isinstance(outer, _UsageRollupToolProvider)
+        assert isinstance(outer._inner, SubAgentToolProvider)

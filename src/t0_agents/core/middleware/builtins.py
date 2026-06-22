@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -65,6 +66,7 @@ from t0_agents.core.types import (
     RunUsage,
     ToolProvider,
     Usage,
+    decode_usage_meta,
 )
 from t0_agents.guardrails.base import GuardrailContext
 from t0_agents.guardrails.runtime import GuardedToolProvider
@@ -450,6 +452,23 @@ class CostTrackingMiddleware:
 
         ctx.chain_on_inference(_tracker)
 
+        # Roll delegated sub-agent *billing* into this Run.  A sub-agent runs
+        # its own Run + CostTracking and returns its RunUsage on the tool
+        # result's ``meta`` (see SubAgentToolProvider); wrapping the tool
+        # provider lets us read that meta as the result bubbles up and fold it
+        # into ``usage_acc``.  The footprint stays parent-only — the wrapper
+        # never touches the per-inference ``usages`` list.  A no-op when there
+        # is no tool provider, and when a result carries no usage meta.
+        if ctx.tool_provider is not None:
+            ctx.replace_tool_provider(
+                cast(
+                    ToolProvider,
+                    _UsageRollupToolProvider(
+                        ctx.tool_provider, usage_acc, _flush,
+                    ),
+                ),
+            )
+
         try:
             return await next_(ctx)
         finally:
@@ -458,6 +477,78 @@ class CostTrackingMiddleware:
             # totals.  On the happy path this re-flushes the final totals
             # the last inference already wrote — cheap and idempotent.
             _flush()
+
+
+# ---------------------------------------------------------------------------
+# _UsageRollupToolProvider — CostTracking's sub-agent billing fold
+# ---------------------------------------------------------------------------
+
+
+class _UsageRollupToolProvider:
+    """Fold a delegated sub-agent's billing into the parent's accumulator.
+
+    Installed by :class:`CostTrackingMiddleware` around the orchestrator's
+    ``tool_provider``.  Every ``call_tool`` result is inspected for a child
+    :class:`~t0_agents.core.types.RunUsage` on ``meta`` (written by
+    :class:`~t0_agents.delegation.provider.SubAgentToolProvider` via
+    :func:`~t0_agents.core.types.encode_usage_meta`); when present, the child's
+    *billing* is added to the same ``usage_acc`` the per-inference tracker
+    feeds, then flushed onto the live :class:`~t0_agents.core.run.Run` so
+    :meth:`Run.usage` / :meth:`Run.cost` include sub-agent tokens.
+
+    The per-inference ``usages`` list — and therefore
+    :meth:`Run.context_footprint` — is deliberately **left untouched**: a
+    sub-agent runs in its own context window, so rolling its prompt into the
+    parent's footprint would corrupt the "remaining context" signal.  Only
+    billing rolls up; the footprint stays the orchestrator's own latest turn.
+
+    Non-delegation tool results carry no usage meta, so
+    :func:`~t0_agents.core.types.decode_usage_meta` returns ``None`` and nothing
+    is folded — making the wrapper a transparent pass-through for ordinary MCP
+    tools.
+    """
+
+    __slots__ = ("_acc", "_flush", "_inner")
+
+    def __init__(
+        self,
+        inner: ToolProvider,
+        acc: _CumulativeUsage,
+        flush: Callable[[], None],
+    ) -> None:
+        self._inner = inner
+        self._acc = acc
+        self._flush = flush
+
+    async def list_tools(self) -> list[Any]:
+        return await self._inner.list_tools()
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        result = await self._inner.call_tool(name, arguments, timeout=timeout)
+        child = decode_usage_meta(getattr(result, "meta", None))
+        if child is not None:
+            self._acc.input_tokens += child.input_tokens
+            self._acc.output_tokens += child.output_tokens
+            self._acc.cost += child.cost
+            self._acc.provider_cache_read_input_tokens += (
+                child.provider_cache_read_input_tokens
+            )
+            self._acc.provider_cache_write_input_tokens += (
+                child.provider_cache_write_input_tokens
+            )
+            self._acc.cost_is_priced = (
+                self._acc.cost_is_priced or child.cost_is_priced
+            )
+            # Mirror the new billing onto the live Run immediately, exactly as
+            # the per-inference tracker does — the footprint is untouched.
+            self._flush()
+        return result
 
 
 # ---------------------------------------------------------------------------
