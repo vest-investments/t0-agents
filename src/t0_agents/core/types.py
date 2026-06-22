@@ -398,6 +398,12 @@ class RunUsage:
         provider_cache_write_input_tokens: Sum of the per-inference
             ``provider_cache_write_input_tokens`` (``None`` treated as
             ``0``).
+        cost_is_priced: ``True`` when at least one inference reported a
+            non-``None`` ``cost`` (a real price, possibly ``0.0``);
+            ``False`` when every inference was unpriced.  Distinguishes a
+            genuine ``$0.00`` from "no pricing configured" — a bare
+            ``cost == 0.0`` cannot, since the summer treats ``None`` as
+            ``0.0``.
     """
 
     input_tokens: int = 0
@@ -405,3 +411,4 @@ class RunUsage:
     cost: float = 0.0
     provider_cache_read_input_tokens: int = 0
     provider_cache_write_input_tokens: int = 0
+    cost_is_priced: bool = False

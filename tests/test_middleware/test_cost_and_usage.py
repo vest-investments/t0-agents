@@ -168,6 +168,48 @@ class TestMissingPricing:
         assert usage.output_tokens == 2
 
 
+class TestCostIsPriced:
+    """``cost_is_priced`` distinguishes a real $0 from missing pricing."""
+
+    async def test_false_when_all_costs_none(self) -> None:
+        t0 = FakeT0(
+            [
+                FakeChatResponse(
+                    content=[Text(type="text", text="local")],
+                    usage=FakeUsage(input_tokens=5, output_tokens=2, cost=None),
+                ),
+            ],
+        )
+        agent = _build_agent(t0)
+        run = agent.invoke("q")
+        await run.result()
+
+        usage = run.usage()
+        assert usage is not None
+        assert usage.cost == 0.0
+        assert usage.cost_is_priced is False
+
+    async def test_true_when_a_cost_is_reported(self) -> None:
+        # A real 0.0 (a free model that *does* report cost) counts as
+        # priced — the whole point of the flag over a bare cost == 0.0.
+        t0 = FakeT0(
+            [
+                FakeChatResponse(
+                    content=[Text(type="text", text="ok")],
+                    usage=FakeUsage(input_tokens=5, output_tokens=2, cost=0.0),
+                ),
+            ],
+        )
+        agent = _build_agent(t0)
+        run = agent.invoke("q")
+        await run.result()
+
+        usage = run.usage()
+        assert usage is not None
+        assert usage.cost == 0.0
+        assert usage.cost_is_priced is True
+
+
 class TestCacheTokensTracked:
     """Prompt-cache tokens fold into the cumulative ``RunUsage``."""
 
@@ -424,6 +466,9 @@ class TestRunUsageType:
         u = RunUsage()
         assert u.provider_cache_read_input_tokens == 0
         assert u.provider_cache_write_input_tokens == 0
+
+    def test_runusage_cost_is_priced_defaults_false(self) -> None:
+        assert RunUsage().cost_is_priced is False
 
     def test_runusage_is_frozen(self) -> None:
         u = RunUsage(input_tokens=1, output_tokens=2, cost=0.5)

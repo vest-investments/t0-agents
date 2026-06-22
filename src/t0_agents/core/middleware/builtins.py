@@ -361,6 +361,7 @@ class _CumulativeUsage:
     cost: float = 0.0
     provider_cache_read_input_tokens: int = 0
     provider_cache_write_input_tokens: int = 0
+    cost_is_priced: bool = False
 
 
 class CostTrackingMiddleware:
@@ -407,7 +408,12 @@ class CostTrackingMiddleware:
             usage_acc.provider_cache_write_input_tokens += (
                 usage.provider_cache_write_input_tokens or 0
             )
-            usage_acc.cost += usage.cost or 0.0
+            # A non-None cost is a real price (even $0.00); None means the
+            # provider/config did not price the call.  Track which so a
+            # genuine $0 is distinguishable from "unpriced".
+            if usage.cost is not None:
+                usage_acc.cost += usage.cost
+                usage_acc.cost_is_priced = True
 
         ctx.chain_on_inference(_tracker)
 
@@ -431,6 +437,7 @@ class CostTrackingMiddleware:
                     provider_cache_write_input_tokens=(
                         usage_acc.provider_cache_write_input_tokens
                     ),
+                    cost_is_priced=usage_acc.cost_is_priced,
                 )
                 ctx.run._set_cost(usage_acc.cost)
                 ctx.run._set_usage(snapshot)
