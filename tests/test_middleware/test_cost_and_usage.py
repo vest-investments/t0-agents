@@ -10,7 +10,7 @@ under every shape (default chain, opt-out, guardrails-only).
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from tensorzero import AsyncTensorZeroGateway
@@ -19,7 +19,7 @@ from tensorzero.types import Usage as TZUsage
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.types import RunUsage, ToolProvider, Usage
+from t0_agents.core.types import AgentResult, RunUsage, ToolProvider, Usage
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
 
@@ -32,12 +32,19 @@ def _build_agent(t0: FakeT0) -> Agent:
     )
 
 
-def _two_turn_agent(usage1: FakeUsage, usage2: FakeUsage) -> Agent:
+def _two_turn_agent(
+    usage1: FakeUsage,
+    usage2: FakeUsage,
+    *,
+    middleware: list[Any] | None = None,
+) -> Agent:
     """Agent that runs exactly two inferences carrying the given usages.
 
     Turn 1 emits a tool call (so the loop runs again); turn 2 emits text
     (so the loop ends).  Used by the context-footprint tests to drive a
     multi-turn conversation with controlled per-turn ``input_tokens``.
+    ``middleware`` overrides the default chain when given (e.g. to insert
+    an observer after ``CostTrackingMiddleware``).
     """
     from fastmcp.client.client import CallToolResult
     from mcp.types import TextContent
@@ -83,8 +90,13 @@ def _two_turn_agent(usage1: FakeUsage, usage2: FakeUsage) -> Agent:
             ),
         },
     )
+    config = (
+        AgentConfig(name="fp", function_name="agent", middleware=middleware)
+        if middleware is not None
+        else AgentConfig(name="fp", function_name="agent")
+    )
     return Agent(
-        AgentConfig(name="fp", function_name="agent"),
+        config,
         t0=cast(AsyncTensorZeroGateway, t0),
         tool_provider=cast(ToolProvider, client),
     )
@@ -449,6 +461,42 @@ class TestContextFootprint:
         assert run.usages() == ()
         assert run.context_footprint() is None
         assert run.context_remaining(1000) is None
+
+    async def test_accessors_are_live_mid_run(self) -> None:
+        # Gemini review (#67): context_footprint() must reflect each
+        # inference as it lands, not only after the chain unwinds.  An
+        # inner middleware's on_inference callback runs right after
+        # CostTracking's, so it observes the just-flushed footprint.
+        from t0_agents.core.middleware import CostTrackingMiddleware
+        from t0_agents.core.middleware.base import Next, RunContext
+
+        seen: list[int | None] = []
+
+        class _Probe:
+            name = "probe"
+
+            async def __call__(
+                self, ctx: RunContext, next_: Next,
+            ) -> AgentResult[Any]:
+                async def _observe(response: object) -> None:
+                    run = ctx.run
+                    fp = run.context_footprint() if run is not None else None
+                    seen.append(fp.input_tokens if fp is not None else None)
+
+                ctx.chain_on_inference(_observe)
+                return await next_(ctx)
+
+        agent = _two_turn_agent(
+            FakeUsage(input_tokens=10, output_tokens=5),
+            FakeUsage(input_tokens=20, output_tokens=2),
+            middleware=[CostTrackingMiddleware(), _Probe()],
+        )
+        run = agent.invoke("compute 1+2")
+        await run.result()
+
+        # Footprint was live at each inference (10 then 20); with a
+        # finally-only flush this would have been [None, None].
+        assert seen == [10, 20]
 
 
 class TestRunUsageType:
