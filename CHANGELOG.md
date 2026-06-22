@@ -29,6 +29,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when a provider actually reported a price, distinguishing a real `$0.00`
   from missing pricing. Existing `RunUsage` fields and `Run.cost()` /
   `Run.usage()` behaviour are unchanged.
+- **`ConversationUsage` — an episode-level usage accumulator.** A conversation
+  is the many `invoke()`s that share one `episode_id`; nothing aggregated usage
+  across them. `ConversationUsage(episode_id)` records each completed `Run`,
+  summing **billing** across the conversation (`.total`, a `RunUsage`) while
+  tracking the current context **footprint** as a *level* — the latest Run's
+  `context_footprint()`, not a sum. `.remaining(window)` and
+  `.fraction_used(window)` answer "how much context is left" against a
+  caller-supplied window. A Run with no footprint (a failure before the first
+  turn, or a whole-response cache hit) leaves the prior level intact rather than
+  blanking the live signal. Exported from the package root.
+- **Sub-agent token usage now rolls up into the orchestrator's billing.** When
+  an agent delegates to a sub-agent, the child's `RunUsage` is carried home on
+  the delegated tool result and folded into the parent `Run.usage()` /
+  `Run.cost()`, so billing reflects the whole delegation tree. The parent's
+  `context_footprint()` is deliberately **unaffected** — a sub-agent runs in its
+  own context window, so only billing rolls up, never the footprint.
 
 ## [1.0.1] — Unreleased
 

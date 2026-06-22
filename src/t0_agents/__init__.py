@@ -8,6 +8,7 @@ __version__ = "1.0.1"
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.conversation import ConversationUsage
 from t0_agents.core.elicitation_forwarder import (
     ElicitationForwarder,
     ElicitationRequest,
@@ -83,6 +84,7 @@ __all__ = [
     "Attempt",
     "ChatOutput",
     "ConfigurationError",
+    "ConversationUsage",
     "CostTrackingMiddleware",
     "DoneEvent",
     "ElicitationForwarder",

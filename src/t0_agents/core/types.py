@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import (
     Any,
     Generic,
@@ -412,3 +412,44 @@ class RunUsage:
     provider_cache_read_input_tokens: int = 0
     provider_cache_write_input_tokens: int = 0
     cost_is_priced: bool = False
+
+
+#: Key under which a delegated sub-agent's billing usage rides home on the
+#: ``meta`` of its :class:`fastmcp.client.client.CallToolResult`.  Namespaced
+#: so it never collides with other ``meta`` content.  Written by
+#: :class:`~t0_agents.delegation.provider.SubAgentToolProvider` and read back by
+#: :class:`~t0_agents.core.middleware.CostTrackingMiddleware`, which folds the
+#: child's *billing* into the orchestrator's parent :class:`~t0_agents.core.run.Run`
+#: (the parent **footprint** stays parent-only — only billing rolls up).
+USAGE_META_KEY = "t0_agents/usage"
+
+
+def encode_usage_meta(usage: RunUsage) -> dict[str, Any]:
+    """Serialise a child Run's :class:`RunUsage` for ``CallToolResult.meta``.
+
+    Returns a single-key dict ``{USAGE_META_KEY: {<RunUsage fields>}}`` of plain
+    primitives (JSON-safe, so the payload survives observability sinks).  The
+    inverse is :func:`decode_usage_meta`.  Delegation is in-process, so the
+    ``CallToolResult`` is handed back as a live object and the round-trip never
+    actually serialises — keeping it JSON-safe is forward-looking robustness.
+    """
+    return {USAGE_META_KEY: asdict(usage)}
+
+
+def decode_usage_meta(meta: dict[str, Any] | None) -> RunUsage | None:
+    """Recover a :class:`RunUsage` from a ``CallToolResult.meta``, or ``None``.
+
+    Returns ``None`` when ``meta`` is ``None`` or not a mapping, lacks
+    :data:`USAGE_META_KEY`, or carries a payload that is not a mapping — so a
+    tool result without (or with foreign / malformed) ``meta`` folds nothing
+    rather than raising.  Unknown payload keys are ignored and missing ones fall
+    back to the :class:`RunUsage` defaults, keeping decode tolerant of version
+    skew.
+    """
+    if not isinstance(meta, dict):
+        return None
+    payload = meta.get(USAGE_META_KEY)
+    if not isinstance(payload, dict):
+        return None
+    known = {f.name for f in fields(RunUsage)}
+    return RunUsage(**{k: v for k, v in payload.items() if k in known})
