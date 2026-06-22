@@ -34,7 +34,7 @@ from t0_agents.core.exceptions import (
 )
 from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
-from t0_agents.core.types import AgentResult, RunUsage
+from t0_agents.core.types import AgentResult, RunUsage, Usage
 from t0_agents.stream.events import AgentEvent, DoneEvent, TextDeltaEvent
 
 if TYPE_CHECKING:
@@ -127,10 +127,13 @@ class Run(Generic[T]):
         self._episode_id: str | None = input_.episode_id
         self._inference_ids: tuple[str, ...] = ()
         self._final_response: str = ""
-        # Cost / usage totals — written by
-        # ``CostTrackingMiddleware`` via ``_set_cost`` / ``_set_usage``.
+        # Cost / usage totals — written by ``CostTrackingMiddleware`` via
+        # ``_set_cost`` / ``_set_usage``.  ``_usages`` is the per-inference
+        # list (written via ``_set_usages``) that backs the live context
+        # footprint, distinct from the summing ``_usage`` aggregate.
         self._cost: float = 0.0
         self._usage: RunUsage | None = None
+        self._usages: tuple[Usage, ...] = ()
         if eager:
             self._start()
 
@@ -631,8 +634,71 @@ class Run(Generic[T]):
         returned as a frozen :class:`RunUsage` aggregate.  ``None``
         until the Run produces an inference (or when the middleware
         was excluded via ``middleware=[]``).
+
+        This *sums* usage across turns; for the current full-conversation
+        prompt size (the compaction signal) use :meth:`context_footprint`
+        instead, and :meth:`usages` for the per-inference breakdown.
         """
         return self._usage
+
+    def usages(self) -> tuple[Usage, ...]:
+        """Per-inference usage for this Run, in order.
+
+        One :class:`~t0_agents.core.types.Usage` per inference (chat
+        turns + JSON retries), **including** cache-served turns that
+        report ``input_tokens == 0`` — kept for transparency.  Empty
+        until the Run produces an inference (or when
+        :class:`~t0_agents.core.middleware.CostTrackingMiddleware` was
+        excluded via ``middleware=[]``).
+
+        Contrast with :meth:`usage` (the cumulative
+        :class:`~t0_agents.core.types.RunUsage` sum) and
+        :meth:`context_footprint` (the single latest non-empty turn).
+        """
+        return self._usages
+
+    def context_footprint(self) -> Usage | None:
+        """The current full-conversation prompt size, as a live signal.
+
+        Returns the **latest** inference whose ``input_tokens > 0`` — for
+        a multi-turn chat that is approximately the whole conversation
+        re-sent on the most recent turn, i.e. the number to compare
+        against the model's context window when deciding whether to
+        compact or rotate the conversation.
+
+        This is deliberately **not** :meth:`usage`:
+        ``usage().input_tokens`` *sums* every turn's prompt, double-
+        counting the growing prefix each turn re-sends, so it overstates
+        the live footprint.
+
+        Cache-served turns report all-zero usage (a whole-response cache
+        hit) and would read as "empty context"; they are skipped, so the
+        footprint carries forward over them.  Returns ``None`` until the
+        Run produces a non-zero inference.
+        """
+        for usage in reversed(self._usages):
+            if usage.input_tokens > 0:
+                return usage
+        return None
+
+    def context_remaining(self, window: int) -> int | None:
+        """Tokens left in a caller-supplied context ``window``.
+
+        Computed as ``window - context_footprint().input_tokens``.  The
+        window is a caller argument because the model / variant — and so
+        its context size — is resolved by TensorZero and is not knowable
+        in-process.
+
+        May be **negative** when the current prompt already exceeds the
+        window: the overflow magnitude is informative for the outer layer
+        that owns the compaction / rotation decision, so it is not
+        clamped.  Returns ``None`` when there is no footprint yet (no
+        non-zero inference).
+        """
+        footprint = self.context_footprint()
+        if footprint is None:
+            return None
+        return window - footprint.input_tokens
 
     def _set_cost(self, cost: float) -> None:
         """Private setter used by :class:`CostTrackingMiddleware`."""
@@ -641,6 +707,14 @@ class Run(Generic[T]):
     def _set_usage(self, usage: RunUsage) -> None:
         """Private setter used by :class:`CostTrackingMiddleware`."""
         self._usage = usage
+
+    def _set_usages(self, usages: tuple[Usage, ...]) -> None:
+        """Private setter for the per-inference usage list.
+
+        Written by :class:`CostTrackingMiddleware` after the chain
+        unwinds; read by :meth:`usages` / :meth:`context_footprint`.
+        """
+        self._usages = usages
 
 
 def build_run_input(

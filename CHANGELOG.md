@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Live per-turn context footprint on `Run`.** `Run.context_footprint()`
+  returns the latest inference's usage — roughly the current
+  full-conversation prompt size — as a `t0_agents.core.types.Usage`,
+  distinct from the cumulative `Run.usage()` sum (which double-counts the
+  prompt re-sent each turn). This is the signal an outer layer compares
+  against the model's context window to decide when to compact or rotate a
+  conversation. `Run.usages()` exposes the per-inference breakdown
+  (including cache-served zero turns, which the footprint skips), and
+  `Run.context_remaining(window)` returns `window -
+  footprint.input_tokens` for a caller-supplied window (not clamped — may
+  be negative when over-window).
+- **`t0_agents.core.types.Usage`** — a per-inference, lossless mirror of
+  `tensorzero.Usage` (`input_tokens`, `output_tokens`,
+  `provider_cache_read_input_tokens`, `provider_cache_write_input_tokens`,
+  `cost`) with a `from_tz(...)` constructor and a `total_tokens` property.
+- **`RunUsage`** gains `provider_cache_read_input_tokens`,
+  `provider_cache_write_input_tokens`, and `cost_is_priced` (all defaulted,
+  so construction stays back-compatible). `cost_is_priced` is `True` only
+  when a provider actually reported a price, distinguishing a real `$0.00`
+  from missing pricing. Existing `RunUsage` fields and `Run.cost()` /
+  `Run.usage()` behaviour are unchanged.
+
 ## [1.0.1] — Unreleased
 
 Public-readiness cleanup release.  No source-level changes to the

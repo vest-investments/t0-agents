@@ -64,6 +64,7 @@ from t0_agents.core.types import (
     MemoryProvider,
     RunUsage,
     ToolProvider,
+    Usage,
 )
 from t0_agents.guardrails.base import GuardrailContext
 from t0_agents.guardrails.runtime import GuardedToolProvider
@@ -358,6 +359,9 @@ class _CumulativeUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float = 0.0
+    provider_cache_read_input_tokens: int = 0
+    provider_cache_write_input_tokens: int = 0
+    cost_is_priced: bool = False
 
 
 class CostTrackingMiddleware:
@@ -369,12 +373,16 @@ class CostTrackingMiddleware:
     :meth:`Run.usage` return live data for every Run — a strict
     superset of v0.12 behaviour.
 
-    The accumulator lives on ``ctx.extras['cumulative_usage']`` so
-    other middlewares (or user observability hooks) can read it
-    mid-run.  On the way out (``finally`` after ``next_()``) the
-    middleware snapshots the totals onto the live
-    :class:`~t0_agents.core.run.Run` via the private
-    :meth:`_set_cost` / :meth:`_set_usage` setters.
+    The accumulator lives on ``ctx.extras['cumulative_usage']`` (and the
+    per-inference list on ``ctx.extras['usages']``) so other middlewares
+    or user observability hooks can read it mid-run.  After **each**
+    inference the middleware snapshots the running totals onto the live
+    :class:`~t0_agents.core.run.Run` via the private :meth:`_set_cost` /
+    :meth:`_set_usage` / :meth:`_set_usages` setters, so :meth:`Run.cost`,
+    :meth:`Run.usage`, and :meth:`Run.context_footprint` are queryable
+    mid-run (e.g. from a streaming ``events()`` consumer) and not only
+    once the chain unwinds.  A final flush in ``finally`` is the backstop
+    for a run that fails before producing any inference.
     """
 
     name = "cost_tracking"
@@ -382,34 +390,74 @@ class CostTrackingMiddleware:
     async def __call__(self, ctx: RunContext, next_: Next) -> AgentResult[Any]:
         usage_acc = _CumulativeUsage()
         ctx.extras["cumulative_usage"] = usage_acc
+        # Per-inference usages in order — the raw material for the live
+        # context footprint (latest non-zero turn) that ``usage()`` cannot
+        # provide because it sums.  Exposed on ``ctx.extras`` alongside
+        # ``cumulative_usage`` so other middlewares / observability hooks
+        # can read it mid-run.
+        usages: list[Usage] = []
+        ctx.extras["usages"] = usages
+
+        def _flush() -> None:
+            # Snapshot the running totals onto the live Run.  Called after
+            # every inference (so mid-run readers — a streaming ``events()``
+            # consumer, an inner middleware — see current cost / usage /
+            # footprint instead of stale defaults) and once more in
+            # ``finally`` as the backstop for a run that fails before
+            # producing any inference.  Skipped when the Run weakref is gone
+            # (caller dropped the Agent).
+            if ctx.run is None:
+                return
+            snapshot = RunUsage(
+                input_tokens=usage_acc.input_tokens,
+                output_tokens=usage_acc.output_tokens,
+                cost=usage_acc.cost,
+                provider_cache_read_input_tokens=(
+                    usage_acc.provider_cache_read_input_tokens
+                ),
+                provider_cache_write_input_tokens=(
+                    usage_acc.provider_cache_write_input_tokens
+                ),
+                cost_is_priced=usage_acc.cost_is_priced,
+            )
+            ctx.run._set_cost(usage_acc.cost)
+            ctx.run._set_usage(snapshot)
+            ctx.run._set_usages(tuple(usages))
 
         async def _tracker(response: Any) -> None:
-            usage = getattr(response, "usage", None)
-            if usage is None:
+            raw = getattr(response, "usage", None)
+            if raw is None:
                 return
-            usage_acc.input_tokens += getattr(usage, "input_tokens", 0) or 0
-            usage_acc.output_tokens += getattr(usage, "output_tokens", 0) or 0
-            usage_acc.cost += getattr(usage, "cost", 0.0) or 0.0
+            usage = Usage.from_tz(raw)
+            usages.append(usage)
+            usage_acc.input_tokens += usage.input_tokens
+            usage_acc.output_tokens += usage.output_tokens
+            usage_acc.provider_cache_read_input_tokens += (
+                usage.provider_cache_read_input_tokens or 0
+            )
+            usage_acc.provider_cache_write_input_tokens += (
+                usage.provider_cache_write_input_tokens or 0
+            )
+            # A non-None cost is a real price (even $0.00); None means the
+            # provider/config did not price the call.  Track which so a
+            # genuine $0 is distinguishable from "unpriced".
+            if usage.cost is not None:
+                usage_acc.cost += usage.cost
+                usage_acc.cost_is_priced = True
+            # Live flush so Run.cost()/usage()/context_footprint() reflect
+            # this inference immediately, not only after the chain unwinds.
+            _flush()
 
         ctx.chain_on_inference(_tracker)
 
-        result: AgentResult[Any] | None = None
         try:
-            result = await next_(ctx)
-            return result
+            return await next_(ctx)
         finally:
-            # Always flush totals to Run, even on exception paths — gives
-            # observers (e.g. ``await run.cost()`` after a failure) an
-            # accurate cumulative count.  Skip when the Run weakref is
-            # gone (caller dropped the Agent).
-            if ctx.run is not None:
-                snapshot = RunUsage(
-                    input_tokens=usage_acc.input_tokens,
-                    output_tokens=usage_acc.output_tokens,
-                    cost=usage_acc.cost,
-                )
-                ctx.run._set_cost(usage_acc.cost)
-                ctx.run._set_usage(snapshot)
+            # Backstop flush: a run that produced zero inferences (the
+            # tracker never fired) or failed mid-chain still gets accurate
+            # totals.  On the happy path this re-flushes the final totals
+            # the last inference already wrote — cheap and idempotent.
+            _flush()
 
 
 # ---------------------------------------------------------------------------

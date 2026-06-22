@@ -34,15 +34,17 @@ from tensorzero.types import (
 class FakeUsage:
     """Duck-typed stand-in for ``tensorzero.Usage``.
 
-    Only ``cost`` is read by the guardrail cost-tracking path.
-    ``input_tokens`` / ``output_tokens`` stay here so future tests that
-    exercise token-budget guardrails can populate them without touching
-    the fake contract again.
+    Mirrors the SDK field set so the ``on_inference`` cost / footprint
+    tracker reads it exactly like the real type.  The two
+    ``provider_cache_*`` fields default to ``None`` (as on the SDK type),
+    so call sites that do not exercise caching stay unchanged.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     cost: float | None = None
+    provider_cache_read_input_tokens: int | None = None
+    provider_cache_write_input_tokens: int | None = None
 
 
 @dataclass
