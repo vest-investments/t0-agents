@@ -32,6 +32,64 @@ def _build_agent(t0: FakeT0) -> Agent:
     )
 
 
+def _two_turn_agent(usage1: FakeUsage, usage2: FakeUsage) -> Agent:
+    """Agent that runs exactly two inferences carrying the given usages.
+
+    Turn 1 emits a tool call (so the loop runs again); turn 2 emits text
+    (so the loop ends).  Used by the context-footprint tests to drive a
+    multi-turn conversation with controlled per-turn ``input_tokens``.
+    """
+    from fastmcp.client.client import CallToolResult
+    from mcp.types import TextContent
+    from mcp.types import Tool as MCPTool
+    from tensorzero.types import ToolCall
+
+    tool_call = ToolCall(
+        id="tc-1",
+        raw_name="add",
+        name="add",
+        raw_arguments='{"a": 1, "b": 2}',
+        arguments={"a": 1, "b": 2},
+    )
+    t0 = FakeT0(
+        [
+            FakeChatResponse(content=[tool_call], usage=usage1),
+            FakeChatResponse(
+                content=[Text(type="text", text="done")], usage=usage2,
+            ),
+        ],
+    )
+    client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two ints",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                },
+            ),
+        ],
+        call_results={
+            "add": CallToolResult(
+                content=[TextContent(type="text", text="3")],
+                structured_content=None,
+                meta=None,
+                data=None,
+                is_error=False,
+            ),
+        },
+    )
+    return Agent(
+        AgentConfig(name="fp", function_name="agent"),
+        t0=cast(AsyncTensorZeroGateway, t0),
+        tool_provider=cast(ToolProvider, client),
+    )
+
+
 class TestSingleInference:
     async def test_cost_and_usage_populated_after_run(self) -> None:
         t0 = FakeT0(
@@ -262,6 +320,93 @@ class TestMultipleInferencesAccumulate:
         # Cache tokens accumulate across turns just like input/output.
         assert usage.provider_cache_read_input_tokens == 12  # 4 + 8
         assert usage.provider_cache_write_input_tokens == 3  # 0 + 3
+
+
+class TestContextFootprint:
+    """The live per-turn footprint, distinct from the cumulative sum."""
+
+    async def test_footprint_is_latest_turn_not_sum(self) -> None:
+        agent = _two_turn_agent(
+            FakeUsage(input_tokens=10, output_tokens=5),
+            FakeUsage(input_tokens=20, output_tokens=2),
+        )
+        run = agent.invoke("compute 1+2")
+        await run.result()
+
+        footprint = run.context_footprint()
+        assert footprint is not None
+        # Footprint == the 2nd (latest) inference, NOT the sum.
+        assert footprint.input_tokens == 20
+        usage = run.usage()
+        assert usage is not None
+        assert usage.input_tokens == 30  # the sum
+        assert footprint.input_tokens < usage.input_tokens
+
+    async def test_usages_lists_every_turn(self) -> None:
+        agent = _two_turn_agent(
+            FakeUsage(input_tokens=10, output_tokens=5),
+            FakeUsage(input_tokens=20, output_tokens=2),
+        )
+        run = agent.invoke("compute 1+2")
+        await run.result()
+
+        usages = run.usages()
+        assert len(usages) == 2
+        assert [u.input_tokens for u in usages] == [10, 20]
+
+    async def test_cache_hit_zero_does_not_clobber_footprint(self) -> None:
+        # 2nd turn is a whole-response cache hit (all-zero usage); the
+        # footprint must carry forward to the prior non-zero inference.
+        agent = _two_turn_agent(
+            FakeUsage(input_tokens=10, output_tokens=5),
+            FakeUsage(input_tokens=0, output_tokens=0),
+        )
+        run = agent.invoke("compute 1+2")
+        await run.result()
+
+        footprint = run.context_footprint()
+        assert footprint is not None
+        assert footprint.input_tokens == 10  # the 1st turn, not the zero turn
+        # usages() still records the zero turn for transparency.
+        usages = run.usages()
+        assert len(usages) == 2
+        assert usages[-1].input_tokens == 0
+
+    async def test_context_remaining_allows_negative(self) -> None:
+        agent = _two_turn_agent(
+            FakeUsage(input_tokens=10, output_tokens=5),
+            FakeUsage(input_tokens=20, output_tokens=2),
+        )
+        run = agent.invoke("compute 1+2")
+        await run.result()
+
+        # footprint.input_tokens == 20
+        assert run.context_remaining(100) == 80
+        # Over-window → negative, not clamped.
+        assert run.context_remaining(15) == -5
+
+    async def test_footprint_and_remaining_none_without_capture(self) -> None:
+        # middleware=[] disables CostTrackingMiddleware → no usages
+        # captured → no footprint, and context_remaining is None.
+        t0 = FakeT0(
+            [
+                FakeChatResponse(
+                    content=[Text(type="text", text="hi")],
+                    usage=FakeUsage(input_tokens=5, output_tokens=2),
+                ),
+            ],
+        )
+        agent = Agent(
+            AgentConfig(name="bare", function_name="agent", middleware=[]),
+            t0=cast(AsyncTensorZeroGateway, t0),
+            tool_provider=cast(ToolProvider, FakeMCPClient()),
+        )
+        run = agent.invoke("hi")
+        await run.result()
+
+        assert run.usages() == ()
+        assert run.context_footprint() is None
+        assert run.context_remaining(1000) is None
 
 
 class TestRunUsageType:
