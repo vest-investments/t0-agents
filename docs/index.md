@@ -62,6 +62,7 @@ Cross-cutting references that span every chapter above. Reach for them when you 
 - **[Migration v0.12 → v1.0](migration-v0.12-to-v1.0.md)** — the two surfaces removed in v1.0 (`Agent.run` / `Agent.stream` → `Agent.invoke` / `Run.events`, and five JSON config kwargs → `output=JsonOutput(...)`), each a one-line migration per call site.
 - **[Error Handling](error-handling.md)** — tool-error semantics, recoverable inference retries, `ToolError` vs `McpError`, and the full exception taxonomy.
 - **[Observability](observability.md)** — episode and inference correlation, the `t0.feedback` API, structured logging conventions, and ClickHouse analytics hooks.
+- **[Token usage](usage.md)** — the live per-turn footprint vs. cumulative billing, the caller-supplied context window, `ConversationUsage`, the serve `usage` block, and the TensorZero recipes for rate-limiting, cost, and ClickHouse history.
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.
 - **[Multi-Server Composition](multi-server.md)** — mounting multiple FastMCP servers behind one agent with namespace prefixes, plus the TensorZero configuration to match.
 - **[Concurrency](concurrency.md)** — the three places parallelism lives in the stack (intra-turn `parallel_tools`, batch tools, multi-agent dispatch), with the decision table and the patterns the library deliberately does not provide.

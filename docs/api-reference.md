@@ -700,11 +700,17 @@ at least one inference.
 | `input_tokens` | `int` | Sum of `response.usage.input_tokens` over every inference. |
 | `output_tokens` | `int` | Sum of `response.usage.output_tokens`. |
 | `cost` | `float` | Sum of `response.usage.cost` (treats `None` as `0.0`). |
+| `provider_cache_read_input_tokens` | `int` | Sum of provider cache-read input tokens (`None → 0`). |
+| `provider_cache_write_input_tokens` | `int` | Sum of provider cache-write input tokens (`None → 0`). |
+| `cost_is_priced` | `bool` | `True` only when a provider reported a price — tells a real `$0.00` apart from missing pricing. |
 
 `Run.cost() -> float` returns the same `cost` field as a convenience
 for callers that only need the dollar figure.  Both default to `0.0`
 / `None` when no inference has fired (or when `middleware=[]`
 disabled `CostTrackingMiddleware`).
+
+See [Token usage](usage.md) for the footprint-vs-billing distinction,
+the per-inference `Usage` value type, and `ConversationUsage`.
 
 ---
 

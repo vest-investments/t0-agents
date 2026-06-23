@@ -237,6 +237,10 @@ doesn't run — `run.cost()` returns `0.0` and `run.usage()` returns
 `None`.  This is intentional: explicit "no middleware"
 means **no middleware** including cost tracking.
 
+For the footprint-vs-billing distinction, the cache-token fields,
+`cost_is_priced`, and the per-conversation accumulator, see
+[Token usage](usage.md).
+
 ### `JsonRetryMiddleware`
 
 No-op pass-through for chat agents (`output.expects_tool_loop is True`).
@@ -464,6 +468,9 @@ gateway, to `mcp/`, and across runs stay clear.
 
 - [`docs/run.md`](run.md) — the `Run` handle that the chain produces;
   `Run.cost()` / `Run.usage()` read live data populated here.
+- [`docs/usage.md`](usage.md) — footprint vs. cumulative billing, the
+  cache fields, `cost_is_priced`, and the serve `usage` block, all
+  populated by `CostTrackingMiddleware`.
 - [`docs/output-modes.md`](output-modes.md) — `OutputMode[T]` and the
   `JsonRetryMiddleware` retry handshake.
 - [`docs/multi-agent.md`](multi-agent.md) — `SubAgentMiddleware` and
