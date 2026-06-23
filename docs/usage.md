@@ -49,7 +49,8 @@ and the *action* stay with the caller (see
 ```python
 from t0_agents.core.types import Usage   # value type — core.types, not the root
 
-run = await agent.invoke("Summarise the attached transcript")
+run = agent.invoke("Summarise the attached transcript")   # a Run handle
+await run                                                 # drive it to completion
 
 # Cumulative billing — the sum across every inference in this run.
 total = run.usage()                       # RunUsage | None
@@ -115,7 +116,7 @@ from t0_agents import ConversationUsage     # root-exported
 convo = ConversationUsage(episode_id)
 for user_turn in conversation:
     run = agent.invoke(user_turn, episode_id=episode_id)
-    await run.result()
+    await run
     convo.record(run)
 
 convo.total                       # RunUsage — billing summed across every turn
@@ -156,7 +157,8 @@ orchestrator's own latest turn and never the child's.  Billing is additive
 across windows; a footprint is not.
 
 ```python
-parent = await agent.invoke("Research X, then draft a summary")  # delegates internally
+parent = agent.invoke("Research X, then draft a summary")  # delegates internally
+await parent                         # drive the orchestration to completion
 parent.usage().input_tokens          # includes the sub-agent's tokens
 parent.context_footprint()           # the orchestrator's own prompt only
 ```
