@@ -426,11 +426,28 @@ class _SyntheticChatResponse:
 def _final_text(
     blocks: list[Any],
 ) -> tuple[str, Literal["text", "thought"]]:
-    """Join text blocks, falling back to thought text (parity with ``run_agent``)."""
+    """Join ``Text`` blocks; fall back to thought content (parity with ``run_agent``).
+
+    When no ``Text`` block carries content, mine the turn's ``Thought``
+    blocks so a thought-only final turn never yields an empty response.
+    Reasoning models surface the answer via either ``Thought.text`` (raw)
+    or ``Thought.summary[*].text`` (provider summary, e.g. gpt-oss
+    harmony's analysis channel); both are mined, mirroring the
+    non-streaming :func:`t0_agents.mcp.loop.run_agent` fallback. The
+    source is flagged ``"thought"`` so consumers branch on provenance,
+    not on model name.
+    """
     text = "\n".join(b.text for b in blocks if isinstance(b, Text) and b.text)
     if text:
         return text, "text"
-    thought_texts = [b.text for b in blocks if isinstance(b, Thought) and b.text]
+    thought_texts: list[str] = []
+    for b in blocks:
+        if not isinstance(b, Thought):
+            continue
+        if b.text:
+            thought_texts.append(b.text)
+        if b.summary:
+            thought_texts.extend(s.text for s in b.summary if s.text)
     if thought_texts:
         return "\n".join(thought_texts), "thought"
     return "", "text"

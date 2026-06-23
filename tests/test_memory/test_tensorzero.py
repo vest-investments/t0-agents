@@ -8,6 +8,7 @@ required end-to-end coverage lives in ``test_tensorzero_integration.py``.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from tensorzero import (
     InferenceFilterAnd,
     InferenceFilterTag,
     Text,
+    Thought,
 )
 from tensorzero.generated_types import (
     ContentBlockChatOutputText,
@@ -28,6 +30,7 @@ from tensorzero.generated_types import (
     StoredInputMessageContentRawText,
     StoredInputMessageContentTemplate,
     StoredInputMessageContentText,
+    StoredInputMessageContentThought,
     StoredInputMessageContentToolCall,
     StoredInputMessageContentToolResult,
 )
@@ -61,6 +64,22 @@ def _assistant_text_msg(text: str) -> StoredInputMessage:
         role="assistant",
         content=[StoredInputMessageContentText(text=text)],
     )
+
+
+@dataclass
+class _StoredOutputThought:
+    """Minimal stand-in for a stored ``thought``-typed chat output block.
+
+    The real ``ContentBlockChatOutputThought`` is matched structurally by
+    ``_output_to_content_blocks`` via ``getattr(item, "type", ...)`` so this
+    duck-typed shape exercises the same code path without the SDK type.
+    """
+
+    text: str = "thinking..."
+    type: str = "thought"
+    signature: str | None = None
+    summary: list[Any] | None = None
+    provider_type: str | None = None
 
 
 def _stored_chat(
@@ -770,6 +789,85 @@ class TestLoadHistory:
         assert tc.arguments is None
         assert tc.raw_arguments == "{not valid json"
 
+    async def test_replay_strips_all_thoughts_depth_invariant(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """AC1: a deep multi-turn history with thought blocks at every turn —
+        including a thought-ONLY assistant turn in the MIDDLE — replays with
+        zero thought blocks regardless of depth, never emits an empty-content
+        message, leaves the stored record untouched, and warns about nothing
+        (the strip is by design, not a decode failure)."""
+        ep = str(uuid4())
+        # Three exchanges. The middle assistant turn is thought-ONLY (the
+        # budget-exhausted "blank" shape) and must be dropped, not emitted as
+        # an empty-content assistant message that would break role validity.
+        msgs = [
+            _user_text_msg("turn 1 question"),
+            StoredInputMessage(
+                role="assistant",
+                content=[
+                    StoredInputMessageContentThought(text="t1 reasoning"),
+                    StoredInputMessageContentText(text="turn 1 answer"),
+                ],
+            ),
+            _user_text_msg("turn 2 question"),
+            StoredInputMessage(
+                role="assistant",
+                content=[StoredInputMessageContentThought(text="t2 reasoning only")],
+            ),
+            _user_text_msg("turn 3 question"),
+        ]
+        inf = _stored_chat(
+            user_messages=msgs,
+            output=[
+                _StoredOutputThought(text="final reasoning"),
+                ContentBlockChatOutputText(text="turn 3 answer"),
+            ],
+            episode_id=ep,
+        )
+        t0 = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        mem = _make_memory(t0)
+        with caplog.at_level("WARNING", logger="t0_agents.memory.tensorzero"):
+            history = await mem.load_history(ep)
+        assert history is not None
+        all_blocks = [b for m in history for b in m["content"]]
+        # Zero thought blocks anywhere in the replayed history.
+        assert not any(isinstance(b, Thought) for b in all_blocks)
+        # No empty-content message survives — the thought-only middle turn was
+        # dropped, leaving roles user, assistant, user, user, assistant.
+        assert all(m["content"] for m in history)
+        assert [m["role"] for m in history] == [
+            "user",
+            "assistant",
+            "user",
+            "user",
+            "assistant",
+        ]
+        # Text content fully preserved across depth (token count does not grow
+        # with conversation depth from re-emitted thoughts).
+        assert [b.text for b in all_blocks if isinstance(b, Text)] == [
+            "turn 1 question",
+            "turn 1 answer",
+            "turn 2 question",
+            "turn 3 question",
+            "turn 3 answer",
+        ]
+        # Store path intact: every stored thought is still on the
+        # StoredInference (two on input, one on output), unmutated.
+        stored_input_thoughts = [
+            b
+            for m in inf.input.messages
+            for b in m.content
+            if isinstance(b, StoredInputMessageContentThought)
+        ]
+        assert len(stored_input_thoughts) == 2
+        assert any(getattr(b, "type", None) == "thought" for b in inf.output)
+        # The strip is silent — no "skipped unsupported kind" warning fires.
+        assert not any("skipped" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # Scenario 11 — Protocol conformance + Agent acceptance
@@ -910,21 +1008,20 @@ class TestHelperBranches:
         assert isinstance(first_content[0], RawText)
         assert first_content[0].value == "raw inline"
 
-    async def test_to_native_message_thought_round_trip(self) -> None:
-        """Thought content blocks survive load_history."""
-        from tensorzero import Thought
-        from tensorzero.generated_types import StoredInputMessageContentThought
-
+    async def test_input_thought_block_stripped_on_replay(self) -> None:
+        """Input-side ``Thought`` blocks are dropped on replay; the
+        surrounding ``Text`` survives and the stored record is unmutated."""
         ep = str(uuid4())
-        msgs = [
-            StoredInputMessage(
-                role="assistant",
-                content=[
-                    StoredInputMessageContentThought(text="reasoning step")
-                ],
-            )
-        ]
-        inf = _stored_chat(user_messages=msgs, output_text="ok", episode_id=ep)
+        stored_msg = StoredInputMessage(
+            role="assistant",
+            content=[
+                StoredInputMessageContentThought(text="reasoning step"),
+                StoredInputMessageContentText(text="visible answer"),
+            ],
+        )
+        inf = _stored_chat(
+            user_messages=[stored_msg], output_text="ok", episode_id=ep
+        )
         t0 = FakeT0(
             [],
             list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
@@ -934,8 +1031,16 @@ class TestHelperBranches:
         assert history is not None
         first_content = history[0]["content"]
         assert isinstance(first_content, list)
-        assert isinstance(first_content[0], Thought)
-        assert first_content[0].text == "reasoning step"
+        # Thought stripped, Text kept.
+        assert not any(isinstance(b, Thought) for b in first_content)
+        assert [b.text for b in first_content if isinstance(b, Text)] == [
+            "visible answer"
+        ]
+        # Store path intact: the StoredInference still carries the thought.
+        assert any(
+            isinstance(b, StoredInputMessageContentThought)
+            for b in inf.input.messages[0].content
+        )
 
     async def test_output_to_content_blocks_non_list_returns_empty(self) -> None:
         """When output is not a list, load_history still appends nothing.
@@ -1019,22 +1124,13 @@ class TestHelperBranches:
         assert block.arguments is None
         assert block.raw_arguments == "not-json"
 
-    async def test_output_to_content_blocks_thought(self) -> None:
-        """Output-side Thought blocks are converted to runtime Thought."""
-        from dataclasses import dataclass
-
-        @dataclass
-        class _OutputThought:
-            text: str = "thinking..."
-            type: str = "thought"
-            signature: str | None = None
-            summary: list[Any] | None = None
-            provider_type: str | None = None
-
+    async def test_output_thought_block_stripped_on_replay(self) -> None:
+        """Output-side ``Thought`` blocks are dropped on replay; ``Text``
+        survives and the stored output is left untouched."""
         ep = str(uuid4())
         inf = _stored_chat(episode_id=ep)
         output_blocks = [
-            _OutputThought(),
+            _StoredOutputThought(),
             ContentBlockChatOutputText(text="final"),
         ]
         object.__setattr__(inf, "output", output_blocks)
@@ -1047,8 +1143,10 @@ class TestHelperBranches:
         assert history is not None
         assistant_blocks = history[-1]["content"]
         kinds = [type(b).__name__ for b in assistant_blocks]
-        assert "Thought" in kinds
+        assert "Thought" not in kinds
         assert "Text" in kinds
+        # Store path intact: the raw output still carries the thought block.
+        assert any(getattr(b, "type", None) == "thought" for b in inf.output)
 
     async def test_to_native_message_unknown_block_skipped(self) -> None:
         """Unknown content type → skipped + recorded for the warning."""
