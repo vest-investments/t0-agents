@@ -345,6 +345,8 @@ async def _drive_stream(
     ws: WebSocket, agent: Any, frame: WSUserMessage, tracker: SessionUsageTracker,
 ) -> None:
     """Stream events for one ``user_message`` frame back to the WS client."""
+    run: Any = None
+    recorded = False
     try:
         # v1.0: invoke().events() — no DeprecationWarning from this
         # internal call-site.  Bind the Run so the done frame can carry the
@@ -356,11 +358,11 @@ async def _drive_stream(
             tags=frame.tags,
         )
         async for event in run.events():
-            usage = (
-                _usage_payload(run, tracker.record(run))
-                if event.type == "done"
-                else None
-            )
+            if event.type == "done":
+                usage = _usage_payload(run, tracker.record(run))
+                recorded = True
+            else:
+                usage = None
             await ws.send_json(_event_to_json(event, usage=usage))
     except asyncio.CancelledError:
         raise
@@ -386,6 +388,16 @@ async def _drive_stream(
                 message=str(exc), detail={"kind": type(exc).__name__}
             ).model_dump(),
         )
+    finally:
+        # A turn that errored or was cancelled (superseded by a new message)
+        # before the done event still consumed tokens for any inference that
+        # completed — fold it into the per-session total so billing is not
+        # silently dropped.  No-op when the done path already recorded it, or
+        # when invoke() failed before a Run existed.  record() reads only the
+        # Run's synchronous usage snapshot (no await), so it is safe here even
+        # during cancellation cleanup.
+        if run is not None and not recorded:
+            tracker.record(run)
 
 
 async def _safe_send(ws: WebSocket, payload: dict[str, Any]) -> None:

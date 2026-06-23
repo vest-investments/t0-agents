@@ -228,6 +228,58 @@ def test_ws_session_usage_accumulates_across_turns(
     assert u2["session"]["footprint"]["input_tokens"] == 250
 
 
+def test_ws_failed_turn_still_recorded_in_session(
+    elicitation_client_factory: Callable[[Any], FakeFastMCPClient],
+) -> None:
+    """A turn whose inference fails before `done` is still folded into the
+    per-session tracker (recorded in the finally block), so its billing is not
+    silently dropped from the running total."""
+    episode = uuid4()
+    fake_t0 = FakeT0(
+        responses=[
+            RuntimeError("boom"),  # turn 1: inference raises before any usage
+            [
+                chat_chunk([text_chunk("recovered", block_id="t1")]),
+                final_chunk(input_tokens=250, output_tokens=20, episode_id=episode),
+            ],
+        ]
+    )
+    agent = Agent(
+        AgentConfig(name="ws-fail", function_name="agent"),
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=FakeFastMCPClient(),
+    )
+    app = create_app(
+        agent,
+        client_factory=lambda: FakeFastMCPClient(),
+        elicitation_client_factory=elicitation_client_factory,
+        streaming=True,
+    )
+
+    client = TestClient(app)
+    with client.websocket_connect("/chat/ws") as ws:
+        # Turn 1 fails — drain until the error frame.
+        ws.send_json(
+            {"type": "user_message", "message": "uno", "episode_id": str(episode)},
+        )
+        while True:
+            frame1 = ws.receive_json()
+            if frame1["type"] in ("ws_error", "done"):
+                break
+        assert frame1["type"] == "ws_error"
+        # Turn 2 succeeds on the same episode.
+        ws.send_json(
+            {"type": "user_message", "message": "dos", "episode_id": str(episode)},
+        )
+        done2 = _drain_to_done(ws)
+
+    session = done2["usage"]["session"]
+    # The failed turn was folded in (runs_recorded == 2, not 1) even though it
+    # produced no usage; the successful turn is the only billing contribution.
+    assert session["runs_recorded"] == 2
+    assert session["total"]["input_tokens"] == 250
+
+
 async def test_sse_tags_query_param_reaches_gateway(
     streaming_client_factory: Callable[[], FakeFastMCPClient],
 ) -> None:
