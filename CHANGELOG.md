@@ -45,6 +45,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `Run.cost()`, so billing reflects the whole delegation tree. The parent's
   `context_footprint()` is deliberately **unaffected** — a sub-agent runs in its
   own context window, so only billing rolls up, never the footprint.
+- **The serving layer now reports live token usage.** `POST /chat` and the
+  SSE / WebSocket streaming `done` frame carry an optional, additive `usage`
+  block: a `footprint` (the current prompt size — the compaction signal) and a
+  `cumulative` total (summed billing, including delegated sub-agents, with cache
+  fields and `cost_is_priced`). Over a WebSocket the block additionally carries a
+  per-session running total (`usage.session`) that accumulates across the
+  connection's turns, keyed per `episode_id`. The block is purely additive — every
+  pre-existing response and `done`-frame key is unchanged, so existing clients are
+  unaffected. The model's context window is not knowable in-process, so the block
+  reports the raw footprint and the caller computes "remaining" against the window
+  it knows.
 
 ## [1.0.1] — Unreleased
 

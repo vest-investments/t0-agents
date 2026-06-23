@@ -36,7 +36,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitationHandler
@@ -44,8 +44,12 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
+from t0_agents.core.conversation import ConversationUsage
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
+
+if TYPE_CHECKING:
+    from t0_agents.core.run import Run
 
 ClientFactory = Callable[[], Client[Any]]
 ElicitationClientFactory = Callable[[ElicitationHandler], Client[Any]]
@@ -285,3 +289,42 @@ class SessionFactory:
         if not base and not extra:
             return None
         return {**base, **extra}
+
+
+class SessionUsageTracker:
+    """Per-connection token-usage accumulator for the streaming WS path.
+
+    A WebSocket connection is multi-invoke: each ``user_message`` frame
+    produces one :class:`~t0_agents.core.run.Run`, and turns that share a
+    TensorZero ``episode_id`` form one conversation.  This tracker keeps a
+    :class:`~t0_agents.core.conversation.ConversationUsage` **per episode_id**
+    (not one per socket) so distinct conversations on the same connection never
+    conflate their billing totals, while a single conversation accumulates a
+    live running total across its turns.
+
+    :meth:`record` folds a completed Run into its episode's accumulator and
+    returns that accumulator, so the WS ``done`` frame can read the running
+    ``total`` / ``context_footprint()`` / ``runs_recorded`` for the just-served
+    turn.  The footprint carry-forward of
+    :meth:`~t0_agents.core.conversation.ConversationUsage.record` is preserved
+    verbatim — a footprint-less turn does not blank the level.
+    """
+
+    __slots__ = ("_by_episode",)
+
+    def __init__(self) -> None:
+        self._by_episode: dict[str, ConversationUsage] = {}
+
+    def record(self, run: Run[Any]) -> ConversationUsage:
+        """Fold ``run`` into the accumulator for its episode; return it.
+
+        The Run's resolved ``episode_id`` is the key (``None`` folds under the
+        empty string — a Run that never received an episode still records).
+        """
+        episode_id = run.episode_id or ""
+        accumulator = self._by_episode.get(episode_id)
+        if accumulator is None:
+            accumulator = ConversationUsage(episode_id)
+            self._by_episode[episode_id] = accumulator
+        accumulator.record(run)
+        return accumulator

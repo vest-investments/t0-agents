@@ -45,9 +45,17 @@ def _mock_run_raising(exc: BaseException) -> MagicMock:
 
 
 def _mock_run_returning(result: AgentResult) -> MagicMock:
-    """Build a Run-shaped MagicMock whose ``.result()`` returns ``result``."""
+    """Build a Run-shaped MagicMock whose ``.result()`` returns ``result``.
+
+    The ``/chat`` route reads ``run.usage()`` / ``run.context_footprint()``
+    to build the additive usage block; stub both to ``None`` so the mock
+    yields ``usage=None`` instead of a MagicMock that would break
+    serialization.
+    """
     mock_run = MagicMock()
     mock_run.result = AsyncMock(return_value=result)
+    mock_run.usage.return_value = None
+    mock_run.context_footprint.return_value = None
     return mock_run
 
 
@@ -65,6 +73,56 @@ async def test_chat_round_trip(base_agent: Agent) -> None:
     assert isinstance(body["episode_id"], str) and body["episode_id"]
     assert isinstance(body["inference_ids"], list)
     assert body["guardrail_log"] == []
+    # Additive usage block: present (an inference ran), but footprint is None
+    # because the fake reports input_tokens == 0 (the skip-zeros behaviour).
+    # Every legacy key above is unchanged.
+    assert body["usage"] is not None
+    assert body["usage"]["footprint"] is None
+    assert body["usage"]["cumulative"]["input_tokens"] == 0
+    assert body["usage"]["cumulative"]["cost_is_priced"] is False
+    assert body["usage"]["session"] is None
+
+
+async def test_chat_usage_block_reports_footprint(
+    base_config: AgentConfig,
+    fake_tool_provider: FakeFastMCPClient,
+) -> None:
+    """A priced, non-zero turn surfaces footprint + cumulative in ``usage``."""
+    from tensorzero.types import Text
+
+    from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
+
+    fake_t0 = FakeT0(
+        responses=[
+            FakeChatResponse(
+                content=[Text(type="text", text="hi")],
+                usage=FakeUsage(input_tokens=1240, output_tokens=86, cost=0.0021),
+            )
+        ]
+    )
+    agent = Agent(
+        base_config,
+        t0=fake_t0,  # type: ignore[arg-type]
+        tool_provider=fake_tool_provider,
+    )
+    app = create_app(agent, client_factory=lambda: FakeFastMCPClient())
+
+    resp = await _post_chat(app, {"message": "hello"})
+
+    assert resp.status_code == 200
+    usage = resp.json()["usage"]
+    assert usage is not None
+    # Footprint == the latest non-zero turn (here the only turn).
+    assert usage["footprint"]["input_tokens"] == 1240
+    assert usage["footprint"]["output_tokens"] == 86
+    assert usage["footprint"]["cost"] == 0.0021
+    # Cumulative mirrors RunUsage; a real (non-None) cost flips cost_is_priced.
+    assert usage["cumulative"]["input_tokens"] == 1240
+    assert usage["cumulative"]["output_tokens"] == 86
+    assert usage["cumulative"]["cost"] == 0.0021
+    assert usage["cumulative"]["cost_is_priced"] is True
+    # /chat is single-shot — no per-session accumulator.
+    assert usage["session"] is None
 
 
 async def test_chat_maxturns_returns_408(

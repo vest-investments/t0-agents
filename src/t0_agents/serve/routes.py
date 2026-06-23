@@ -27,6 +27,7 @@ from t0_agents.serve.protocol import (
     FeedbackResponse,
     HealthResponse,
     InfoResponse,
+    build_usage_block,
 )
 from t0_agents.serve.session import SessionFactory
 
@@ -59,9 +60,12 @@ def build_router(
     async def chat(req: ChatRequest) -> ChatResponse:
         try:
             async with session_factory.session(extra_tags=req.tags) as agent:
-                result = await agent.invoke(
-                    req.message, episode_id=req.episode_id,
-                ).result()
+                # Bind the Run (rather than discarding it after .result()) so
+                # its live usage accessors can populate the additive `usage`
+                # block.  The middleware flushes usage per inference, so the
+                # snapshot is valid once .result() returns.
+                run = agent.invoke(req.message, episode_id=req.episode_id)
+                result = await run.result()
         except MaxTurnsExceededError as e:
             raise HTTPException(status_code=408, detail=str(e)) from e
         except GuardrailBlockedError as e:
@@ -80,6 +84,10 @@ def build_router(
             turns=result.turns,
             response_source=result.response_source,
             guardrail_log=[asdict(entry) for entry in result.guardrail_log],
+            usage=build_usage_block(
+                footprint=run.context_footprint(),
+                cumulative=run.usage(),
+            ),
         )
 
     @router.post("/feedback", response_model=FeedbackResponse)

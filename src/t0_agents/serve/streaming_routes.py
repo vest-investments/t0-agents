@@ -49,7 +49,8 @@ from t0_agents.core.exceptions import (
     MaxTurnsExceededError,
     T0AgentsError,
 )
-from t0_agents.serve.session import SessionFactory
+from t0_agents.serve.protocol import build_usage_block
+from t0_agents.serve.session import SessionFactory, SessionUsageTracker
 from t0_agents.serve.ws_protocol import (
     WSElicitationResponse,
     WSErrorFrame,
@@ -110,6 +111,9 @@ def build_streaming_router(*, session_factory: SessionFactory) -> APIRouter:
             await ws.send_json(envelope)
 
         forwarder = ElicitationForwarder(on_request=send_envelope)
+        # One usage accumulator for the whole connection; it keys per
+        # episode_id internally so distinct conversations never conflate.
+        usage_tracker = SessionUsageTracker()
 
         async with session_factory.session(
             elicitation_handler=forwarder.handler,
@@ -135,6 +139,7 @@ def build_streaming_router(*, session_factory: SessionFactory) -> APIRouter:
                             agent=agent,
                             frame=envelope,
                             previous=active_stream,
+                            tracker=usage_tracker,
                         )
                     elif isinstance(envelope, WSElicitationResponse):
                         await forwarder.resolve(
@@ -177,10 +182,12 @@ async def _sse_event_stream(
         return
     try:
         async with session_factory.session() as agent:
-            async for event in agent.invoke(
-                message, episode_id=episode_id, tags=parsed_tags,
-            ).events():
-                yield _to_sse_frame(event)
+            # Bind the Run so the done frame can carry the usage block; SSE is
+            # single-invoke, so there is no per-session accumulator here.
+            run = agent.invoke(message, episode_id=episode_id, tags=parsed_tags)
+            async for event in run.events():
+                usage = _usage_payload(run) if event.type == "done" else None
+                yield _to_sse_frame(event, usage=usage)
     except MaxTurnsExceededError as exc:
         yield _to_sse_frame(
             ErrorEvent(message=str(exc), detail={"kind": "max_turns"}),
@@ -222,14 +229,18 @@ def _parse_tags_query(raw: str | None) -> dict[str, str] | None:
     return cast(dict[str, str], parsed)
 
 
-def _to_sse_frame(event: AgentEvent) -> dict[str, str]:
+def _to_sse_frame(
+    event: AgentEvent, *, usage: dict[str, Any] | None = None,
+) -> dict[str, str]:
     return {
         "event": event.type,
-        "data": json.dumps(_event_to_json(event)),
+        "data": json.dumps(_event_to_json(event, usage=usage)),
     }
 
 
-def _event_to_json(event: AgentEvent) -> dict[str, Any]:
+def _event_to_json(
+    event: AgentEvent, *, usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Convert an event dataclass to a JSON-serialisable dict.
 
     DoneEvent gets a custom shape: ``result`` is projected through the
@@ -237,6 +248,12 @@ def _event_to_json(event: AgentEvent) -> dict[str, Any]:
     ``json_parse_attempts``, ``function_kind``) so downstream
     HTTP / WS clients keep working byte-identical across the v1.0
     refactor (chat byte-identity invariant §2.3).
+
+    The additive ``usage`` block rides as a **top-level** key on the done
+    frame (sibling to ``result``, never nested inside it) so the byte-identity
+    of ``result`` is preserved.  It is always present on the done frame —
+    ``null`` until the run produced an inference.  ``usage`` is ignored for
+    non-done events.
     """
     payload = dataclasses.asdict(event)
     if event.type == "done" and "result" in payload:
@@ -255,7 +272,24 @@ def _event_to_json(event: AgentEvent) -> dict[str, Any]:
             "parse_strategy": result_obj.parse_strategy,
             "json_parse_attempts": result_obj.json_parse_attempts,
         }
+        payload["usage"] = usage
     return payload
+
+
+def _usage_payload(run: Any, session: Any = None) -> dict[str, Any] | None:
+    """Build the wire ``usage`` dict from a completed Run, or ``None``.
+
+    Reads the per-turn footprint + cumulative billing off the Run; ``session``
+    (a :class:`~t0_agents.core.conversation.ConversationUsage`) adds the
+    per-connection running total on the WebSocket path.  ``None`` when the run
+    produced no inference (see :func:`build_usage_block`).
+    """
+    block = build_usage_block(
+        footprint=run.context_footprint(),
+        cumulative=run.usage(),
+        session=session,
+    )
+    return block.model_dump() if block is not None else None
 
 
 def _validate_ws_incoming(raw: Any) -> WSUserMessage | WSElicitationResponse:
@@ -293,6 +327,7 @@ async def _start_stream_task(
     agent: Any,
     frame: WSUserMessage,
     previous: asyncio.Task[None] | None,
+    tracker: SessionUsageTracker,
 ) -> asyncio.Task[None]:
     """Cancel a previous stream (if any) then launch a new one."""
     if previous is not None and not previous.done():
@@ -303,22 +338,32 @@ async def _start_stream_task(
             pass
         except Exception:
             logger.exception("Previous stream task raised on cancellation")
-    return asyncio.create_task(_drive_stream(ws, agent, frame))
+    return asyncio.create_task(_drive_stream(ws, agent, frame, tracker))
 
 
 async def _drive_stream(
-    ws: WebSocket, agent: Any, frame: WSUserMessage,
+    ws: WebSocket, agent: Any, frame: WSUserMessage, tracker: SessionUsageTracker,
 ) -> None:
     """Stream events for one ``user_message`` frame back to the WS client."""
+    run: Any = None
+    recorded = False
     try:
         # v1.0: invoke().events() — no DeprecationWarning from this
-        # internal call-site.
-        async for event in agent.invoke(
+        # internal call-site.  Bind the Run so the done frame can carry the
+        # usage block; on done, fold this turn into the per-session tracker
+        # and surface its running total under usage.session.
+        run = agent.invoke(
             frame.message,
             episode_id=frame.episode_id,
             tags=frame.tags,
-        ).events():
-            await ws.send_json(_event_to_json(event))
+        )
+        async for event in run.events():
+            if event.type == "done":
+                usage = _usage_payload(run, tracker.record(run))
+                recorded = True
+            else:
+                usage = None
+            await ws.send_json(_event_to_json(event, usage=usage))
     except asyncio.CancelledError:
         raise
     except MaxTurnsExceededError as exc:
@@ -343,6 +388,16 @@ async def _drive_stream(
                 message=str(exc), detail={"kind": type(exc).__name__}
             ).model_dump(),
         )
+    finally:
+        # A turn that errored or was cancelled (superseded by a new message)
+        # before the done event still consumed tokens for any inference that
+        # completed — fold it into the per-session total so billing is not
+        # silently dropped.  No-op when the done path already recorded it, or
+        # when invoke() failed before a Run existed.  record() reads only the
+        # Run's synchronous usage snapshot (no await), so it is safe here even
+        # during cancellation cleanup.
+        if run is not None and not recorded:
+            tracker.record(run)
 
 
 async def _safe_send(ws: WebSocket, payload: dict[str, Any]) -> None:
