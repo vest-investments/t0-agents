@@ -4,7 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.1.0] — 2026-06-22
+
+Live token usage lands as a cohesive, additive feature: the live per-turn
+context footprint on `Run`, the episode-level `ConversationUsage`
+accumulator, sub-agent billing roll-up, and the serving `usage` block —
+plus the public-readiness cleanup previously staged for 1.0.1.  Every
+addition is back-compatible; no existing behaviour changes.
 
 ### Added
 
@@ -56,16 +62,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unaffected. The model's context window is not knowable in-process, so the block
   reports the raw footprint and the caller computes "remaining" against the window
   it knows.
-
-## [1.0.1] — Unreleased
-
-Public-readiness cleanup release.  No source-level changes to the
-`t0_agents` package — every public symbol exported in 1.0.0 is
-byte-identical here.  Pin to `1.0.1` as the first publicly tagged
-version when consuming the library from other projects.
-
-### Added
-
 - **`t0_agents.__version__`** attribute (`str`), kept in sync with
   `pyproject.toml`.  Lets downstream code do
   `import t0_agents; t0_agents.__version__` without falling back to

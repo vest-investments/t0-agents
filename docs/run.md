@@ -274,6 +274,10 @@ would violate the override contract.
 inference and each contributes to the cumulative cost — that mirrors
 the economic reality of the underlying TensorZero charges.
 
+> `cost()` / `usage()` are the *cumulative* view.  For the **footprint** —
+> the live "how much context is left" signal — plus the per-conversation
+> accumulator and the serve `usage` block, see [Token usage](usage.md).
+
 ---
 
 ## `Run.transcript`

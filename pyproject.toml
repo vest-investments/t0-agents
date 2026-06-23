@@ -1,6 +1,6 @@
 [project]
 name = "t0-agents"
-version = "1.0.1"
+version = "1.1.0"
 description = "The Pythonic agentic framework for TensorZero"
 readme = "README.md"
 license = { text = "MIT" }
