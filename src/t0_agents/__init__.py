@@ -75,6 +75,7 @@ from t0_agents.stream import (
     TurnEndEvent,
     TurnStreamAssembler,
 )
+from t0_agents.tooling import FilteredToolProvider
 
 __all__ = [
     "Agent",
@@ -90,6 +91,7 @@ __all__ = [
     "ElicitationForwarder",
     "ElicitationRequest",
     "ErrorEvent",
+    "FilteredToolProvider",
     "Guardrail",
     "GuardrailBlockedError",
     "GuardrailLogEntry",
