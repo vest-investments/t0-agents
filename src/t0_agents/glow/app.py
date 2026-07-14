@@ -324,6 +324,7 @@ class App:
         ] = _UNSET,
         middleware: list[Middleware] | None = _UNSET,
         tools: list[Any] | None = None,
+        replace: bool = False,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
         """Return the ``@app.agent("name")`` decorator factory.
 
@@ -362,6 +363,10 @@ class App:
         ``tools=[]`` is explicitly toolless.  Patterns matching no live
         tool warn at :meth:`build`.  Sub-agent ``<name>_ask`` tools are
         never filtered.
+
+        ``replace=True`` re-registers over an existing name instead of
+        raising the duplicate-name error — the REPL/notebook
+        re-decoration affordance (pairs with :meth:`remove_agent`).
         """
         # Imported lazily to break the import cycle between
         # ``glow.app`` and ``glow.decorators`` (the latter imports
@@ -392,6 +397,7 @@ class App:
             function_name=function_name,
             config_overrides=config_overrides,
             tools=tools,
+            replace=replace,
         )
 
     def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -414,6 +420,22 @@ class App:
         from t0_agents.glow.decorators import _make_tool_decorator
 
         return _make_tool_decorator(self)(fn)
+
+    def remove_agent(self, name: str) -> None:
+        """Drop the agent registered under ``name`` — the REPL affordance.
+
+        Frees the name for a fresh ``@app.agent(name)`` registration
+        (pairs with ``@app.agent(name, replace=True)``).  Wrapper
+        objects from the removed registration keep working — they hold
+        their own spec; only the registry entry is detached.  Raises
+        :class:`ConfigurationError` when the name is not registered.
+        """
+        if name not in self._agent_registry:
+            raise ConfigurationError(
+                f"App.remove_agent({name!r}): no agent is registered under "
+                f"this name.  Registered: {sorted(self._agent_registry)!r}."
+            )
+        del self._agent_registry[name]
 
     # ------------------------------------------------------------------
     # Lifecycle

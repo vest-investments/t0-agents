@@ -300,6 +300,77 @@ async def test_async_with_app_is_the_lifespan_bracket(
 
 
 # ---------------------------------------------------------------------------
+# REPL surface — @app.agent(replace=True) + App.remove_agent
+# ---------------------------------------------------------------------------
+
+
+async def test_replace_reregisters_and_rebuilds(
+    fake_agent_cls: type[_FakeAgent],
+) -> None:
+    sentinel = cast(AsyncTensorZeroGateway, object())
+    app = App(t0=sentinel)
+
+    @app.agent("tutor")
+    async def tutor_v1(query: str) -> str:  # type: ignore[empty-body]
+        """Version one."""
+
+    assert await tutor_v1("hi") == "ok"
+    assert len(fake_agent_cls.instances) == 1
+
+    @app.agent("tutor", replace=True)
+    async def tutor_v2(query: str) -> str:  # type: ignore[empty-body]
+        """Version two."""
+
+    assert await tutor_v2("hi") == "ok"
+    # A fresh Agent was built for the fresh spec; the old wrapper keeps
+    # its own (detached) spec and cached agent.
+    assert len(fake_agent_cls.instances) == 2
+    assert await tutor_v1("still works") == "ok"
+    assert len(fake_agent_cls.instances) == 2
+    await app.shutdown()
+
+
+async def test_replace_after_start_late_resolves_tools(
+    fake_agent_cls: type[_FakeAgent],
+) -> None:
+    """A replacement registered on a started App still gets its filter."""
+    sentinel = cast(AsyncTensorZeroGateway, object())
+    app = App(t0=sentinel)
+
+    @app.tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    @app.agent("tutor")
+    async def tutor_v1(query: str) -> str:  # type: ignore[empty-body]
+        """No filter."""
+
+    assert await tutor_v1("boot") == "ok"  # auto-build; App is started
+
+    @app.agent("tutor", replace=True, tools=["ping"])
+    async def tutor_v2(query: str) -> str:  # type: ignore[empty-body]
+        """Filtered."""
+
+    assert await tutor_v2("hi") == "ok"
+    assert isinstance(fake_agent_cls.instances[-1].tool_provider, FilteredToolProvider)
+    await app.shutdown()
+
+
+async def test_remove_agent_frees_the_name(fake_agent_cls: type[_FakeAgent]) -> None:
+    sentinel = cast(AsyncTensorZeroGateway, object())
+    app = App(t0=sentinel)
+    _register_agent(app, "tutor")
+
+    app.remove_agent("tutor")
+    # The name is free again — plain re-registration, no replace= needed.
+    _register_agent(app, "tutor")
+
+    with pytest.raises(ConfigurationError, match="no agent is registered"):
+        app.remove_agent("ghost")
+
+
+# ---------------------------------------------------------------------------
 # Explicit t0= — caller-owned, never touched
 # ---------------------------------------------------------------------------
 
