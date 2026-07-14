@@ -38,7 +38,7 @@ class _AgentSpec:
     """Registration-time descriptor for an ``@app.agent``-decorated function."""
 
     name: str
-    function_name: str
+    function_name: str | None
     fn: Callable[..., Awaitable[Any]]
     system_prompt: str | None
     output_mode: OutputMode[Any]

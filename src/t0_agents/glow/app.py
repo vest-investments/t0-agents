@@ -263,7 +263,11 @@ class App:
         self,
         name: str,
         *,
-        function_name: str = "agent",
+        function_name: str | None = None,
+        model: str | None = _UNSET,
+        variant: str | None = _UNSET,
+        params: dict[str, Any] | None = _UNSET,
+        cache: dict[str, Any] | None = _UNSET,
         max_turns: int = _UNSET,
         tool_timeout: float | None = _UNSET,
         parallel_tools: bool = _UNSET,
@@ -288,13 +292,24 @@ class App:
         in :mod:`t0_agents.glow.decorators`; this method is the typed
         thin shim that delegates to ``_make_decorator``.
 
-        Every keyword beyond ``name``/``function_name`` maps 1:1 onto the
-        corresponding :class:`~t0_agents.core.config.AgentConfig` field
-        (``max_turns``, ``tool_timeout``, ``parallel_tools``, ``dryrun``,
+        Every keyword beyond ``name``/``function_name``/``tools`` maps
+        1:1 onto the corresponding
+        :class:`~t0_agents.core.config.AgentConfig` field (``model``,
+        ``variant``, ``params``, ``cache``, ``max_turns``,
+        ``tool_timeout``, ``parallel_tools``, ``dryrun``,
         ``tool_choice``, ``tags``, ``namespace``, ``memory``,
         ``memory_strategy``, ``middleware``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
         App-level defaults (agent-level wins — see :meth:`__init__`).
+
+        ``model=`` declares the agent with zero tensorzero.toml —
+        inference routes through the gateway's built-in passthrough and
+        the docstring rides along as the system prompt.
+        ``AgentConfig`` enforces the routing rules at build time:
+        ``model`` XOR ``function_name`` (neither → ``"agent"``),
+        ``variant`` only on the function path, and JSON-function output
+        modes (a structured return annotation) are rejected on the
+        ``model=`` path with a ready-to-paste TOML stanza.
 
         ``tools`` filters which of the App's composed tools this agent
         sees: a list of ``@app.tool`` callables, :class:`MCPServer`
@@ -311,6 +326,10 @@ class App:
         from t0_agents.glow.decorators import _make_decorator
 
         knobs: dict[str, Any] = {
+            "model": model,
+            "variant": variant,
+            "params": params,
+            "cache": cache,
             "max_turns": max_turns,
             "tool_timeout": tool_timeout,
             "parallel_tools": parallel_tools,
@@ -489,7 +508,10 @@ class App:
             # ``.with_()`` we drop the docstring so the gateway receives
             # exactly one.  An explicit ``system=`` alongside
             # ``system_arguments=`` is a caller error — raise noisily
-            # rather than silently pick one.
+            # rather than silently pick one.  ``prompt_vars`` is the
+            # client-side counterpart: it formats the effective system
+            # string and never reaches ``Agent.invoke``.
+            prompt_vars = call_kwargs.pop("prompt_vars", None)
             if call_kwargs.get("system_arguments") is not None:
                 if call_kwargs.get("system") is not None:
                     raise ConfigurationError(
@@ -498,12 +520,38 @@ class App:
                         "system prompt), not both — they are mutually "
                         "exclusive in the TensorZero gateway."
                     )
+                if prompt_vars is not None:
+                    raise ConfigurationError(
+                        "FluentRun.with_(): prompt_vars= (client-side "
+                        "str.format on the docstring/system prompt) and "
+                        "system_arguments= (TZ server-side templates) are "
+                        "mutually exclusive — pick one templating side."
+                    )
                 return agent.invoke(message, output=mode, eager=False, **call_kwargs)
+            system = call_kwargs.pop("system", system_prompt)
+            if prompt_vars is not None:
+                if system is None:
+                    raise ConfigurationError(
+                        f"FluentRun.with_(prompt_vars=...): agent "
+                        f"{spec.name!r} has no system prompt to format — "
+                        f"give the decorated function a docstring or pass "
+                        f"system= alongside."
+                    )
+                try:
+                    system = system.format(**prompt_vars)
+                except (IndexError, KeyError, ValueError) as exc:
+                    raise ConfigurationError(
+                        f"FluentRun.with_(prompt_vars=...): the system "
+                        f"prompt of agent {spec.name!r} could not be "
+                        f"formatted: {exc!r}. Placeholders use str.format "
+                        f"syntax — every {{name}} needs a matching "
+                        f"prompt_vars key; literal braces need doubling."
+                    ) from exc
             return agent.invoke(
                 message,
                 output=mode,
                 eager=False,
-                system=call_kwargs.pop("system", system_prompt),
+                system=system,
                 **call_kwargs,
             )
 

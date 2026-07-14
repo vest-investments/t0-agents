@@ -143,7 +143,10 @@ def test_decorator_registers_agent_in_registry() -> None:
     assert "tutor" in app._agent_registry
     spec = app._agent_registry["tutor"]
     assert spec.name == "tutor"
-    assert spec.function_name == "agent"
+    # The "agent" fallback moved to AgentConfig (M3: model XOR
+    # function_name; neither → "agent") — the spec records what the
+    # caller actually passed.
+    assert spec.function_name is None
     assert spec.system_prompt == "An English tutor."
     assert isinstance(spec.output_mode, ChatOutput)
     assert spec.agent is None  # lazy build — not constructed yet
@@ -730,3 +733,164 @@ async def test_agent_accessor_pre_build_raises_post_build_returns(
     await tutor("hi")  # trigger build
     assert isinstance(tutor.agent, _FakeAgent)
     assert tutor.agent is tutor._agent
+
+
+# ---------------------------------------------------------------------------
+# M3: model= functionless routing knobs
+# ---------------------------------------------------------------------------
+
+
+async def test_model_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
+    """model/params/cache ride the config channel onto AgentConfig."""
+
+    @app_with_fake_agent.agent(
+        "tutor-m",
+        model="groq::llama-3.3-70b-versatile",
+        params={"chat_completion": {"temperature": 0.2}},
+        cache={"enabled": "on", "max_age_s": 3600},
+    )
+    async def tutor_m(q: str) -> str:  # type: ignore[empty-body]
+        """A tutor."""
+
+    await tutor_m("hi")
+    cfg = tutor_m.agent._config
+    assert cfg.model == "groq::llama-3.3-70b-versatile"
+    assert cfg.function_name is None
+    assert cfg.params == {"chat_completion": {"temperature": 0.2}}
+    assert cfg.cache == {"enabled": "on", "max_age_s": 3600}
+
+
+async def test_variant_knob_reaches_agentconfig(app_with_fake_agent: App) -> None:
+    """The prod path — function_name + variant + cache — stays intact."""
+
+    @app_with_fake_agent.agent(
+        "prod-a", function_name="prod_agent", variant="gpt4o_v2"
+    )
+    async def prod_a(q: str) -> str:  # type: ignore[empty-body]
+        """Prod agent."""
+
+    await prod_a("hi")
+    cfg = prod_a.agent._config
+    assert cfg.function_name == "prod_agent"
+    assert cfg.variant == "gpt4o_v2"
+
+
+async def test_default_function_name_resolves_to_agent(
+    app_with_fake_agent: App,
+) -> None:
+    """Neither model= nor function_name= → AgentConfig's "agent" fallback
+    (hello-world against a stock TOML keeps working)."""
+
+    @app_with_fake_agent.agent("plain-m3")
+    async def plain_m3(q: str) -> str:  # type: ignore[empty-body]
+        """Plain."""
+
+    await plain_m3("hi")
+    cfg = plain_m3.agent._config
+    assert cfg.function_name == "agent"
+    assert cfg.model is None
+
+
+async def test_model_and_function_name_raise_at_build(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("bad-xor", function_name="f", model="groq::x")
+    async def bad_xor(q: str) -> str:  # type: ignore[empty-body]
+        """Bad."""
+
+    with pytest.raises(ConfigurationError, match="XOR"):
+        await bad_xor("hi")
+
+
+async def test_model_with_structured_return_raises_with_stanza(
+    app_with_fake_agent: App,
+) -> None:
+    """A structured return annotation infers a JSON-function output mode,
+    which the model= path cannot satisfy — the error carries the TOML fix."""
+
+    @app_with_fake_agent.agent("planner-m3", model="groq::x")
+    async def planner_m3(q: str) -> _Trip:  # type: ignore[empty-body]
+        """Planner."""
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        await planner_m3("hi")
+    assert "[functions.planner-m3]" in str(excinfo.value)
+    assert 'type = "json"' in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# M3: client-side prompt templates — .with_(prompt_vars=...)
+# ---------------------------------------------------------------------------
+
+
+async def test_prompt_vars_format_the_docstring(app_with_fake_agent: App) -> None:
+    @app_with_fake_agent.agent("tpl")
+    async def tpl(q: str) -> str:  # type: ignore[empty-body]
+        """Tutor for {level} students."""
+
+    await tpl("hi").with_(prompt_vars={"level": "advanced"})
+    sent = _FakeAgent.last_invoke_kwargs
+    assert sent["system"] == "Tutor for advanced students."
+
+
+async def test_prompt_vars_format_an_explicit_system(
+    app_with_fake_agent: App,
+) -> None:
+    """prompt_vars applies to the *effective* system string uniformly —
+    an explicit .with_(system=...) override is formatted too."""
+
+    @app_with_fake_agent.agent("tpl2")
+    async def tpl2(q: str) -> str:  # type: ignore[empty-body]
+        """Unused docstring."""
+
+    await tpl2("hi").with_(system="Be {tone}.", prompt_vars={"tone": "kind"})
+    assert _FakeAgent.last_invoke_kwargs["system"] == "Be kind."
+
+
+async def test_docstring_without_prompt_vars_passes_through_verbatim(
+    app_with_fake_agent: App,
+) -> None:
+    """Braces in a docstring stay literal unless prompt_vars is passed."""
+
+    @app_with_fake_agent.agent("tpl3")
+    async def tpl3(q: str) -> str:  # type: ignore[empty-body]
+        """Return JSON like {"answer": 1}."""
+
+    await tpl3("hi")
+    assert _FakeAgent.last_invoke_kwargs["system"] == 'Return JSON like {"answer": 1}.'
+
+
+async def test_prompt_vars_missing_placeholder_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl4")
+    async def tpl4(q: str) -> str:  # type: ignore[empty-body]
+        """Tutor for {level} students."""
+
+    with pytest.raises(ConfigurationError, match="level"):
+        await tpl4("hi").with_(prompt_vars={"grade": "A"})
+
+
+async def test_prompt_vars_with_system_arguments_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl5")
+    async def tpl5(q: str) -> str:  # type: ignore[empty-body]
+        """Docstring."""
+
+    with pytest.raises(ConfigurationError, match="prompt_vars"):
+        await tpl5("hi").with_(
+            prompt_vars={"a": "b"}, system_arguments={"memory_context": "x"}
+        )
+
+
+async def test_prompt_vars_without_any_system_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl6")
+    async def tpl6(q: str) -> str:  # type: ignore[empty-body]
+        # No docstring on purpose.
+        return None  # type: ignore[return-value]
+
+    with pytest.raises(ConfigurationError, match="no system prompt"):
+        await tpl6("hi").with_(prompt_vars={"a": "b"})

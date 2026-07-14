@@ -39,6 +39,7 @@ class ChatOutput:
 
     expects_tool_loop: bool = True
     supports_streaming: bool = True
+    requires_json_function: bool = False
     name: str = "chat"
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest:

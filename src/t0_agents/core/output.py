@@ -74,9 +74,15 @@ class InferenceRequest:
     onto the top-level TZ kwarg of the same name.  ``tool_choice``
     accepts :class:`tensorzero.ToolChoice` values (``"auto"``,
     ``"required"``, ``"off"``, or ``{"specific": "<tool>"}``).
+
+    ``model_name``/``variant_name``/``cache_options`` mirror
+    :class:`~t0_agents.core.config.AgentConfig`'s ``model``/``variant``/
+    ``cache``: exactly one of ``function_name``/``model_name`` is set
+    (``AgentConfig.__post_init__`` enforces the XOR before a request is
+    ever built).
     """
 
-    function_name: str
+    function_name: str | None
     input: dict[str, Any]
     additional_tools: list[Any] | None = None
     tool_choice: Any | None = None
@@ -85,6 +91,9 @@ class InferenceRequest:
     dryrun: bool = False
     output_schema: Mapping[str, Any] | None = None
     params: dict[str, Any] | None = None
+    model_name: str | None = None
+    variant_name: str | None = None
+    cache_options: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -211,6 +220,16 @@ class OutputMode(Protocol[T_co]):
     - ``supports_streaming`` — ``True`` if ``run.events()`` is legal;
       ``False`` raises :class:`ConfigurationError` early when streaming
       is attempted.
+
+    One capability flag is optional (read via ``getattr``, default
+    ``False``, so pre-existing custom modes keep satisfying the
+    protocol):
+
+    - ``requires_json_function`` — ``True`` for modes that only work
+      against a ``type = "json"`` TensorZero function
+      (:class:`JsonOutput`, :class:`StructuredOutput`).
+      ``AgentConfig`` rejects ``model=`` for such modes: the
+      functionless passthrough ignores ``output_schema``.
 
     ``name`` is a short identifier used in error messages and
     diagnostics.

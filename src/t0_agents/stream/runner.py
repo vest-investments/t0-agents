@@ -77,7 +77,7 @@ class StreamingAgentLoop:
         t0: AsyncTensorZeroGateway,
         tool_provider: Client[Any] | None = None,
         user_message: str = "",
-        function_name: str = "",
+        function_name: str | None = "",
         *,
         episode_id: str | None = None,
         max_turns: int = 20,
@@ -92,6 +92,10 @@ class StreamingAgentLoop:
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
         prior_messages: list[Message] | None = None,
         progress_sink: Callable[[ToolProgressEvent], Awaitable[None]] | None = None,
+        model_name: str | None = None,
+        variant_name: str | None = None,
+        params: dict[str, Any] | None = None,
+        cache_options: dict[str, Any] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Drive the streaming loop and yield every event.
 
@@ -137,12 +141,20 @@ class StreamingAgentLoop:
                 "Pass either `system` (raw string for input.system) or "
                 "`system_arguments` (dict for template variables), not both."
             )
-        if not user_message or not function_name:
+        if system_arguments is not None and model_name is not None:
+            raise ValueError(
+                "system_arguments requires a tensorzero.toml function with "
+                "a system template; model_name routes via the functionless "
+                "passthrough, which has none. Pass system= (a raw prompt "
+                "string), or declare the function and use function_name=."
+            )
+        if not user_message or not (function_name or model_name):
             raise ValueError(
                 "`StreamingAgentLoop.stream` requires non-empty "
-                "`user_message` and `function_name`. Their `\"\"` defaults "
-                "exist only as a Python-syntax workaround so `tool_provider`"
-                " can default to `None` at position 2."
+                "`user_message` and a routing target: `function_name` or "
+                "`model_name`. The `\"\"` defaults exist only as a "
+                "Python-syntax workaround so `tool_provider` can default "
+                "to `None` at position 2."
             )
         mcp_tools = (
             await tool_provider.list_tools() if tool_provider is not None else []
@@ -176,8 +188,8 @@ class StreamingAgentLoop:
             progress_callback = _forward_progress
 
         logger.info(
-            "Streaming agent loop started: function=%s, max_turns=%d, tools=%d",
-            function_name,
+            "Streaming agent loop started: target=%s, max_turns=%d, tools=%d",
+            function_name or model_name,
             max_turns,
             len(t0_tools),
         )
@@ -186,6 +198,8 @@ class StreamingAgentLoop:
             chunks, err = await self._open_stream(
                 t0=t0,
                 function_name=function_name,
+                model_name=model_name,
+                variant_name=variant_name,
                 episode_id=episode_id,
                 messages=messages,
                 t0_tools=t0_tools,
@@ -195,6 +209,8 @@ class StreamingAgentLoop:
                 namespace=namespace,
                 system_arguments=system_arguments,
                 system=system,
+                params=params,
+                cache_options=cache_options,
             )
             if err is not None:
                 if self._is_recoverable(err):
@@ -333,7 +349,9 @@ class StreamingAgentLoop:
         self,
         *,
         t0: AsyncTensorZeroGateway,
-        function_name: str,
+        function_name: str | None,
+        model_name: str | None,
+        variant_name: str | None,
         episode_id: str | None,
         messages: list[Message],
         t0_tools: list[dict[str, Any]],
@@ -343,6 +361,8 @@ class StreamingAgentLoop:
         namespace: str | None,
         system_arguments: dict[str, Any] | None,
         system: str | None,
+        params: dict[str, Any] | None,
+        cache_options: dict[str, Any] | None,
     ) -> tuple[AsyncIterator[InferenceChunk] | None, TensorZeroError | None]:
         """Issue ``t0.inference(stream=True)`` — return the iterator or the error."""
         input_dict: dict[str, Any] = {"messages": messages}
@@ -352,7 +372,9 @@ class StreamingAgentLoop:
             input_dict["system"] = system_arguments
         try:
             raw = await t0.inference(
-                function_name=function_name,
+                function_name=function_name or None,
+                model_name=model_name,
+                variant_name=variant_name,
                 episode_id=episode_id,
                 input=input_dict,
                 additional_tools=t0_tools,
@@ -361,6 +383,8 @@ class StreamingAgentLoop:
                 tags=tags,
                 namespace=namespace,
                 stream=True,
+                params=params,
+                cache_options=cache_options,
             )
         except TensorZeroError as err:
             return None, err

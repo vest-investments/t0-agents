@@ -55,6 +55,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`t0_agents.tooling.FilteredToolProvider`.**  A standalone `ToolProvider`
   wrapper exposing only an allow-listed set of tool names — the mechanism
   behind `@app.agent(tools=...)`, reusable on its own.
+- **Functionless agents — `model=`.**  `AgentConfig` (and `@app.agent`)
+  accept `model=` — a `{provider}::{model}` shorthand or a `[models.*]`
+  name — routing inference through the gateway's built-in passthrough
+  with **zero tensorzero.toml**.  Tools, episodes, streaming, and tags
+  work unchanged.  `model` XOR `function_name` (neither → the
+  back-compat `"agent"`); `variant=` pins a declared function's variant
+  and is rejected alongside `model=` (mirroring the gateway); JSON
+  output modes are rejected on the `model=` path at build time with a
+  ready-to-paste TOML stanza — the passthrough ignores per-call
+  `output_schema` (verified against gateway 2026.4.0).  New sibling
+  knobs `params=` (merged under output-mode params) and `cache=`
+  (TensorZero `cache_options`) forward to every inference, on both
+  routing paths.
+- **Observability auto-tag.**  Every `Agent`-driven inference now
+  carries `t0_agents.agent = <config.name>` (per-call and config tags
+  win on collision) — per-agent ClickHouse segmentation on shared
+  functions and the only per-agent handle under `tensorzero::default`.
+  Behaviour note: `tags` is never `None` on Agent-driven inferences
+  anymore.  `TensorZeroMemory(tag_filter={"t0_agents.agent": name})`
+  is the documented cover for the functionless memory blind spot.
+- **Client-side prompt templates — `.with_(prompt_vars={...})`.**  The
+  docstring (or an explicit `system=`) may carry `str.format`
+  `{placeholders}` filled per call, entirely client-side.  Mutually
+  exclusive with `system_arguments` (TZ server-side templates), which
+  in turn is rejected on `model=` agents up front — the passthrough
+  has no system template.
 
 ### Changed
 

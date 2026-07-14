@@ -315,7 +315,10 @@ async def test_sse_tags_query_param_reaches_gateway(
             async for _ in resp.aiter_bytes():
                 pass
 
-    assert fake_t0.calls[0]["tags"] == {"env": "staging"}
+    assert fake_t0.calls[0]["tags"] == {
+        "t0_agents.agent": "sse-tags",
+        "env": "staging",
+    }
 
 
 async def test_sse_invalid_tags_yields_error_event(
@@ -394,6 +397,7 @@ def test_ws_user_message_tags_reach_gateway(
                 break
 
     assert fake_t0.calls[0]["tags"] == {
+        "t0_agents.agent": "ws-tags",
         "env": "prod",
         "request_id": "r-42",
     }

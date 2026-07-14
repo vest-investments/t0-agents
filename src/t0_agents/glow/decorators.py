@@ -155,7 +155,7 @@ def _make_decorator(
     app: App,
     name: str,
     *,
-    function_name: str,
+    function_name: str | None,
     config_overrides: dict[str, Any] | None = None,
     tools: list[Any] | None = None,
 ) -> Callable[[Callable[P, Awaitable[R]]], _AgentWrapper[P, R]]:

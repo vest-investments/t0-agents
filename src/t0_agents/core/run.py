@@ -98,7 +98,7 @@ class RunInput:
     """
 
     user_message: str
-    function_name: str
+    function_name: str | None
     episode_id: str | None = None
     tags: Mapping[str, str] | None = None
     system: str | None = None
@@ -789,7 +789,7 @@ class Run(Generic[T]):
 def build_run_input(
     *,
     user_message: str,
-    function_name: str,
+    function_name: str | None,
     episode_id: str | None = None,
     tags: Mapping[str, str] | None = None,
     system: str | None = None,

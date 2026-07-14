@@ -44,7 +44,7 @@ class GuardrailContext:
     """
 
     agent_name: str
-    function_name: str
+    function_name: str | None
     user_message: str
     turn: int = 0
     tool_calls_made: int = 0

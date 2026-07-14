@@ -83,6 +83,7 @@ class StructuredOutput(Generic[M]):
 
     expects_tool_loop: bool = field(default=False, init=False)
     supports_streaming: bool = field(default=False, init=False)
+    requires_json_function: bool = field(default=True, init=False)
     #: Strict-tightened JSON schema derived from ``model`` at
     #: construction time.  ``model_json_schema()`` is expensive on
     #: complex models, and both :meth:`shape_inference` (called once

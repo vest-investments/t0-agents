@@ -21,6 +21,30 @@ _VALID_MEMORY_STRATEGIES = frozenset(
 )
 
 
+def _functionless_json_error(name: str, model: str, output_name: str) -> str:
+    """Error text for ``model=`` + a JSON-function output mode.
+
+    Carries a ready-to-paste tensorzero.toml stanza so the fix is a
+    copy-paste plus swapping ``model=`` for ``function_name=``.
+    """
+    return (
+        f"AgentConfig(model={model!r}) is incompatible with "
+        f"output={output_name!r}: model= routes through the gateway's "
+        f"built-in chat passthrough function and output_schema is ignored "
+        f"there, so JSON-validated output can never be produced. Declare a "
+        f"JSON function in tensorzero.toml and pass function_name= instead:\n"
+        f"\n"
+        f"[functions.{name}]\n"
+        f'type = "json"\n'
+        f'output_schema = "functions/{name}/output_schema.json"\n'
+        f"\n"
+        f"[functions.{name}.variants.default]\n"
+        f'type = "chat_completion"\n'
+        f'model = "{model}"\n'
+        f'json_mode = "strict"\n'
+    )
+
+
 @dataclass(slots=True)
 class AgentConfig:
     """Declarative configuration for an Agent.
@@ -30,8 +54,37 @@ class AgentConfig:
     boilerplate.
 
     Attributes:
-        name: Human-readable agent name; used for logging and tags.
-        function_name: TensorZero function name (must exist in ``tensorzero.toml``).
+        name: Human-readable agent name; used for logging and tags (the
+            ``t0_agents.agent`` observability tag carries it on every
+            inference).
+        function_name: TensorZero function name (must exist in
+            ``tensorzero.toml``).  Mutually exclusive with ``model``.
+            When neither is given, defaults to ``"agent"``.
+        model: Model to call without any tensorzero.toml declaration —
+            either a ``{provider}::{model}`` shorthand (e.g.
+            ``"groq::llama-3.3-70b-versatile"``) or a ``[models.*]`` name.
+            Routes through the gateway's built-in chat passthrough
+            function ``tensorzero::default``; the loop, tools,
+            episodes, and streaming all work unchanged.  Mutually
+            exclusive with ``function_name`` and ``variant``, and
+            incompatible with JSON-function output modes (the
+            passthrough ignores ``output_schema`` — the error carries a
+            ready-to-paste TOML stanza).  Note the memory caveat:
+            inferences land under ``tensorzero::default``, so
+            ``TensorZeroMemory(function_name=...)`` filters will not see
+            them — filter on ``tag_filter={"t0_agents.agent": name}``
+            instead.
+        variant: Pin a specific variant of ``function_name`` (forwarded
+            as ``variant_name``).  Requires the function path — the
+            gateway rejects variant pinning for ``model``-routed calls.
+        params: Per-agent inference parameters in the TensorZero shape,
+            e.g. ``{"chat_completion": {"temperature": 0.2}}``.  Merged
+            under any output-mode parameters (the mode wins on
+            ``json_mode``).
+        cache: TensorZero ``cache_options``, e.g.
+            ``{"enabled": "on", "max_age_s": 3600}``.  ``enabled`` is one
+            of ``"write_only"``/``"read_only"``/``"on"``/``"off"``; set it
+            explicitly rather than relying on the gateway default.
         max_turns: Maximum inference turns before ``MaxTurnsExceededError``.
         tool_timeout: Per-tool-call timeout in seconds, or ``None`` to use the
             framework default (30.0 s).
@@ -95,7 +148,7 @@ class AgentConfig:
 
     # Identity
     name: str
-    function_name: str
+    function_name: str | None = None
 
     # Loop budget
     max_turns: int = 20
@@ -130,12 +183,38 @@ class AgentConfig:
     # semantically distinct from ``None``.
     middleware: list[Middleware] | None = None
 
+    # Functionless routing + per-model inference knobs.  Appended after
+    # the v1.x fields so positional construction stays stable.
+    model: str | None = None
+    variant: str | None = None
+    params: dict[str, Any] | None = None
+    cache: dict[str, Any] | None = None
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ConfigurationError("AgentConfig.name must be a non-empty string")
-        if not self.function_name:
+        if self.model is not None and self.function_name is not None:
+            raise ConfigurationError(
+                f"AgentConfig accepts model= XOR function_name=, not both "
+                f"(got model={self.model!r}, function_name={self.function_name!r}). "
+                f"model= routes through the gateway's built-in passthrough "
+                f"function; function_name= targets a tensorzero.toml function."
+            )
+        if self.model is not None and not self.model:
+            raise ConfigurationError("AgentConfig.model must be a non-empty string")
+        if self.model is None and self.function_name is None:
+            self.function_name = "agent"
+        if self.function_name is not None and not self.function_name:
             raise ConfigurationError(
                 "AgentConfig.function_name must be a non-empty string"
+            )
+        if self.variant is not None and self.model is not None:
+            raise ConfigurationError(
+                f"AgentConfig.variant={self.variant!r} cannot be combined with "
+                f"model= — the gateway rejects variant_name for model-routed "
+                f"inference (functionless calls have no declared variants). "
+                f"Pin a variant on a tensorzero.toml function via "
+                f"function_name= + variant=."
             )
         if self.max_turns <= 0:
             raise ConfigurationError(
@@ -206,6 +285,16 @@ class AgentConfig:
                 f"multi-turn message history to thread). Use "
                 f"memory_strategy='prepended_message' (the default) or "
                 f"'system_template' for single-shot outputs."
+            )
+        # model= routes through the gateway's built-in chat passthrough
+        # (``tensorzero::default``), which ignores per-call output_schema
+        # (verified against gateway 2026.4.0) — JSON-function output modes
+        # can never be satisfied on that path.
+        if self.model is not None and getattr(
+            self.output, "requires_json_function", False
+        ):
+            raise ConfigurationError(
+                _functionless_json_error(self.name, self.model, self.output.name)
             )
 
         # Materialise the default middleware chain when the caller did

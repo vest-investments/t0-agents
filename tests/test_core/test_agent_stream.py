@@ -254,6 +254,7 @@ async def test_agent_stream_tags_override_merges_with_config() -> None:
         pass
 
     assert fake_t0.calls[0]["tags"] == {
+        "t0_agents.agent": "tg",
         "env": "prod",
         "app": "api",
         "request_id": "r-9",
@@ -278,7 +279,10 @@ async def test_agent_stream_tags_override_wins_on_collision() -> None:
     async for _ in agent.invoke("hi", tags={"env": "staging"}).events():
         pass
 
-    assert fake_t0.calls[0]["tags"] == {"env": "staging"}
+    assert fake_t0.calls[0]["tags"] == {
+        "t0_agents.agent": "tg2",
+        "env": "staging",
+    }
 
 
 async def test_agent_stream_tags_none_preserves_config_only() -> None:
@@ -300,7 +304,10 @@ async def test_agent_stream_tags_none_preserves_config_only() -> None:
     async for _ in agent.invoke("hi").events():
         pass
 
-    assert fake_t0.calls[0]["tags"] == {"env": "prod"}
+    assert fake_t0.calls[0]["tags"] == {
+        "t0_agents.agent": "tg3",
+        "env": "prod",
+    }
 
 
 async def test_agent_run_preserves_non_streaming_path() -> None:

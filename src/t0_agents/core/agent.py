@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal, TypeVar, cast, overload
@@ -372,6 +373,10 @@ class Agent:
             namespace=self._config.namespace,
             on_inference=ctx.on_inference,
             system=ctx.system,
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            params=self._config.params,
+            cache_options=self._config.cache,
             **extra_kwargs,
         )
 
@@ -425,6 +430,10 @@ class Agent:
             on_inference=ctx.on_inference,
             system=ctx.system,
             progress_sink=run._buffer.put,
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            params=self._config.params,
+            cache_options=self._config.cache,
             **extra_kwargs,
         ):
             if isinstance(event, DoneEvent):
@@ -519,7 +528,13 @@ class Agent:
             namespace=self._config.namespace,
             dryrun=self._config.dryrun,
             output_schema=None,
-            params=None,
+            # shape_inference mutates params in place (setdefault +
+            # key assignment) — seed a deep copy so the long-lived
+            # AgentConfig.params dict is never contaminated across runs.
+            params=copy.deepcopy(self._config.params),
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            cache_options=self._config.cache,
         )
 
         # --- 2. Apply the output mode's request shaping ---
@@ -534,6 +549,12 @@ class Agent:
             "namespace": req.namespace,
             "dryrun": req.dryrun,
         }
+        if req.model_name is not None:
+            inference_kwargs["model_name"] = req.model_name
+        if req.variant_name is not None:
+            inference_kwargs["variant_name"] = req.variant_name
+        if req.cache_options is not None:
+            inference_kwargs["cache_options"] = req.cache_options
         if req.output_schema is not None:
             inference_kwargs["output_schema"] = dict(req.output_schema)
         if req.params is not None:
@@ -591,21 +612,24 @@ class Agent:
     def _merge_tags(
         self,
         override: dict[str, str] | None,
-    ) -> dict[str, str] | None:
-        """Shallow-merge a per-call ``tags`` override onto ``config.tags``.
+    ) -> dict[str, str]:
+        """Merge the auto-tag, ``config.tags``, and a per-call override.
 
-        Matches :meth:`t0_agents.serve.session.SessionFactory._merge_tags`
-        so the streaming-WS path (one :class:`Agent` shared across frames)
-        and the per-HTTP path (fresh :class:`Agent` per request) stay
-        behaviourally identical.  Returns ``None`` when both inputs are
-        empty — preserves the byte-identity guarantee for callers that
-        never supply tags.
+        Every inference carries ``t0_agents.agent = config.name`` so
+        per-agent observability survives shared functions and the
+        functionless passthrough (whose inferences all land under
+        ``tensorzero::default``).  Precedence: per-call ``override``
+        beats ``config.tags`` beats the auto-tag.
+
+        :meth:`t0_agents.serve.session.SessionFactory._merge_tags` feeds
+        ``config.tags`` upstream of this merge, so the serve path
+        inherits the auto-tag without duplicating it.
         """
-        base = self._config.tags or {}
-        extra = override or {}
-        if not base and not extra:
-            return None
-        return {**base, **extra}
+        return {
+            "t0_agents.agent": self._config.name,
+            **(self._config.tags or {}),
+            **(override or {}),
+        }
 
     def _validate_system_kwargs(
         self,
@@ -625,7 +649,20 @@ class Agent:
         ``"prepended_message"`` and ``"messages"`` memory strategies
         leave ``input.system`` untouched and are compatible with both
         kwargs.
+
+        ``system_arguments`` additionally requires a declared function
+        with a system template — the functionless passthrough behind
+        ``model=`` has none, so that combination is rejected up front
+        rather than surfacing as an opaque gateway 400.
         """
+        if system_arguments is not None and self._config.model is not None:
+            raise ValueError(
+                "system_arguments= requires a tensorzero.toml function with "
+                "a system template; this agent routes via model= (the "
+                "functionless passthrough has no templates). Pass system= "
+                "(a raw prompt string), or declare the function and use "
+                "function_name=."
+            )
         if system is None:
             return
         if system_arguments is not None:

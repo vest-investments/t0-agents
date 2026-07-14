@@ -415,3 +415,42 @@ class TestMessagesMemoryStrategy:
                 memory=cast(Any, memory),
                 memory_strategy="messages",
             )
+
+
+class TestConfigParamsMerge:
+    """AgentConfig.params must merge under the output mode's shaping (M3)."""
+
+    async def test_config_params_merge_with_json_mode(self) -> None:
+        """Config-level temperature survives JsonOutput's json_mode injection;
+        the mode wins on the json_mode key itself."""
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
+        config_params = {"chat_completion": {"temperature": 0.2}}
+        agent = _json_agent(
+            t0=t0,
+            client=FakeMCPClient(tools=[]),
+            params=config_params,
+        )
+
+        await agent.invoke("hello")
+
+        kwargs = t0.calls[0]
+        assert kwargs["params"] == {
+            "chat_completion": {"temperature": 0.2, "json_mode": "strict"}
+        }
+        # The long-lived config dict must not absorb the mode's mutation.
+        assert config_params == {"chat_completion": {"temperature": 0.2}}
+
+    async def test_variant_and_cache_project_on_single_shot(self) -> None:
+        t0 = MockGateway.script_json([{"raw": _OK_RAW}])
+        agent = _json_agent(
+            t0=t0,
+            client=FakeMCPClient(tools=[]),
+            variant="json_v2",
+            cache={"enabled": "on", "max_age_s": 120},
+        )
+
+        await agent.invoke("hello")
+
+        kwargs = t0.calls[0]
+        assert kwargs["variant_name"] == "json_v2"
+        assert kwargs["cache_options"] == {"enabled": "on", "max_age_s": 120}
