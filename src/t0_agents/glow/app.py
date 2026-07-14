@@ -121,7 +121,7 @@ def _match_tool_entry(
         return {name for name in live_names if name.startswith(prefix)}
     if isinstance(entry, str):
         return {name for name in live_names if fnmatch.fnmatchcase(name, entry)}
-    if callable(entry):
+    if callable(entry) and not isinstance(entry, type):
         name = getattr(entry, "__name__", None)
         return {name} & live_names if name is not None else set()
     raise ConfigurationError(

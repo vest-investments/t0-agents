@@ -97,6 +97,16 @@ def test_unsupported_entry_raises() -> None:
         _resolve_tool_filter("ag", [123], {"foo"})
 
 
+def test_arbitrary_class_is_not_treated_as_callable() -> None:
+    # A non-MCPServer class is callable in Python; it must still raise rather
+    # than fall through the callable branch to a confusing dead-pattern warning.
+    class NotATool:
+        pass
+
+    with pytest.raises(ConfigurationError, match="not a supported spec"):
+        _resolve_tool_filter("ag", [NotATool], {"foo"})
+
+
 # ---------------------------------------------------------------------------
 # Wiring — through app.lifespan() with a real Agent
 # ---------------------------------------------------------------------------
