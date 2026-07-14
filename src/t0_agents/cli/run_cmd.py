@@ -24,8 +24,20 @@ def register(app: typer.Typer) -> None:
     def run_cmd(
         agent_spec: str = typer.Argument(
             ...,
-            help="Factory spec in 'module:attr' form, e.g. "
-            "'examples.10_cli.agent:assistant'.",
+            help="Factory spec in 'module:attr' form (e.g. "
+            "'examples.10_cli.agent:assistant'), or a glow App instance "
+            "(e.g. 'examples.glow.01_hello:app').",
+        ),
+        message: str | None = typer.Argument(
+            None,
+            help="One-shot message: send it, render the reply, exit.  "
+            "Omit to start the interactive REPL.",
+        ),
+        agent: str | None = typer.Option(
+            None,
+            "--agent",
+            help="Agent to run when the spec is a glow App with several "
+            "registered agents (defaults to the sole registered one).",
         ),
         verbose: bool = typer.Option(
             False,
@@ -43,11 +55,12 @@ def register(app: typer.Typer) -> None:
             ),
         ),
     ) -> None:
-        """Start an interactive streaming REPL against an agent factory.
+        """Run an agent — one-shot with a message, or as a streaming REPL.
 
-        The factory must be a zero-argument callable returning an async
-        context manager yielding an :class:`Agent` (typically decorated
-        with :func:`contextlib.asynccontextmanager`).
+        The spec resolves to either a zero-argument factory returning an
+        async context manager yielding an :class:`Agent`, or a glow
+        ``App`` instance (its lifecycle is entered around the session;
+        pick the agent with ``--agent`` when several are registered).
         """
         if debug_log is not None:
             handler = logging.FileHandler(debug_log, mode="w")
@@ -59,11 +72,17 @@ def register(app: typer.Typer) -> None:
             root = logging.getLogger("t0_agents")
             root.addHandler(handler)
             root.setLevel(logging.DEBUG)
-        asyncio.run(_run(agent_spec, verbose))
+        asyncio.run(_run(agent_spec, verbose, message=message, agent_name=agent))
 
 
-async def _run(spec: str, verbose: bool) -> None:
-    factory = load_agent_factory(spec)
+async def _run(
+    spec: str,
+    verbose: bool,
+    *,
+    message: str | None = None,
+    agent_name: str | None = None,
+) -> None:
+    factory = load_agent_factory(spec, agent_name=agent_name)
     console = Console()
     try:
         async with factory() as agent:
@@ -78,6 +97,10 @@ async def _run(spec: str, verbose: bool) -> None:
                 f"[cyan]{agent.config.name}[/cyan] "
                 f"(function [italic]{agent.config.function_name}[/italic])",
             )
+            if message is not None:
+                run = agent.invoke(message)
+                await renderer.consume(run.events())
+                return
             console.print("[dim]Ctrl-D or Ctrl-C to exit.[/dim]")
             await _repl(agent, renderer, console)
     except typer.BadParameter:
