@@ -179,7 +179,7 @@ async def test_remaining_selectors_match_their_event_types() -> None:
 
 def test_selector_constructor_defaults_passthrough() -> None:
     """Bare ``Selector(EventClass)`` matches every event of that type."""
-    selector: Selector[ThoughtEvent] = Selector(ThoughtEvent)
+    selector: Selector[ThoughtEvent, ThoughtEvent] = Selector(ThoughtEvent)
     assert selector.matches(_THOUGHT_FOO) is True
     assert selector.matches(_THOUGHT_BAR) is True
     assert selector.matches(_TEXT_END) is False

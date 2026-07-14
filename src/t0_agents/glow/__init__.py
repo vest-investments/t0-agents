@@ -12,6 +12,7 @@ the public ``._agent`` attribute on the returned callable.
 
 from __future__ import annotations
 
+from t0_agents.glow.agent_handle import AgentHandle, llm
 from t0_agents.glow.app import App
 from t0_agents.glow.di import Depends
 from t0_agents.glow.guardrails_typing import regex_guardrail
@@ -29,6 +30,7 @@ from t0_agents.glow.selectors import (
 )
 
 __all__ = [
+    "AgentHandle",
     "App",
     "Depends",
     "Done",
@@ -41,5 +43,6 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "TurnEnd",
+    "llm",
     "regex_guardrail",
 ]

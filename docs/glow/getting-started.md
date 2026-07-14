@@ -13,12 +13,13 @@ orchestrate a `Run`, glow takes four: a function with a docstring and
 a return-type annotation, decorated with `@app.agent`.
 
 ```python
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 app = App(t0=t0)
 
 @app.agent("tutor")
 async def tutor(query: str) -> str:
     """An English tutor that explains grammar like you're 12."""
+    return llm()
 
 print(await tutor("How do I say hello in formal Japanese?"))
 ```
@@ -79,6 +80,7 @@ class TripPlan(BaseModel):
 @app.agent("planner", function_name="plan_trip")
 async def plan(query: str) -> TripPlan:
     """Plan trips with realistic budgets."""
+    return llm()
 
 trip = await plan("3 days in Japan under $2000")
 print(trip.destinations)        # statically typed list[str]

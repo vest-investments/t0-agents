@@ -1,6 +1,6 @@
 """Test-authoring surface for t0-agents.
 
-Two complementary tools for writing agent tests:
+Three complementary tools for writing agent tests:
 
 * :class:`MockGateway` + :class:`MockToolProvider` — deterministic, no
   infrastructure, ideal for unit tests pinning down *exactly* what the
@@ -10,6 +10,11 @@ Two complementary tools for writing agent tests:
   responses; :meth:`MockGateway.script_json` /
   :meth:`MockGateway.canned_json` script JSON responses for agents whose
   ``function_kind == "json"``.
+* :class:`ScriptedAgent` — a whole-:class:`~t0_agents.core.agent.Agent`
+  fake whose ``invoke()`` replays a fixed event script + result with no
+  gateway at all.  Pair with ``App.agent_overrides`` to swap a glow agent
+  by name.  Use it when the unit under test consumes ``invoke() -> Run``
+  and you want to script the events, not the gateway responses.
 * :class:`EmbeddedGatewayHelper` — real TensorZero inference against any
   provider whose API key is in the environment, no Docker / ClickHouse /
   Postgres required.  Ideal for integration tests that need realistic
@@ -19,7 +24,7 @@ Public surface::
 
     from t0_agents.testing import (
         MockGateway, MockChatResponse, MockJsonResponse,
-        MockToolProvider, RecordingGateway,
+        MockToolProvider, RecordingGateway, ScriptedAgent,
         MockStreamingGateway, fake_event_stream,
         EmbeddedGatewayHelper,
         assert_tool_called, assert_tool_not_called, assert_tool_args_equal,
@@ -66,6 +71,7 @@ from t0_agents.testing.mocks import (
     RecordingGateway,
     ToolHandler,
 )
+from t0_agents.testing.scripted import ScriptedAgent
 from t0_agents.testing.streaming_mocks import (
     MockStreamingGateway,
     fake_event_stream,
@@ -80,6 +86,7 @@ __all__ = [
     "MockStreamingGateway",
     "MockToolProvider",
     "RecordingGateway",
+    "ScriptedAgent",
     "ToolHandler",
     "agent_test_factory",
     "assert_invalid_json",

@@ -15,7 +15,7 @@ Two patterns coexist:
 ```python
 from fastmcp import FastMCP
 from typing import Annotated, Any
-from t0_agents.glow import App, MCPServer
+from t0_agents.glow import App, MCPServer, llm
 
 # 1. Class-based — preferred for shared servers.
 class MathMCP(MCPServer, server=_math_mcp_instance, namespace="math"): ...
@@ -26,6 +26,7 @@ app = App(t0=t0, servers=[MathMCP])
 @app.agent("calc")
 async def calc(query: str, math: Annotated[Any, MCPServer(url="http://...")]) -> str:
     """Math assistant with a remote MCP server."""
+    return llm()
 ```
 
 Class-based declarations register the spec on `__init_subclass__`;
@@ -54,7 +55,7 @@ in `t0_agents.guardrails.regex` and is also re-exported from
 
 ```python
 from typing import Annotated
-from t0_agents.glow import regex_guardrail
+from t0_agents.glow import llm, regex_guardrail
 from t0_agents.guardrails import max_cost
 
 no_pii = regex_guardrail(r"\b\d{3}-\d{2}-\d{4}\b", "no SSN")
@@ -63,6 +64,7 @@ under_budget = max_cost(0.50)
 @app.agent("support")
 async def support(query: str) -> Annotated[str, no_pii, under_budget]:
     """Customer support."""
+    return llm()
 ```
 
 `@app.agent`'s decoration-time walk harvests every Annotated metadata
@@ -83,6 +85,7 @@ async def filter(
     query: Annotated[str, regex_guardrail(r"\bsecret\b", "no secrets", phase="before_run")],
 ) -> str:
     """Reject queries containing 'secret'."""
+    return llm()
 ```
 
 ## When to drop down to `AgentConfig.guardrails=[...]`

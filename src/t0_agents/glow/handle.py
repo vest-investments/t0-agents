@@ -64,6 +64,10 @@ _WITH_KWARGS = frozenset(
 T = TypeVar("T")
 U = TypeVar("U")
 M = TypeVar("M", bound=BaseModel)
+R1 = TypeVar("R1")
+R2 = TypeVar("R2")
+R3 = TypeVar("R3")
+R4 = TypeVar("R4")
 
 
 class FluentRun(Generic[T]):
@@ -205,7 +209,33 @@ class FluentRun(Generic[T]):
     # Consumption — builds the underlying Run lazily
     # ------------------------------------------------------------------
 
-    def events(self, *selectors: Selector[Any]) -> AsyncIterator[Any]:
+    @overload
+    def events(self) -> AsyncIterator[AgentEvent]: ...
+    @overload
+    def events(self, s1: Selector[Any, R1], /) -> AsyncIterator[R1]: ...
+    @overload
+    def events(
+        self, s1: Selector[Any, R1], s2: Selector[Any, R2], /
+    ) -> AsyncIterator[R1 | R2]: ...
+    @overload
+    def events(
+        self,
+        s1: Selector[Any, R1],
+        s2: Selector[Any, R2],
+        s3: Selector[Any, R3],
+        /,
+    ) -> AsyncIterator[R1 | R2 | R3]: ...
+    @overload
+    def events(
+        self,
+        s1: Selector[Any, R1],
+        s2: Selector[Any, R2],
+        s3: Selector[Any, R3],
+        s4: Selector[Any, R4],
+        /,
+    ) -> AsyncIterator[R1 | R2 | R3 | R4]: ...
+
+    def events(self, *selectors: Selector[Any, Any]) -> AsyncIterator[Any]:
         """Iterate the underlying ``Run.events()`` stream, optionally filtered.
 
         Builds the ``Run`` synchronously at call time so subsequent
@@ -224,7 +254,7 @@ class FluentRun(Generic[T]):
         instance (typically one of the module-level constants like
         ``Thought``, ``ToolCall``, ``Text`` — possibly chained with
         ``.where(...)`` / ``.map(...)``).  Passing the bare event class
-        instead (e.g. ``Thought`` is a ``Selector[ThoughtEvent]``, not
+        instead (e.g. ``Thought`` is a ``Selector[ThoughtEvent, ThoughtEvent]``, not
         ``ThoughtEvent``) raises :class:`TypeError` eagerly with a
         clear message rather than failing with an opaque
         ``AttributeError`` mid-stream.
@@ -329,7 +359,7 @@ class FluentRun(Generic[T]):
 
 async def _filter_with_selectors(
     source: AsyncIterator[AgentEvent],
-    selectors: tuple[Selector[Any], ...],
+    selectors: tuple[Selector[Any, Any], ...],
 ) -> AsyncIterator[Any]:
     """Filter + transform an event stream through one or more selectors.
 

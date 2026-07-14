@@ -22,7 +22,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 
 
 async def main() -> None:
@@ -35,8 +35,9 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("tutor")
-        async def tutor(query: str) -> str:  # type: ignore[empty-body]
+        async def tutor(query: str) -> str:
             """An English tutor that explains grammar like you're 12."""
+            return llm()
 
         async with app.lifespan():
             response = await tutor("How do I say hello in formal Japanese?")

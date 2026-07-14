@@ -15,6 +15,7 @@ exposed as `wrapper._agent`:
 @app.agent("tutor")
 async def tutor(q: str) -> str:
     """An English tutor."""
+    return llm()
 
 async with app.lifespan():
     # The high-level call:
@@ -48,7 +49,8 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("tutor")
-        async def tutor(q: str) -> str: ...
+        async def tutor(q: str) -> str:
+            return llm()
 
         async with app.lifespan():            # ← here
             print(await tutor("Say hi"))
@@ -81,6 +83,7 @@ app = App(t0=t0, middleware=[CostTrackingMiddleware()])   # App-wide default
 @app.agent("tutor", middleware=[CostTrackingMiddleware()])
 async def tutor(q: str) -> str:
     """An English tutor."""
+    return llm()
 
 async with app.lifespan():
     # per-call override, for this invocation only

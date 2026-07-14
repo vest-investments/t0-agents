@@ -5,12 +5,16 @@ You have built, composed, served, and driven agents interactively. This chapter 
 A first-class test-authoring surface for agents built on `t0-agents`.
 
 `t0_agents.testing` removes the boilerplate of writing tests for an
-`Agent` without locking you into a single style. Two complementary
+`Agent` without locking you into a single style. Three complementary
 paths:
 
 - **`MockGateway` + `MockToolProvider`** — deterministic, no
   infrastructure, ideal for unit tests that pin down *exactly* what
   the agent did on a given turn.
+- **`ScriptedAgent`** — a whole-`Agent` fake whose `invoke()` replays
+  a fixed event script + result with no gateway at all. Ideal when the
+  unit under test consumes `invoke() -> Run` (a glow app, a `serve`
+  route, a TUI) and you want to script the *events*, not the gateway.
 - **`EmbeddedGatewayHelper`** — real TensorZero inference against any
   provider whose API key is in your environment, no Docker required.
   Ideal for integration tests that need realistic model behaviour
@@ -22,7 +26,7 @@ importable from the base distribution — no extra needed.
 ```python
 from t0_agents.testing import (
     MockGateway, MockChatResponse, MockToolProvider, RecordingGateway,
-    MockStreamingGateway, fake_event_stream,
+    MockStreamingGateway, fake_event_stream, ScriptedAgent,
     EmbeddedGatewayHelper,
     assert_tool_called, assert_tool_not_called, assert_tool_args_equal,
     assert_max_turns, assert_response_contains,
@@ -672,6 +676,71 @@ hand-written chunks instead.
 
 ---
 
+## `ScriptedAgent` — a whole-agent fake
+
+`MockGateway` fakes the *gateway* a real `Agent` talks to.
+`ScriptedAgent` fakes the *`Agent` itself*: its `invoke()` replays a
+fixed event script and result with no gateway — no Docker, no API keys,
+not even a `MockGateway`.
+
+```python
+from t0_agents.stream.events import TextDeltaEvent, TextEndEvent
+from t0_agents.testing import ScriptedAgent
+
+agent = ScriptedAgent(
+    result="It's 22C in Tokyo.",
+    events=[
+        TextDeltaEvent(id="t1", delta="It's 22C in Tokyo."),
+        TextEndEvent(id="t1"),
+    ],
+)
+
+run = agent.invoke("weather in Tokyo?")
+assert (await run).response == "It's 22C in Tokyo."
+async for event in run.events():
+    ...  # the scripted events, then a synthesised terminal DoneEvent
+```
+
+- **`events=`** are the non-terminal events to replay; the single
+  terminal `DoneEvent` is synthesised from **`result=`** (pass an
+  `AgentResult` to control `episode_id` / `turns`, or any value to
+  wrap).
+- **`raises=`** makes the run fail: the exception propagates out of
+  both `result()` and `events()` exactly as a real fatal error would
+  (no `ErrorEvent` — that event is for recoverable, inline anomalies).
+
+### Swapping a glow agent by name — `app.agent_overrides`
+
+`ScriptedAgent` pairs with glow's `App.agent_overrides`, the
+agent-level mirror of FastAPI's `dependency_overrides`: register a fake
+by name and it replaces the real agent wherever glow resolves it.
+Because a fully-overridden `App` never builds a real `Agent`, it needs
+no gateway — construct it with `App()`:
+
+```python
+from t0_agents.glow import App, llm
+from t0_agents.testing import ScriptedAgent
+
+app = App()  # no t0 — the only agent is overridden below
+
+@app.agent("forecaster")
+async def forecaster(query: str) -> str:
+    """Forecast the weather."""
+    return llm()
+
+app.agent_overrides["forecaster"] = ScriptedAgent(result="sunny")
+
+assert await forecaster("weather?") == "sunny"
+```
+
+The swapped agent's events flow through `FluentRun.events()` and its
+selectors unchanged, so a test can assert on the exact event stream a
+glow consumer would see. An un-overridden agent on a gateway-less
+`App` raises `ConfigurationError` — the fake path is explicit, never
+silent.
+
+---
+
 ## Embedded gateway
 
 For the questions mocks can't answer, run against real TensorZero
@@ -829,6 +898,7 @@ table is what the test protects.
 | `MockToolProvider.call_tool` | `async def call_tool(name: str, arguments: dict, *, timeout: float \| None = None) -> CallToolResult` | Dispatches to the handler; passes prebuilt `CallToolResult` through unchanged. |
 | `MockToolProvider.calls` | `list[dict[str, Any]]` | Per-dispatch log of `{"name": ..., "arguments": ...}`. |
 | `ToolHandler` | `TypeAlias = Callable[[dict[str, Any]], Any] \| Callable[[dict[str, Any]], Awaitable[Any]]` | Sync or async handler return type. |
+| `ScriptedAgent` | `ScriptedAgent(*, result: Any = None, events: Sequence[AgentEvent] \| None = None, raises: BaseException \| None = None)` | Whole-`Agent` fake; `invoke()` replays a scripted `Run` (events + terminal, or `raises=`) with no gateway. |
 
 ### Assertions
 

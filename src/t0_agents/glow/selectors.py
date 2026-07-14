@@ -54,6 +54,8 @@ __all__ = [
 ]
 
 E = TypeVar("E", bound=AgentEvent)
+R = TypeVar("R")
+R2 = TypeVar("R2")
 
 
 def _passthrough_predicate(_event: Any) -> bool:
@@ -66,7 +68,7 @@ def _passthrough_transform(event: Any) -> Any:
     return event
 
 
-class Selector(Generic[E]):
+class Selector(Generic[E, R]):
     """Filter + map specification for :meth:`FluentRun.events`.
 
     Three pieces of state:
@@ -87,13 +89,13 @@ class Selector(Generic[E]):
         self,
         event_type: type[E],
         predicate: Callable[[E], bool] = _passthrough_predicate,
-        transform: Callable[[E], Any] = _passthrough_transform,
+        transform: Callable[[E], R] = _passthrough_transform,
     ) -> None:
         self.event_type: type[E] = event_type
         self.predicate: Callable[[E], bool] = predicate
-        self.transform: Callable[[E], Any] = transform
+        self.transform: Callable[[E], R] = transform
 
-    def where(self, predicate: Callable[[E], bool]) -> Selector[E]:
+    def where(self, predicate: Callable[[E], bool]) -> Selector[E, R]:
         """Return a new :class:`Selector` with an AND-chained predicate.
 
         Multiple :meth:`where` calls compose: an event matches only when
@@ -107,7 +109,7 @@ class Selector(Generic[E]):
 
         return Selector(self.event_type, _combined, self.transform)
 
-    def map(self, transform: Callable[[E], Any]) -> Selector[E]:
+    def map(self, transform: Callable[[E], R2]) -> Selector[E, R2]:
         """Return a new :class:`Selector` with the transform replaced.
 
         Use for emitting a derived value rather than the raw event —
@@ -128,13 +130,13 @@ class Selector(Generic[E]):
 # import Thought, ToolCall, Text``.
 # ---------------------------------------------------------------------------
 
-Thought: Selector[ThoughtEvent] = Selector(ThoughtEvent)
-ToolCall: Selector[ToolCallEvent] = Selector(ToolCallEvent)
+Thought: Selector[ThoughtEvent, ThoughtEvent] = Selector(ThoughtEvent)
+ToolCall: Selector[ToolCallEvent, ToolCallEvent] = Selector(ToolCallEvent)
 # Whole-text variant — the LLM emits one terminal text payload per
 # assistant turn; ``Selector(TextDeltaEvent).where(...)`` remains
 # reachable for callers who want token-by-token deltas.
-Text: Selector[TextEndEvent] = Selector(TextEndEvent)
-ToolResult: Selector[ToolResultEvent] = Selector(ToolResultEvent)
-TurnEnd: Selector[TurnEndEvent] = Selector(TurnEndEvent)
-Done: Selector[DoneEvent] = Selector(DoneEvent)
-Error: Selector[ErrorEvent] = Selector(ErrorEvent)
+Text: Selector[TextEndEvent, TextEndEvent] = Selector(TextEndEvent)
+ToolResult: Selector[ToolResultEvent, ToolResultEvent] = Selector(ToolResultEvent)
+TurnEnd: Selector[TurnEndEvent, TurnEndEvent] = Selector(TurnEndEvent)
+Done: Selector[DoneEvent, DoneEvent] = Selector(DoneEvent)
+Error: Selector[ErrorEvent, ErrorEvent] = Selector(ErrorEvent)

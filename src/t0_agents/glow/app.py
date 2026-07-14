@@ -4,10 +4,16 @@ Pattern lift from FastAPI's ``app = FastAPI()`` followed by
 ``@app.get(...)``.  ``App`` owns:
 
 - The :class:`AsyncTensorZeroGateway` reference threaded into every
-  underlying :class:`~t0_agents.core.agent.Agent`.
+  underlying :class:`~t0_agents.core.agent.Agent`.  Optional: an App
+  whose every agent is overridden via :attr:`agent_overrides` needs no
+  gateway and may be constructed with ``t0=None``.
 - The agent registry (``name -> _AgentSpec``).
 - The :attr:`dependency_overrides` mapping consulted on every
   ``Depends(...)`` resolution by :class:`~t0_agents.glow.di.DependencyResolver`.
+- The :attr:`agent_overrides` mapping consulted by :meth:`_lookup_or_build`
+  before constructing any agent — ``app.agent_overrides["name"] =
+  ScriptedAgent(...)`` swaps an agent by name (agent-level mirror of
+  ``dependency_overrides``).
 - A lazy in-memory ``fastmcp.FastMCP`` server (``_mcp_server``) and
   matching ``fastmcp.Client`` (``_owned_client``).  Only allocated when
   the App needs a real MCP surface: at least one ``@app.tool``
@@ -100,13 +106,13 @@ class App:
     def __init__(
         self,
         *,
-        t0: AsyncTensorZeroGateway,
+        t0: AsyncTensorZeroGateway | None = None,
         servers: list[type[MCPServer]] | None = None,
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
     ) -> None:
-        self._t0: AsyncTensorZeroGateway = t0
+        self._t0: AsyncTensorZeroGateway | None = t0
         # App-level ``AgentConfig`` defaults, layered *under* per-agent
         # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
         # ``tags`` dict-merge with agent-level keys winning; ``namespace``
@@ -120,6 +126,10 @@ class App:
         # overrides without raising ``AttributeError`` at any point in
         # the lifecycle.
         self.dependency_overrides: dict[Callable[..., Any], Callable[..., Any]] = {}
+        # Agent-level mirror of ``dependency_overrides``: swap an agent by
+        # name before it is built.  ``_lookup_or_build`` consults this first,
+        # so a fully-overridden App never touches the gateway (``t0=None`` ok).
+        self.agent_overrides: dict[str, Agent] = {}
 
         # App-owned FastMCP server + matching Client, lazily allocated.
         # ``@app.tool`` and :class:`MCPServer` mounts go through
@@ -301,8 +311,20 @@ class App:
         the decorator-time check enforces sub-agents register BEFORE
         their parents.
         """
+        override = self.agent_overrides.get(spec.name)
+        if override is not None:
+            return override
         if spec.agent is not None:
             return spec.agent
+        # Fail fast before building sub-agents: a non-overridden agent needs
+        # a real gateway.  (An override or a fully-overridden App returns above.)
+        t0 = self._t0
+        if t0 is None:
+            raise ConfigurationError(
+                f"App(t0=None) cannot build agent {spec.name!r}: no gateway "
+                f"was provided.  Pass t0= to App(...), or register an override "
+                f"for every agent via app.agent_overrides."
+            )
         sub_agents: list[Agent] = [
             self._lookup_or_build(sub_spec) for sub_spec in spec.sub_agent_specs
         ]
@@ -336,7 +358,7 @@ class App:
         )
         agent = Agent(
             AgentConfig(**config_kwargs),
-            t0=self._t0,
+            t0=t0,
             tool_provider=tool_provider,
         )
         spec.agent = agent
