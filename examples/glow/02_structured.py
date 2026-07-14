@@ -15,11 +15,8 @@ Prerequisites:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import cast
 
 from pydantic import BaseModel
-from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import App, llm
 
@@ -30,23 +27,17 @@ class TripPlan(BaseModel):
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    app = App(gateway="http://localhost:3000")
 
-    async with await gateway as t0:
-        app = App(t0=t0)
+    @app.agent("planner", function_name="plan_trip")
+    async def plan(query: str) -> TripPlan:
+        """Plan trips with realistic budgets."""
+        return llm()
 
-        @app.agent("planner", function_name="plan_trip")
-        async def plan(query: str) -> TripPlan:
-            """Plan trips with realistic budgets."""
-            return llm()
-
-        async with app.lifespan():
-            trip = await plan("3 days in Japan under $2000")
-            print(f"\nDestinations: {trip.destinations}")
-            print(f"Estimated cost (USD): {trip.cost_usd}")
+    async with app:
+        trip = await plan("3 days in Japan under $2000")
+        print(f"\nDestinations: {trip.destinations}")
+        print(f"Estimated cost (USD): {trip.cost_usd}")
 
     print("\nSUCCESS: structured-output ran end-to-end.")
 

@@ -37,10 +37,6 @@ Prerequisites:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import cast
-
-from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import App, Text, Thought, ToolCall, llm
 from t0_agents.stream.events import ThoughtEvent
@@ -56,47 +52,41 @@ _WEATHER = {
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    app = App(gateway="http://localhost:3000")
 
-    async with await gateway as t0:
-        app = App(t0=t0)
+    @app.tool
+    async def get_weather(city: str) -> str:
+        """Return the current weather summary for the given city."""
+        return _WEATHER.get(city, f"unknown city: {city}")
 
-        @app.tool
-        async def get_weather(city: str) -> str:
-            """Return the current weather summary for the given city."""
-            return _WEATHER.get(city, f"unknown city: {city}")
+    @app.agent("forecaster")
+    async def forecaster(query: str) -> str:
+        """A weather assistant.  When the user asks about a city,
+        call the `get_weather` tool and narrate the result in one
+        short, friendly sentence."""
+        return llm()
 
-        @app.agent("forecaster")
-        async def forecaster(query: str) -> str:
-            """A weather assistant.  When the user asks about a city,
-            call the `get_weather` tool and narrate the result in one
-            short, friendly sentence."""
-            return llm()
+    async with app:
+        print("=== stream_text: tokens as they arrive ===")
+        async for token in forecaster(
+            "Quick — what's the weather in Lisbon?"
+        ).stream_text():
+            print(token, end="", flush=True)
+        print()
 
-        async with app.lifespan():
-            print("=== stream_text: tokens as they arrive ===")
-            async for token in forecaster(
-                "Quick — what's the weather in Lisbon?"
-            ).stream_text():
-                print(token, end="", flush=True)
-            print()
-
-            print("\n=== live event stream ===")
-            async for event in forecaster(
-                "And in Tokyo?"
-            ).events(
-                Thought,
-                ToolCall.map(lambda tc: f"> calling {tc.name}"),
-                Text.map(lambda d: d.delta),
-            ):
-                if isinstance(event, ThoughtEvent):
-                    print(f"[thought] {event.text}")
-                else:  # both .map() selectors yielded strings
-                    print(event, end="", flush=True)
-            print()
+        print("\n=== live event stream ===")
+        async for event in forecaster(
+            "And in Tokyo?"
+        ).events(
+            Thought,
+            ToolCall.map(lambda tc: f"> calling {tc.name}"),
+            Text.map(lambda d: d.delta),
+        ):
+            if isinstance(event, ThoughtEvent):
+                print(f"[thought] {event.text}")
+            else:  # both .map() selectors yielded strings
+                print(event, end="", flush=True)
+        print()
 
     print("\nSUCCESS: streaming ran end-to-end.")
 

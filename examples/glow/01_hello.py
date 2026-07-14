@@ -1,50 +1,53 @@
-"""Glow hello-world: the 4-line DX.
+"""Glow hello-world: the 8-line DX.
 
-Demonstrates the headline ergonomic of ``t0_agents.glow`` — a chat
-agent defined entirely by its function signature and docstring, with
-no MCP plumbing, no ``AgentConfig`` boilerplate, and no ``Run``
+A chat agent defined entirely by its function signature and docstring —
+no gateway ceremony, no ``AgentConfig`` boilerplate, no ``Run``
 juggling.  The docstring becomes the system prompt; the ``-> str``
 return annotation drives ``ChatOutput`` inference; ``await tutor(msg)``
 returns the unwrapped string directly.
 
-Prerequisites:
-    1. Set GROQ_API_KEY in your environment (or in .env at the project root).
-    2. Start the gateway:
-       docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
-    3. Run: uv run python examples/glow/01_hello.py
+The module-level ``App()`` resolves its gateway at first use — set one
+of these (GROQ_API_KEY in the environment or .env either way):
+
+    TENSORZERO_URL=http://localhost:3000
+        HTTP gateway, started with:
+        docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
+    TENSORZERO_CONFIG=examples/glow/config/tensorzero.toml
+        Embedded gateway: runs in-process — no docker at all.
+
+Run it:
+
+    uv run python examples/glow/01_hello.py
+
+or straight from the CLI (no main() of your own needed):
+
+    t0-agents run examples.glow.01_hello:app --agent tutor "How do I say hello in formal Japanese?"
+
+Prefer explicit wiring?  ``App(gateway="http://localhost:3000")``,
+``App(embedded="examples/glow/config/tensorzero.toml")``, or the classic
+``App(t0=<your AsyncTensorZeroGateway>)`` all work the same way.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import cast
-
-from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import App, llm
 
+app = App()
+
+
+@app.agent("tutor")
+async def tutor(query: str) -> str:
+    """An English tutor that explains grammar like you're 12."""
+    return llm()
+
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
-
-    async with await gateway as t0:
-        app = App(t0=t0)
-
-        @app.agent("tutor")
-        async def tutor(query: str) -> str:
-            """An English tutor that explains grammar like you're 12."""
-            return llm()
-
-        async with app.lifespan():
-            response = await tutor("How do I say hello in formal Japanese?")
-            print(f"\nResponse: {response}")
-
-    print("\nSUCCESS: hello-world ran end-to-end.")
+    async with app:
+        print(await tutor("How do I say hello in formal Japanese?"))
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    print("\nSUCCESS: hello-world ran end-to-end.")
