@@ -8,6 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`RunErrorEvent` + `Run.events(on_error=)` — the terminal-event
+  invariant.**  `Run.events(on_error="event")` converts a fatal
+  drive-time failure into a single terminal `RunErrorEvent`
+  (`error_type` = exception class name, structured `detail` such as
+  `{"max_turns": 20}`, and the original `exception` for in-process
+  consumers) instead of raising mid-iteration — so every stream in
+  that mode ends with exactly one `DoneEvent | RunErrorEvent`.  The
+  core default stays `on_error="raise"`; cancellation is never
+  converted.  `ErrorEvent` remains the recoverable inline anomaly.
+- **`ToolProgressEvent` — MCP tool progress reaches the stream.**
+  `execute_tool_calls` / `execute_tool_calls_parallel` accept a
+  `progress_callback`; server-side `ctx.report_progress(...)`
+  notifications (previously dropped inside the loop) arrive tagged
+  with the emitting `ToolCall` block id, and streaming runs push them
+  into the event buffer as `ToolProgressEvent`s interleaved between a
+  `ToolCallEvent` and its `ToolResultEvent`.
+- **`Run.stream_text(*, fallback=True)` — the reasoning-safe text
+  one-liner.**  Yields text deltas as they arrive; a turn that
+  streamed no non-blank delta (reasoning models route the answer
+  through thought summaries) yields the final `result.response` once
+  after the drain.
+- **`t0_agents.stream.codec` — versioned event dict codec.**
+  `event_to_dict` / `event_from_dict` round-trip every `AgentEvent`
+  variant through plain JSON-serialisable dicts (`{"v": 1, "type":
+  ..., ...}`); unknown discriminators and version mismatches raise
+  `ValueError`.
+- **`t0_agents.stream.status` — status-hint synthesis.**
+  `synthesize_statuses(events, known_servers=...)` interleaves opaque
+  `Status` hints ("Calling {tool}…", "Thinking…") with the
+  production-proven dedup/suppression policy; `split_tool_identity`
+  decomposes namespaced tool names (longest server prefix first).
+- **Glow streaming surface.**  `FluentRun.stream_text(fallback=True)`,
+  `FluentRun.statuses()` (namespace-aware via the App's mounted MCP
+  servers), and `TextEnd` / `RunError` / `ToolProgress` selectors.
 - **Per-agent tool filtering — `@app.agent(tools=[...])`.**  An agent can
   now restrict which of the App's composed tools it sees: entries are
   `@app.tool` callables (matched by name), `MCPServer` classes/instances
@@ -21,6 +55,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`t0_agents.tooling.FilteredToolProvider`.**  A standalone `ToolProvider`
   wrapper exposing only an allow-listed set of tool names — the mechanism
   behind `@app.agent(tools=...)`, reusable on its own.
+
+### Changed
+
+- **Breaking — glow `FluentRun.events()` defaults to
+  `on_error="event"`.**  A glow stream never raises mid-iteration: a
+  fatal failure ends the stream with one terminal `RunErrorEvent`.
+  Core `Run.events()` keeps the raising default.  Migration: consumers
+  that relied on `try/except` around a glow event loop should either
+  match on `RunError` / `RunErrorEvent` or pass `on_error="raise"`.
+- **Breaking — glow `Text` selector retargeted to `TextDeltaEvent`.**
+  The old binding selected `TextEndEvent`, a completion marker that
+  carries no text.  Migration: consumers that wanted the marker use
+  the new `TextEnd` selector; consumers that built a manual
+  `Selector(TextDeltaEvent)` can now just use `Text`.
+- **Breaking — `ToolProvider.call_tool` grows a `progress_handler`
+  keyword.**  Custom providers (and wrapper providers, which must
+  forward it) should add `progress_handler: ToolProgressHandler | None
+  = None` to their signature.  The agent loop only passes the kwarg
+  when progress is actually wired, so providers predating it keep
+  working on every progress-free path (`run_agent`, streaming without
+  a sink).  All in-library providers — filtered, guarded,
+  cost-tracking, delegation — forward it.
+- **`ScriptedAgent(raises=...)` now replays its scripted `events=`
+  before raising**, modelling a mid-stream abort (previously the
+  exception fired before any event was delivered).
 
 ### Removed
 
