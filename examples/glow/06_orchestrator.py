@@ -46,11 +46,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import Any, cast
+from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App, Depends
+from t0_agents.glow import AgentHandle, App, Depends, llm
 
 
 async def main() -> None:
@@ -63,18 +63,20 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("researcher")
-        async def researcher(query: str) -> str:  # type: ignore[empty-body]
+        async def researcher(query: str) -> str:
             """Summarize the requested topic in a single sentence."""
+            return llm()
 
         @app.agent("writer")
-        async def writer(query: str) -> str:  # type: ignore[empty-body]
+        async def writer(query: str) -> str:
             """Format the provided summary as a single markdown bullet."""
+            return llm()
 
         @app.agent("orchestrator", function_name="orchestrator", max_turns=8)
-        async def orchestrator(  # type: ignore[empty-body]
+        async def orchestrator(
             query: str,
-            research: Any = Depends(researcher),
-            write: Any = Depends(writer),
+            research: AgentHandle[..., str] = Depends(researcher),
+            write: AgentHandle[..., str] = Depends(writer),
         ) -> str:
             """Coordinate research then formatting via the available _ask tools.
 
@@ -82,6 +84,7 @@ async def main() -> None:
             with the researcher's output, and return the writer's
             output verbatim.
             """
+            return llm()
 
         async with app.lifespan():
             topic = (

@@ -35,7 +35,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App, Text, Thought, ToolCall
+from t0_agents.glow import App, Text, Thought, ToolCall, llm
 from t0_agents.stream.events import TextEndEvent, ThoughtEvent
 
 # Approximate "current weather" the agent can consult.  Keeping the
@@ -63,10 +63,11 @@ async def main() -> None:
             return _WEATHER.get(city, f"unknown city: {city}")
 
         @app.agent("forecaster")
-        async def forecaster(query: str) -> str:  # type: ignore[empty-body]
+        async def forecaster(query: str) -> str:
             """A weather assistant.  When the user asks about a city,
             call the `get_weather` tool and narrate the result in one
             short, friendly sentence."""
+            return llm()
 
         async with app.lifespan():
             run = forecaster("Quick — what's the weather in Tokyo?")

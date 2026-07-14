@@ -35,7 +35,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 
 
 async def main() -> None:
@@ -48,12 +48,14 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("summarizer")
-        async def summarizer(query: str) -> str:  # type: ignore[empty-body]
+        async def summarizer(query: str) -> str:
             """Summarize the input in one short paragraph (3 sentences max)."""
+            return llm()
 
         @app.agent("translator")
-        async def translator(text: str) -> str:  # type: ignore[empty-body]
+        async def translator(text: str) -> str:
             """Translate the input to Spanish, preserving its meaning."""
+            return llm()
 
         async with app.lifespan():
             query = (

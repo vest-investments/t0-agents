@@ -36,7 +36,7 @@ from typing import cast
 
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 
 
 async def main() -> None:
@@ -49,16 +49,19 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("optimist")
-        async def optimist(query: str) -> str:  # type: ignore[empty-body]
+        async def optimist(query: str) -> str:
             """Reply with a one-sentence optimistic take on the topic."""
+            return llm()
 
         @app.agent("pessimist")
-        async def pessimist(query: str) -> str:  # type: ignore[empty-body]
+        async def pessimist(query: str) -> str:
             """Reply with a one-sentence pessimistic take on the topic."""
+            return llm()
 
         @app.agent("pragmatist")
-        async def pragmatist(query: str) -> str:  # type: ignore[empty-body]
+        async def pragmatist(query: str) -> str:
             """Reply with a one-sentence pragmatic take on the topic."""
+            return llm()
 
         async with app.lifespan():
             query = (

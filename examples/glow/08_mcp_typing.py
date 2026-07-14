@@ -35,7 +35,7 @@ from typing import Any, cast
 from fastmcp import FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App, MCPServer
+from t0_agents.glow import App, MCPServer, llm
 
 
 def _build_math_server() -> FastMCP[Any]:
@@ -80,9 +80,10 @@ async def main() -> None:
         app = App(t0=t0, servers=[MathMCP])
 
         @app.agent("calc")
-        async def calc(query: str) -> str:  # type: ignore[empty-body]
+        async def calc(query: str) -> str:
             """Math assistant.  Use the available `math_add` tool to
             compute sums.  Reply with the integer result only."""
+            return llm()
 
         async with app.lifespan():
             # Verify the mounted tool is visible to the composed Client.

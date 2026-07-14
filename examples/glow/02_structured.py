@@ -21,7 +21,7 @@ from typing import cast
 from pydantic import BaseModel
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 
 
 class TripPlan(BaseModel):
@@ -39,8 +39,9 @@ async def main() -> None:
         app = App(t0=t0)
 
         @app.agent("planner", function_name="plan_trip")
-        async def plan(query: str) -> TripPlan:  # type: ignore[empty-body]
+        async def plan(query: str) -> TripPlan:
             """Plan trips with realistic budgets."""
+            return llm()
 
         async with app.lifespan():
             trip = await plan("3 days in Japan under $2000")
