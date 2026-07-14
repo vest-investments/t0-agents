@@ -56,6 +56,9 @@ class _FakeRun:
         # Escape-hatch call recorders (M2 delegation tests).
         self.feedback_calls: list[tuple[str, Any, str, str | None]] = []
         self.fork_calls: list[tuple[str, Any]] = []
+        # M5 streaming-surface recorders.
+        self.events_on_error_calls: list[str] = []
+        self.stream_text_fallback_calls: list[bool] = []
 
     async def result(self) -> AgentResult[Any]:
         return AgentResult(
@@ -65,11 +68,17 @@ class _FakeRun:
             turns=1,
         )
 
-    async def events(self) -> AsyncIterator[AgentEvent]:
+    async def events(self, *, on_error: str = "raise") -> AsyncIterator[AgentEvent]:
         # Empty stream — exercises the iterator wiring without coupling
         # the FluentRun tests to the real EventBuffer / drive task.
+        self.events_on_error_calls.append(on_error)
         if False:  # pragma: no cover - generator-shape marker
             yield
+
+    async def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
+        self.stream_text_fallback_calls.append(fallback)
+        yield "chunk"
+
 
     # Escape-hatch surface consumed by FluentRun.cost/usage/feedback/fork.
     def cost(self) -> float:
@@ -359,3 +368,74 @@ async def test_escape_hatch_delegates_after_run() -> None:
     assert forked is not None
     assert fake.fork_calls == [("continue", None)]
     assert fake.feedback_calls == [("thumbs_up", 1.0, "inference", None)]
+
+
+# ---------------------------------------------------------------------------
+# M5 streaming surface — on_error flip, stream_text, statuses
+# ---------------------------------------------------------------------------
+
+
+async def test_events_defaults_to_on_error_event() -> None:
+    """Glow flips the core default: a UI stream never raises mid-iteration."""
+    fake = _FakeRun()
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+    async for _ in fr.events():  # pragma: no cover - empty stream
+        pass
+    assert fake.events_on_error_calls == ["event"]
+
+
+async def test_events_on_error_raise_is_forwarded() -> None:
+    fake = _FakeRun()
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+    async for _ in fr.events(on_error="raise"):  # pragma: no cover - empty stream
+        pass
+    assert fake.events_on_error_calls == ["raise"]
+
+
+async def test_stream_text_builds_lazily_and_forwards_fallback() -> None:
+    captured: list[OutputMode[Any]] = []
+    fake = _FakeRun()
+    fr: FluentRun[str] = FluentRun(_make_build(captured, fake), ChatOutput())
+
+    chunks = [chunk async for chunk in fr.stream_text(fallback=False)]
+
+    assert chunks == ["chunk"]
+    assert len(captured) == 1
+    assert fake.stream_text_fallback_calls == [False]
+
+    # A second consumption joins the cached Run — no rebuild.
+    _ = fr.stream_text()
+    assert len(captured) == 1
+
+
+async def test_statuses_decomposes_with_known_servers() -> None:
+    from t0_agents.stream.events import ToolCallEvent
+    from t0_agents.stream.status import Status
+
+    fake = _FakeRun()
+    call = ToolCallEvent(id="c1", name="fred_get_series", arguments={})
+
+    async def _events(*, on_error: str = "raise") -> Any:
+        fake.events_on_error_calls.append(on_error)
+        yield call
+
+    fake.events = _events  # type: ignore[method-assign]
+    fr: FluentRun[str] = FluentRun(
+        _make_build(fake_run=fake), ChatOutput(), known_servers=("fred",)
+    )
+
+    items = [item async for item in fr.statuses()]
+
+    assert items == [
+        call,
+        Status(text="Calling fred_get_series…", server="fred", tool="get_series"),
+    ]
+    assert fake.events_on_error_calls == ["event"]
+
+
+async def test_with_and_spawn_propagate_known_servers() -> None:
+    fr: FluentRun[str] = FluentRun(
+        _make_build(), ChatOutput(), known_servers=("fred", "edgar")
+    )
+    assert fr.with_(episode_id="e1")._known_servers == ("fred", "edgar")
+    assert fr.json()._known_servers == ("fred", "edgar")

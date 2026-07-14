@@ -1,10 +1,11 @@
 """Event selectors for :meth:`FluentRun.events`.
 
 A :class:`Selector` pairs an event class with an optional predicate
-(filter) and an optional transform (map).  The seven module-level
-instances — ``Thought``, ``ToolCall``, ``Text``, ``ToolResult``,
-``TurnEnd``, ``Done``, ``Error`` — cover the v1.0 :class:`AgentEvent`
-union surface and are the import points users reach for::
+(filter) and an optional transform (map).  The module-level instances —
+``Thought``, ``ToolCall``, ``ToolProgress``, ``Text``, ``TextEnd``,
+``ToolResult``, ``TurnEnd``, ``Done``, ``Error``, ``RunError`` — cover
+the :class:`AgentEvent` union surface and are the import points users
+reach for::
 
     from t0_agents.glow import Thought, ToolCall, Text
 
@@ -20,10 +21,11 @@ Selectors compose via :meth:`Selector.where` (AND-combines predicates)
 and :meth:`Selector.map` (replaces transform).  Both return *new*
 :class:`Selector` instances so the module-level constants stay frozen.
 
-``Text = Selector(TextEndEvent)`` — the whole-text variant is the
-useful default because the LLM only emits one terminal text payload
-per turn.  Delta filtering remains reachable via
-``Selector(TextDeltaEvent).where(...)`` if a caller wants it.
+``Text = Selector(TextDeltaEvent)`` — ``Text`` targets the delta events
+that actually carry text (v2 breaking change: the old binding targeted
+``TextEndEvent``, whose only payload is a block ``id``).  The old
+binding survives under its honest name, ``TextEnd``.  For plain
+token streaming prefer the one-liner ``run.stream_text()``.
 """
 
 from __future__ import annotations
@@ -35,9 +37,12 @@ from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
     ErrorEvent,
+    RunErrorEvent,
+    TextDeltaEvent,
     TextEndEvent,
     ThoughtEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
@@ -45,10 +50,13 @@ from t0_agents.stream.events import (
 __all__ = [
     "Done",
     "Error",
+    "RunError",
     "Selector",
     "Text",
+    "TextEnd",
     "Thought",
     "ToolCall",
+    "ToolProgress",
     "ToolResult",
     "TurnEnd",
 ]
@@ -125,18 +133,21 @@ class Selector(Generic[E, R]):
 
 
 # ---------------------------------------------------------------------------
-# Module-level selectors covering the v1.0 ``AgentEvent`` union surface.
+# Module-level selectors covering the ``AgentEvent`` union surface.
 # Users import these as the canonical entry points: ``from t0_agents.glow
 # import Thought, ToolCall, Text``.
 # ---------------------------------------------------------------------------
 
 Thought: Selector[ThoughtEvent, ThoughtEvent] = Selector(ThoughtEvent)
 ToolCall: Selector[ToolCallEvent, ToolCallEvent] = Selector(ToolCallEvent)
-# Whole-text variant — the LLM emits one terminal text payload per
-# assistant turn; ``Selector(TextDeltaEvent).where(...)`` remains
-# reachable for callers who want token-by-token deltas.
-Text: Selector[TextEndEvent, TextEndEvent] = Selector(TextEndEvent)
+ToolProgress: Selector[ToolProgressEvent, ToolProgressEvent] = Selector(ToolProgressEvent)
+# v2 retarget (breaking): ``Text`` selects the delta events that carry
+# the actual text.  The old ``TextEndEvent`` binding — a block
+# terminator whose only payload is ``id`` — lives on as ``TextEnd``.
+Text: Selector[TextDeltaEvent, TextDeltaEvent] = Selector(TextDeltaEvent)
+TextEnd: Selector[TextEndEvent, TextEndEvent] = Selector(TextEndEvent)
 ToolResult: Selector[ToolResultEvent, ToolResultEvent] = Selector(ToolResultEvent)
 TurnEnd: Selector[TurnEndEvent, TurnEndEvent] = Selector(TurnEndEvent)
 Done: Selector[DoneEvent, DoneEvent] = Selector(DoneEvent)
 Error: Selector[ErrorEvent, ErrorEvent] = Selector(ErrorEvent)
+RunError: Selector[RunErrorEvent, RunErrorEvent] = Selector(RunErrorEvent)

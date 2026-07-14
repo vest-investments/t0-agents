@@ -34,6 +34,7 @@ from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow.selectors import Selector
 from t0_agents.stream.events import AgentEvent
+from t0_agents.stream.status import Status, synthesize_statuses
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
@@ -93,11 +94,16 @@ class FluentRun(Generic[T]):
         default_output: OutputMode[T],
         *,
         value_transform: Callable[[Any], T] | None = None,
+        known_servers: tuple[str, ...] = (),
     ) -> None:
         self._build: Callable[..., Run[Any]] = build
         self._chosen_output: OutputMode[Any] = default_output
         self._has_override: bool = False
         self._run: Run[Any] | None = None
+        # Mounted MCP namespaces, injected by ``App._invoke`` so
+        # :meth:`statuses` decomposes prefixed tool names without
+        # reaching back into the App.
+        self._known_servers: tuple[str, ...] = known_servers
         # Per-call ``Agent.invoke`` overrides accumulated via ``.with_()``
         # (``episode_id``, ``tags``, ``system_arguments``, ``prior_messages``,
         # …).  Forwarded to the build closure at consumption time and
@@ -176,6 +182,7 @@ class FluentRun(Generic[T]):
             self._build,
             self._chosen_output,
             value_transform=self._value_transform,
+            known_servers=self._known_servers,
         )
         new._has_override = self._has_override
         new._call_kwargs = {**self._call_kwargs, **call_kwargs}
@@ -200,7 +207,9 @@ class FluentRun(Generic[T]):
                 self._chosen_output.name,
                 new_output.name,
             )
-        new: FluentRun[Any] = FluentRun(self._build, new_output)
+        new: FluentRun[Any] = FluentRun(
+            self._build, new_output, known_servers=self._known_servers
+        )
         new._has_override = True
         new._call_kwargs = dict(self._call_kwargs)
         return new
@@ -210,12 +219,21 @@ class FluentRun(Generic[T]):
     # ------------------------------------------------------------------
 
     @overload
-    def events(self) -> AsyncIterator[AgentEvent]: ...
-    @overload
-    def events(self, s1: Selector[Any, R1], /) -> AsyncIterator[R1]: ...
+    def events(
+        self, *, on_error: Literal["raise", "event"] = ...
+    ) -> AsyncIterator[AgentEvent]: ...
     @overload
     def events(
-        self, s1: Selector[Any, R1], s2: Selector[Any, R2], /
+        self, s1: Selector[Any, R1], /, *, on_error: Literal["raise", "event"] = ...
+    ) -> AsyncIterator[R1]: ...
+    @overload
+    def events(
+        self,
+        s1: Selector[Any, R1],
+        s2: Selector[Any, R2],
+        /,
+        *,
+        on_error: Literal["raise", "event"] = ...,
     ) -> AsyncIterator[R1 | R2]: ...
     @overload
     def events(
@@ -224,6 +242,8 @@ class FluentRun(Generic[T]):
         s2: Selector[Any, R2],
         s3: Selector[Any, R3],
         /,
+        *,
+        on_error: Literal["raise", "event"] = ...,
     ) -> AsyncIterator[R1 | R2 | R3]: ...
     @overload
     def events(
@@ -233,9 +253,15 @@ class FluentRun(Generic[T]):
         s3: Selector[Any, R3],
         s4: Selector[Any, R4],
         /,
+        *,
+        on_error: Literal["raise", "event"] = ...,
     ) -> AsyncIterator[R1 | R2 | R3 | R4]: ...
 
-    def events(self, *selectors: Selector[Any, Any]) -> AsyncIterator[Any]:
+    def events(
+        self,
+        *selectors: Selector[Any, Any],
+        on_error: Literal["raise", "event"] = "event",
+    ) -> AsyncIterator[Any]:
         """Iterate the underlying ``Run.events()`` stream, optionally filtered.
 
         Builds the ``Run`` synchronously at call time so subsequent
@@ -243,12 +269,21 @@ class FluentRun(Generic[T]):
         first-consumer-wins semantics).
 
         When no selectors are passed, yields every :class:`AgentEvent`
-        from the underlying stream (matches the v1.0 ``Run.events()``
-        contract).  When one or more selectors are passed, an event
-        passes if **any** selector's :meth:`Selector.matches` returns
-        ``True``; the first such selector's ``transform`` is applied to
-        the yielded value (first-match-wins, mirroring isinstance
-        dispatch ergonomics).
+        from the underlying stream.  When one or more selectors are
+        passed, an event passes if **any** selector's
+        :meth:`Selector.matches` returns ``True``; the first such
+        selector's ``transform`` is applied to the yielded value
+        (first-match-wins, mirroring isinstance dispatch ergonomics).
+
+        ``on_error`` defaults to ``"event"`` in glow — a UI-facing
+        stream should never raise mid-iteration, so a fatal failure
+        arrives as a single terminal
+        :class:`~t0_agents.stream.events.RunErrorEvent` instead (v2
+        breaking change: core's ``Run.events()`` keeps ``"raise"``).
+        Note that a selector filter applies to the terminal event too —
+        include ``RunError`` (or use no selectors) if you need to
+        observe it.  Pass ``on_error="raise"`` to restore the raising
+        contract.  Cancellation always raises in both modes.
 
         Each positional argument must be a :class:`~t0_agents.glow.selectors.Selector`
         instance (typically one of the module-level constants like
@@ -263,7 +298,7 @@ class FluentRun(Generic[T]):
             self._run = self._build(self._chosen_output, **self._call_kwargs)
         run = self._run
         if not selectors:
-            return run.events()
+            return run.events(on_error=on_error)
         for s in selectors:
             if not isinstance(s, Selector):
                 raise TypeError(
@@ -274,7 +309,37 @@ class FluentRun(Generic[T]):
                     f"`t0_agents.glow` and chain with `.where(...)` / "
                     f"`.map(...)` if you need filters."
                 )
-        return _filter_with_selectors(run.events(), selectors)
+        return _filter_with_selectors(run.events(on_error=on_error), selectors)
+
+    def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
+        """Stream the assistant text — the UI one-liner, reasoning-safe.
+
+        Delegates to :meth:`Run.stream_text`, building the ``Run``
+        lazily exactly like :meth:`events`.  ``fallback=True`` (default)
+        covers reasoning models that route the answer through thought
+        summaries and stream no text deltas: the final
+        ``result.response`` is yielded once after the drain.  Fatal
+        errors raise out of the iterator — use
+        ``events(on_error="event")`` when you need a terminal event.
+        """
+        if self._run is None:
+            self._run = self._build(self._chosen_output, **self._call_kwargs)
+        return self._run.stream_text(fallback=fallback)
+
+    def statuses(self) -> AsyncIterator[AgentEvent | Status]:
+        """Iterate events with user-facing :class:`Status` hints interleaved.
+
+        Wraps ``events(on_error="event")`` in
+        :func:`~t0_agents.stream.status.synthesize_statuses`, using the
+        App's mounted MCP namespaces to decompose prefixed tool names —
+        ``Status(text="Calling fred_get_series…", server="fred",
+        tool="get_series")``.  Original events re-emit first, each
+        synthesized hint follows its trigger; composition happens here
+        at the consumer boundary, never on a bus or in a worker.
+        """
+        return synthesize_statuses(
+            self.events(), known_servers=self._known_servers
+        )
 
     async def result(self) -> AgentResult[T]:
         """Await the full :class:`AgentResult`.
