@@ -9,25 +9,66 @@
 `t0_agents.glow` is a Pythonic skin over the v1.0 primitives — `Agent`,
 `Run[T]`, and `OutputMode[T]`.  Where the base API takes ~25 lines to
 construct an `AgentConfig`, build the gateway and FastMCP client, and
-orchestrate a `Run`, glow takes four: a function with a docstring and
-a return-type annotation, decorated with `@app.agent`.
+orchestrate a `Run`, glow takes a handful: a module-level `App()` and a
+function with a docstring and a return-type annotation, decorated with
+`@app.agent`.
 
 ```python
 from t0_agents.glow import App, llm
-app = App(t0=t0)
+
+app = App()  # resolves TENSORZERO_URL / TENSORZERO_CONFIG at first use
 
 @app.agent("tutor")
 async def tutor(query: str) -> str:
     """An English tutor that explains grammar like you're 12."""
     return llm()
 
-print(await tutor("How do I say hello in formal Japanese?"))
+async with app:
+    print(await tutor("How do I say hello in formal Japanese?"))
 ```
 
 The docstring is the system prompt; the `-> str` return annotation
 selects [`ChatOutput`](../output-modes.md); `await tutor(...)` returns
 the unwrapped string directly.  Everything else — MCP, tool routing,
-event streaming — is opt-in.
+event streaming — is opt-in.  In a notebook or REPL you can skip even
+the `async with`: consuming an agent auto-builds the App (one INFO log)
+— the bracket buys deterministic teardown.
+
+## Give the App a gateway
+
+Pick whichever form fits; all four behave identically once running:
+
+```python
+app = App()                                    # deferred: TENSORZERO_URL,
+                                               # else TENSORZERO_CONFIG (embedded),
+                                               # else a clear error at first use
+app = App(gateway="http://localhost:3000")     # HTTP gateway, App-owned
+app = App(embedded="config/tensorzero.toml")   # embedded in-process — no docker
+app = App(t0=t0)                               # bring your own AsyncTensorZeroGateway
+```
+
+`gateway=` / `embedded=` (and both env-var paths) are **App-owned**:
+the App builds the gateway on first use and closes it on exit /
+`shutdown()`.  A caller-supplied `t0=` is never entered or closed —
+you own its lifecycle, exactly as before.
+
+**Embedded, honestly**: `App(embedded=...)` runs the TensorZero gateway
+in-process (`build_embedded`) with no backing databases — perfect for
+dev loops and CI, with real LLM inference but *degraded observability*:
+no ClickHouse means no episode queries and ephemeral feedback IDs
+(spiritually `dryrun=True`).  Point it at any `tensorzero.toml` whose
+providers have credentials in the environment (e.g. `GROQ_API_KEY`).
+Production deployments should keep `build_http` against a managed
+gateway.
+
+Run an agent without writing a `main()` at all:
+
+```bash
+t0-agents run examples.glow.01_hello:app --agent tutor "hi"
+```
+
+(`--agent` is optional when the App registers exactly one agent.  See
+[`../cli.md`](../cli.md) for the REPL / one-shot / serve forms.)
 
 Install glow with the extra:
 
@@ -41,9 +82,20 @@ for type introspection in a few places).  See
 for the rationale.
 
 The running examples under [`examples/glow/`](../../examples/glow/) are
-the long-form companion to this tutorial — boot the gateway once with
-`docker compose -f examples/glow/docker-compose.yml --env-file .env up -d`
-and run each with `uv run python examples/glow/<NN>_*.py`.
+the long-form companion to this tutorial — give them a gateway either
+way (`docker compose -f examples/glow/docker-compose.yml --env-file .env up -d`
++ `TENSORZERO_URL=http://localhost:3000`, or docker-free
+`TENSORZERO_CONFIG=examples/glow/config/tensorzero.toml`) and run each
+with `uv run python examples/glow/<NN>_*.py`.
+
+## Notebooks and REPLs
+
+Auto-build makes module-level Apps REPL-friendly, and two affordances
+round it out: re-decorating a name is allowed with
+`@app.agent("tutor", replace=True)` (the duplicate-name error remains
+the default), and `app.remove_agent("tutor")` frees a name explicitly.
+A replacement registered after the App started still gets its gateway
+and `tools=` filter resolved before it first runs.
 
 ---
 

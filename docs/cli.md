@@ -206,6 +206,33 @@ construction in an @asynccontextmanager async def, for example:
 See the [Error handling](#error-handling) section for the full loader
 error taxonomy.
 
+## Glow App specs
+
+A spec may also resolve to a **glow `App` instance** — no factory of
+your own required.  The CLI adapts it: it enters `async with app:`
+around the session (gateway resolution, MCP mounts, client connection,
+`tools=` filters) and drives the selected agent.
+
+```bash
+t0-agents run examples.glow.01_hello:app --agent tutor "hi"   # one-shot
+t0-agents run examples.glow.01_hello:app                      # REPL (sole agent)
+t0-agents serve mymodule:app --agent tutor
+```
+
+- `--agent NAME` picks the agent when the App registers several; with
+  exactly one registered it may be omitted.  Ambiguous or unknown names
+  produce an error listing what is available.
+- The optional positional `MESSAGE` on `run` is a **one-shot**: send
+  it, render the reply, exit — no REPL.  It works for classic factory
+  specs too.
+- `serve` wraps the selected agent in `create_app(...,
+  share_client=True)` exactly like a factory spec — which means a
+  **toolless** glow App (no `@app.tool`, no `MCPServer`s) cannot be
+  served this way: `share_client` requires a tool provider and raises
+  its standard `ConfigurationError`.  Compose
+  [`create_app_from_glow`](serving.md#glow-apps) /
+  [`create_app`](serving.md) directly for bespoke shapes.
+
 ---
 
 ## Concepts

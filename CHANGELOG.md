@@ -101,6 +101,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and every stage `match` ends in `assert_never`, so upstream event
   churn is absorbed in the same PR that introduces it.  See
   `docs/wire.md`.
+- **Boot collapse — `App(gateway=...)`, `App(embedded=...)`, and the
+  deferred `App()`.**  `App` no longer needs a pre-built gateway:
+  `gateway=` takes an HTTP gateway URL, `embedded=` a
+  `tensorzero.toml` path (the docker-free in-process dev mode —
+  degraded observability without ClickHouse: no episode queries,
+  ephemeral feedback), and a bare `App()` resolves `TENSORZERO_URL` →
+  `TENSORZERO_CONFIG` at first use, erroring clearly when neither is
+  set and an agent actually needs a gateway.  Resolved gateways are
+  App-owned (closed by `shutdown()` / the exit of the boot bracket);
+  a caller-supplied `t0=` is never entered or closed.
+- **Auto-build on first consumption + `async with app:`.**  Consuming
+  an agent on an unbooted App now runs the full infrastructure boot
+  (one INFO log): gateway resolution, MCP mounts, client connection,
+  and `tools=` filter resolution — eliminating both halves of the old
+  consume-before-lifespan trap (silently unfiltered/toolless cached
+  agents; opaque disconnected-client errors).  `async with app:` is
+  the new explicit boot bracket, byte-equivalent to
+  `async with app.lifespan():`.
+- **REPL surface — `@app.agent(name, replace=True)` +
+  `App.remove_agent(name)`.**  Re-decorating a name in a notebook no
+  longer dead-ends on the duplicate-name error (which remains the
+  default); replacements registered after the App started still get
+  their gateway and `tools=` filter resolved before first use.
+- **CLI — glow App specs and one-shot messages.**  `t0-agents run` /
+  `serve` / `info` accept a `module:attr` spec that resolves to a glow
+  `App` instance (`--agent` picks one of several registered agents;
+  the sole agent is the default).  `run` additionally takes an
+  optional positional MESSAGE for one-shot invocations:
+  `t0-agents run examples.glow.01_hello:app --agent tutor "hi"`.
+- **`t0_agents.serve.create_app_from_glow`.**  Async bridge from a
+  glow `App` to the serving layer: boots the App, selects an agent,
+  and delegates to `create_app` (`share_client=True` default over the
+  App-owned client; the caller owns the glow lifecycle).
 
 ### Changed
 
@@ -126,6 +159,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`ScriptedAgent(raises=...)` now replays its scripted `events=`
   before raising**, modelling a mid-stream abort (previously the
   exception fired before any event was delivered).
+- **Breaking — glow configuration errors move from the wrapper call to
+  first consumption.**  Calling `tutor("hi")` is now side-effect-free
+  (a deferred `App()` hands out handles before any gateway exists);
+  the underlying Agent is resolved when the run is first consumed —
+  `await`, `.result()`, or the first iteration of `.events()` /
+  `.stream_text()` (which now build at first iteration rather than at
+  the call; selector validation stays eager).  Migration: code that
+  wrapped the *call* in `try/except ConfigurationError` should wrap
+  the *consumption*; everything that awaited the handle before
+  observes errors exactly as before.
 
 ### Removed
 

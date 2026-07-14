@@ -254,6 +254,62 @@ FastAPI app. Each sub-app owns its own lifespan, its own
 host several agents on disjoint URL prefixes without leaking state
 between them.
 
+### `create_app_from_glow` — glow Apps {#glow-apps}
+
+```python
+async def create_app_from_glow(
+    glow_app: t0_agents.glow.App,
+    *,
+    agent: str | None = None,
+    share_client: bool = True,
+    deployment_label: str | None = None,
+    streaming: bool = False,
+) -> FastAPI
+```
+
+Bridge a glow `App` into `create_app`: boots the App
+(`await glow_app.build()` — gateway resolution, MCP mounts, client
+connection, `tools=` filters; idempotent), selects an agent (the sole
+registered one, or `agent=` by name — anything else raises a
+`ConfigurationError` listing the options), and delegates to
+`create_app` with the built core `Agent`.  Async because `create_app`
+composes eagerly against the built agent.
+
+The **caller owns the glow lifecycle** — keep the App entered for the
+server's lifetime, mirroring `share_client`'s caller-owns-the-Client
+contract.  Concretely: build the FastAPI app and run the server inside
+one `async with glow_app:` bracket (this is exactly what `t0-agents
+serve mymodule:app` does for you):
+
+```python
+# launcher.py
+import asyncio
+
+import uvicorn
+
+from t0_agents.serve import create_app_from_glow
+from mymodule import app as glow_app   # a module-level glow App
+
+
+async def main() -> None:
+    async with glow_app:
+        api = await create_app_from_glow(glow_app, agent="tutor")
+        config = uvicorn.Config(api, host="0.0.0.0", port=8080, lifespan="on")
+        await uvicorn.Server(config).serve()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+`share_client=True` (the default) serves every session over the glow
+App's own connected FastMCP client, so the same elicitation caveat as
+the CLI's serve mode applies; a **toolless** glow App has no client and
+raises `create_app`'s standard `share_client` error — compose
+`create_app` directly with a `client_factory` for that shape.  The
+one-liner for development is `t0-agents serve mymodule:app --agent
+tutor` (see [`cli.md`](cli.md#glow-app-specs)).
+
 ### `SessionFactory`
 
 Advanced: the per-session `(Client, Agent)` builder `create_app`

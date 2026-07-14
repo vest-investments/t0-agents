@@ -1,4 +1,4 @@
-# `t0_agents.glow` — the four-line path
+# `t0_agents.glow` — the eight-line path
 
 > **Experimental.**  Public API on the
 > [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
@@ -6,18 +6,20 @@
 
 A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
 `OutputMode[T]`.  Where the base API takes ~25 lines to wire an
-agent, glow takes four:
+agent, glow takes eight — gateway included:
 
 ```python
 from t0_agents.glow import App, llm
-app = App(t0=t0)
+
+app = App()  # resolves TENSORZERO_URL / TENSORZERO_CONFIG at first use
 
 @app.agent("tutor")
 async def tutor(query: str) -> str:
     """An English tutor that explains grammar like you're 12."""
     return llm()
 
-print(await tutor("How do I say hello in formal Japanese?"))
+async with app:
+    print(await tutor("How do I say hello in formal Japanese?"))
 ```
 
 The docstring is the system prompt.  The `-> str` return annotation
