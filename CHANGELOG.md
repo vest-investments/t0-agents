@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Per-agent tool filtering — `@app.agent(tools=[...])`.**  An agent can
+  now restrict which of the App's composed tools it sees: entries are
+  `@app.tool` callables (matched by name), `MCPServer` classes/instances
+  (matched by their `namespace` prefix), and glob strings (e.g.
+  `"customers_get_*"`).  Omitting `tools=` is unchanged — the agent sees
+  every tool; `tools=[]` is explicitly toolless.  Patterns matching no live
+  tool warn at `build()`, turning prefix-guessing bugs into a build-time
+  diagnostic; an `MCPServer` used without `namespace=` raises.  Sub-agent
+  `<name>_ask` tools are never filtered.  Fully additive — agents without
+  `tools=` behave exactly as before.
+- **`t0_agents.tooling.FilteredToolProvider`.**  A standalone `ToolProvider`
+  wrapper exposing only an allow-listed set of tool names — the mechanism
+  behind `@app.agent(tools=...)`, reusable on its own.
+
+### Removed
+
+- **Docs: the "No per-agent MCP subsets" limitation.**  Resolved by
+  `@app.agent(tools=[...])`.
+
 ## [1.1.0] — 2026-06-22
 
 Live token usage lands as a cohesive, additive feature: the live per-turn
