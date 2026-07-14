@@ -11,8 +11,9 @@ a Run; the ``@app.agent`` decorator supplies it (see ``App._invoke``).
 
 ``__await__`` returns the *unwrapped* ``T`` directly (the Pythonic fast
 path: ``answer = await tutor(query)``).  :meth:`result` is the escape
-hatch for the full :class:`AgentResult` when the caller needs
-``episode_id`` / ``inference_ids`` / cost / usage.
+hatch for the full :class:`AgentResult` (``episode_id`` /
+``inference_ids`` / diagnostics); :meth:`cost` / :meth:`usage` /
+:meth:`feedback` / :meth:`fork` reach the run-level surface directly.
 """
 
 from __future__ import annotations
@@ -249,9 +250,10 @@ class FluentRun(Generic[T]):
         """Await the full :class:`AgentResult`.
 
         Use this when the caller needs ``episode_id``, ``inference_ids``,
-        ``cost()`` / ``usage()``, or the diagnostics envelope.  The
-        Pythonic fast path is plain ``await fluent_run``, which returns
-        the unwrapped ``.value`` directly.
+        or the diagnostics envelope.  Aggregate cost / token usage live on
+        the run handle itself (:meth:`cost` / :meth:`usage`).  The Pythonic
+        fast path is plain ``await fluent_run``, which returns the
+        unwrapped ``.value`` directly.
 
         If a ``value_transform`` was installed at construction time and
         the user has not applied a per-call override (.text / .json /
