@@ -47,6 +47,77 @@ and run each with `uv run python examples/glow/<NN>_*.py`.
 
 ---
 
+## Zero-TOML agents with `model=`
+
+The hello-world above still assumes a `[functions.agent]` stanza in
+`tensorzero.toml`.  With `model=` there is nothing to declare — the
+gateway routes the call through its built-in passthrough function and
+the agent is pure Python:
+
+```python
+@app.agent("tutor", model="groq::llama-3.3-70b-versatile")
+async def tutor(query: str) -> str:
+    """An English tutor that explains grammar like you're 12."""
+    return llm()
+```
+
+`model=` accepts the `{provider}::{model}` shorthand or the name of a
+`[models.*]` entry.  Tools, episodes, streaming, and tags all work
+unchanged; the docstring rides along as the system prompt.  Per-model
+knobs live next to it:
+
+```python
+@app.agent("planner", model="openai::gpt-4o",
+           params={"chat_completion": {"temperature": 0.2}})
+async def planner(q: str) -> str: ...
+```
+
+The TOML-declared production path is untouched — pin a function, a
+variant, and cache behaviour explicitly when you want the full
+TensorZero surface (templates, variants, experimentation):
+
+```python
+@app.agent("prod", function_name="prod_agent", variant="gpt4o_v2",
+           cache={"enabled": "on", "max_age_s": 3600})
+async def prod(q: str) -> str: ...
+```
+
+`model` and `function_name` are mutually exclusive (neither means the
+back-compat `function_name="agent"`), `variant` needs the function
+path, and a structured return annotation is rejected on `model=` —
+the passthrough cannot validate JSON output; the error message carries
+a ready-to-paste TOML stanza.  Two observability notes: functionless
+inferences are stored under `tensorzero::default` (see
+[`limitations.md`](limitations.md#functionless-inferences-are-invisible-to-function_name-filtered-memory)),
+and every inference now carries a `t0_agents.agent = <name>` tag, so
+per-agent segmentation works even across shared functions.
+
+---
+
+## Client-side prompt templates — `prompt_vars`
+
+The docstring may contain `str.format` placeholders, filled per-call
+with `.with_(prompt_vars={...})` — no server-side template required:
+
+```python
+@app.agent("tutor", model="groq::llama-3.3-70b-versatile")
+async def tutor(query: str) -> str:
+    """An English tutor for {level} students."""
+    return llm()
+
+await tutor("Explain gerunds.").with_(prompt_vars={"level": "advanced"})
+```
+
+Formatting happens client-side on the *effective* system prompt (an
+explicit `.with_(system=...)` is formatted the same way).  A missing
+placeholder raises immediately with the offending key; literal braces
+only need doubling when `prompt_vars` is actually passed.  TensorZero
+server-side templates remain available on declared functions via
+`.with_(system_arguments={...})` — the two sides are mutually
+exclusive per call.
+
+---
+
 ## Toolless chat — no MCP plumbing needed
 
 The v1.0 `Agent` accepts `tool_provider=None` directly: chat-mode

@@ -464,7 +464,7 @@ class TensorZeroMemory:
 | Parameter | Behaviour |
 |---|---|
 | `gateway` | An open `AsyncTensorZeroGateway`. Must outlive the memory instance — `load`/`load_history` issue calls on it. |
-| `function_name` | Filter inferences by TensorZero function name. Strongly recommended for partition-pruning on ClickHouse-backed observability stores; `None` queries across functions. |
+| `function_name` | Filter inferences by TensorZero function name. Strongly recommended for partition-pruning on ClickHouse-backed observability stores; `None` queries across functions. **Gotcha:** functionless agents (`AgentConfig.model=`) store every inference under `tensorzero::default` — a filter on your own function name will never see them; filter on `tag_filter={"t0_agents.agent": <name>}` (auto-tagged on every inference) instead, optionally plus `function_name="tensorzero::default"` for pruning. |
 | `tag_filter` | Equality-only convenience: each `(key, value)` pair becomes an `InferenceFilterTag(=)` and the pairs are AND-combined. Pair with the same tags on `AgentConfig.tags` so reads and writes share a tenant scope. |
 | `extra_filters` | Raw `InferenceFilter` passthrough for non-equality predicates (`InferenceFilterTime`, `InferenceFilterOr`, manual AND/NOT trees). AND-combined with `tag_filter` when both are set. |
 | `load_limit` | Maximum number of inferences `load` may return. Defaults to `10`, matching `render_memory_summary`'s `max_records`. |

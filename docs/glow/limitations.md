@@ -28,6 +28,41 @@ string deltas only (no `parsed` mid-stream), so a future
 streaming-JSON output mode would still parse client-side at the end;
 until one lands, no glow workaround.
 
+## `model=` agents cannot produce validated JSON
+
+The functionless path routes through the gateway's built-in chat
+passthrough (`tensorzero::default`), which **ignores the per-call
+`output_schema`** (verified against gateway 2026.4.0) — so
+`JsonOutput`/`StructuredOutput` can never be satisfied there.
+Declaring `@app.agent(model=..., ...)` on a function with a structured
+return annotation raises `ConfigurationError` at first build, with a
+ready-to-paste `type = "json"` TOML stanza in the message.  Drop to
+`function_name=` for schema-validated output.
+
+## Functionless inferences are invisible to `function_name`-filtered memory
+
+Every `model=` inference is stored under `tensorzero::default`, so
+`TensorZeroMemory(function_name="my_func")` filters will never see it.
+Filter on the observability auto-tag instead — it is present on every
+inference:
+
+```python
+TensorZeroMemory(gateway, tag_filter={"t0_agents.agent": "tutor"})
+```
+
+Add `function_name="tensorzero::default"` on top for ClickHouse
+partition-pruning when the store grows.
+
+## `system_arguments` does not work with `model=`
+
+TZ server-side templates (`.with_(system_arguments={...})`) need a
+declared function with a system schema; the functionless passthrough
+has none.  The combination raises up front (a `ValueError` from
+`Agent.invoke`) instead of surfacing as an opaque gateway 400.  Use
+the docstring (optionally with [`prompt_vars`
+placeholders](getting-started.md#client-side-prompt-templates--prompt_vars))
+or a raw `.with_(system=...)` string on the `model=` path.
+
 ## No `AsyncIterator` tools
 
 The plan flagged `AsyncIterator[str]` tool returns as a future
