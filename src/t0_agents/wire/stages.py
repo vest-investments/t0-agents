@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Final, assert_never
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
@@ -42,9 +42,14 @@ from t0_agents.stream.events import (
     ToolResultEvent,
     TurnEndEvent,
 )
+from t0_agents.stream.status import split_tool_identity
 from t0_agents.wire.frames import (
     DoneFrame,
+    ElicitationRequestFrame,
+    ElicitationResolvedFrame,
     ErrorFrame,
+    InitFrame,
+    StatusFrame,
     TextDeltaFrame,
     TextEndFrame,
     ThoughtDeltaFrame,
@@ -70,6 +75,16 @@ debug surfaces. Larger than :data:`MAX_ARG_BYTES` /
 plus the ``type`` discriminator and any future ones."""
 
 _TRUNC_INDICATOR: Final[str] = "…"
+
+EMPTY_TURN_RETRY_TEXT: Final[str] = "I couldn't complete that — please try again."
+"""Belt text :func:`with_text_fallback` synthesises when a run produced
+neither streamed text nor a final response — the wire never ends a
+successful run blank. Part of the frozen public contract."""
+
+FALLBACK_BLOCK_ID: Final[str] = "thought-fallback"
+"""Block id for synthesised fallback text (and the public ``done``
+payload id) when :class:`DoneFrame.inference_ids` is empty. Part of the
+frozen public contract."""
 
 
 def _truncate(value: str, max_bytes: int) -> tuple[str, int | None]:
@@ -216,10 +231,132 @@ async def as_terminal_safe(
         yield _error_frame(type(exc).__name__, message, detail)
 
 
+async def with_status(
+    frames: AsyncIterator[WireFrame],
+    *,
+    known_servers: Sequence[str] = (),
+) -> AsyncIterator[WireFrame]:
+    """Intercalate :class:`StatusFrame` hints after their triggers.
+
+    Every input frame is re-emitted first, then any synthesised status
+    — downstream stages see the same underlying sequence they would
+    have seen without this stage. The policy is the production one:
+
+    * ``"Calling {name}…"`` after every :class:`ToolCallFrame` (no
+      dedup — each call is news), carrying the ``(server, tool)``
+      identity split via
+      :func:`t0_agents.stream.status.split_tool_identity` against
+      ``known_servers``.
+    * ``"Thinking…"`` once per contiguous reasoning block, suppressed
+      for the rest of the run once any tool call fired — the per-tool
+      hint stands until the next tool call or the run terminator.
+    * A terminal :class:`DoneFrame` / :class:`ErrorFrame` re-arms both
+      flags, so the next run on a long-lived stream surfaces its own
+      initial ``"Thinking…"``.
+    """
+    in_thought_block = False
+    saw_tool_call = False
+    async for frame in frames:
+        yield frame
+        match frame:
+            case ToolCallFrame(name=name):
+                in_thought_block = False
+                saw_tool_call = True
+                server, tool = split_tool_identity(name, known_servers)
+                yield StatusFrame(text=f"Calling {name}…", server=server, tool=tool)
+            case ThoughtFrame() | ThoughtDeltaFrame():
+                if not in_thought_block and not saw_tool_call:
+                    in_thought_block = True
+                    yield StatusFrame(text="Thinking…")
+            case DoneFrame() | ErrorFrame():
+                in_thought_block = False
+                saw_tool_call = False
+            case (
+                InitFrame()
+                | TextDeltaFrame()
+                | TextEndFrame()
+                | ToolCallDeltaFrame()
+                | ToolResultFrame()
+                | ToolProgressFrame()
+                | TurnEndFrame()
+                | StatusFrame()
+                | ElicitationRequestFrame()
+                | ElicitationResolvedFrame()
+            ):
+                # Any non-thought, non-tool frame ends the contiguous
+                # thought block; saw_tool_call deliberately stands —
+                # only the run terminator re-arms it.
+                in_thought_block = False
+            case _:
+                assert_never(frame)
+
+
+async def with_text_fallback(
+    frames: AsyncIterator[WireFrame],
+) -> AsyncIterator[WireFrame]:
+    """Guarantee every successful run ends with visible text.
+
+    Reasoning models (OpenAI o-series, ``gpt-oss`` via Harmony) route
+    the final answer through thought summaries and stream no text
+    deltas; the thought frames are dropped by
+    :func:`public_allowlist`, so without this stage the client would
+    see a blank run. When a :class:`DoneFrame` arrives and no non-blank
+    :class:`TextDeltaFrame` streamed this run, a
+    ``TextDeltaFrame`` + :class:`TextEndFrame` pair is synthesised
+    before it — from :attr:`DoneFrame.response_text` when non-blank
+    (reasoning fallback), else from :data:`EMPTY_TURN_RETRY_TEXT`
+    (never-blank belt). The synthesised block id is the last inference
+    id, or :data:`FALLBACK_BLOCK_ID` when there is none — matching the
+    public ``done`` payload id.
+
+    ``saw_text`` re-arms after each :class:`DoneFrame` so every run on
+    a long-lived stream gets its own fallback decision.
+    Elicitation frames never touch ``saw_text`` — a prompt is not
+    assistant text and must not suppress the fallback.
+    """
+    saw_text = False
+    async for frame in frames:
+        match frame:
+            case TextDeltaFrame(delta=delta):
+                if delta.strip():
+                    saw_text = True
+                yield frame
+            case DoneFrame(response_text=text, inference_ids=ids):
+                if not saw_text:
+                    msg_id = ids[-1] if ids else FALLBACK_BLOCK_ID
+                    body = text if text.strip() else EMPTY_TURN_RETRY_TEXT
+                    yield TextDeltaFrame(block_id=msg_id, delta=body)
+                    yield TextEndFrame(block_id=msg_id)
+                saw_text = False
+                yield frame
+            case (
+                InitFrame()
+                | TextEndFrame()
+                | ToolCallDeltaFrame()
+                | ToolCallFrame()
+                | ToolResultFrame()
+                | ToolProgressFrame()
+                | ThoughtDeltaFrame()
+                | ThoughtFrame()
+                | TurnEndFrame()
+                | ErrorFrame()
+                | StatusFrame()
+                | ElicitationRequestFrame()
+                | ElicitationResolvedFrame()
+            ):
+                yield frame
+            case _:
+                assert_never(frame)
+
+
 __all__ = [
+    "EMPTY_TURN_RETRY_TEXT",
+    "FALLBACK_BLOCK_ID",
     "MAX_ARG_BYTES",
     "MAX_RAW_BYTES",
     "MAX_RESULT_BYTES",
     "as_terminal_safe",
     "project",
+    "with_status",
+    "with_text_fallback",
 ]

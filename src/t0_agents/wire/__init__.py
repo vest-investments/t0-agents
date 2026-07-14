@@ -39,14 +39,20 @@ from t0_agents.wire.frames import (
     frame_to_dict,
 )
 from t0_agents.wire.stages import (
+    EMPTY_TURN_RETRY_TEXT,
+    FALLBACK_BLOCK_ID,
     MAX_ARG_BYTES,
     MAX_RAW_BYTES,
     MAX_RESULT_BYTES,
     as_terminal_safe,
     project,
+    with_status,
+    with_text_fallback,
 )
 
 __all__ = [
+    "EMPTY_TURN_RETRY_TEXT",
+    "FALLBACK_BLOCK_ID",
     "MAX_ARG_BYTES",
     "MAX_RAW_BYTES",
     "MAX_RESULT_BYTES",
@@ -71,4 +77,6 @@ __all__ = [
     "frame_from_dict",
     "frame_to_dict",
     "project",
+    "with_status",
+    "with_text_fallback",
 ]

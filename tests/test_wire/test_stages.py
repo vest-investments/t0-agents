@@ -32,8 +32,12 @@ from t0_agents.stream.events import (
 )
 from t0_agents.testing import ScriptedAgent
 from t0_agents.wire import (
+    EMPTY_TURN_RETRY_TEXT,
+    FALLBACK_BLOCK_ID,
     DoneFrame,
+    ElicitationRequestFrame,
     ErrorFrame,
+    StatusFrame,
     TextDeltaFrame,
     TextEndFrame,
     ThoughtDeltaFrame,
@@ -45,7 +49,13 @@ from t0_agents.wire import (
     TurnEndFrame,
     WireFrame,
 )
-from t0_agents.wire.stages import MAX_ARG_BYTES, as_terminal_safe, project
+from t0_agents.wire.stages import (
+    MAX_ARG_BYTES,
+    as_terminal_safe,
+    project,
+    with_status,
+    with_text_fallback,
+)
 
 
 async def _stream(events: Iterable[AgentEvent]) -> AsyncIterator[AgentEvent]:
@@ -256,3 +266,196 @@ class TestAsTerminalSafe:
 async def _stream_frames(frames: Iterable[WireFrame]) -> AsyncIterator[WireFrame]:
     for frame in frames:
         yield frame
+
+
+def _tool_call(name: str) -> ToolCallFrame:
+    return ToolCallFrame(
+        id="t1", name=name, arguments_json="{}", truncated_from=None, raw_event_json="{}"
+    )
+
+
+def _done(
+    *, text: str = "", ids: tuple[str, ...] = ("inf-1",), source: str = "text"
+) -> DoneFrame:
+    assert source in ("text", "thought")
+    return DoneFrame(
+        turns=1,
+        response_source="thought" if source == "thought" else "text",
+        response_text=text,
+        inference_ids=ids,
+    )
+
+
+async def _statuses(
+    frames: Iterable[WireFrame], *, known_servers: tuple[str, ...] = ()
+) -> list[WireFrame]:
+    return [
+        f
+        async for f in with_status(_stream_frames(frames), known_servers=known_servers)
+    ]
+
+
+class TestWithStatus:
+    async def test_tool_call_hint_carries_the_split_identity(self) -> None:
+        out = await _statuses([_tool_call("fred_get_macro")], known_servers=("fred",))
+        assert out == [
+            _tool_call("fred_get_macro"),
+            StatusFrame(text="Calling fred_get_macro…", server="fred", tool="get_macro"),
+        ]
+
+    async def test_unprefixed_tool_name_has_no_server(self) -> None:
+        [_, status] = await _statuses([_tool_call("get_weather")])
+        assert status == StatusFrame(
+            text="Calling get_weather…", server=None, tool="get_weather"
+        )
+
+    async def test_every_tool_call_fires_its_own_hint(self) -> None:
+        out = await _statuses([_tool_call("a"), _tool_call("b")])
+        assert [f.text for f in out if isinstance(f, StatusFrame)] == [
+            "Calling a…",
+            "Calling b…",
+        ]
+
+    async def test_thinking_fires_once_per_contiguous_thought_block(self) -> None:
+        out = await _statuses(
+            [
+                ThoughtDeltaFrame(id="th1", delta="a"),
+                ThoughtDeltaFrame(id="th1", delta="b"),
+            ]
+        )
+        assert [f for f in out if isinstance(f, StatusFrame)] == [
+            StatusFrame(text="Thinking…")
+        ]
+
+    async def test_a_text_delta_ends_the_thought_block(self) -> None:
+        out = await _statuses(
+            [
+                ThoughtDeltaFrame(id="th1", delta="a"),
+                TextDeltaFrame(block_id="b1", delta="hi"),
+                ThoughtDeltaFrame(id="th2", delta="b"),
+            ]
+        )
+        assert [f for f in out if isinstance(f, StatusFrame)] == [
+            StatusFrame(text="Thinking…"),
+            StatusFrame(text="Thinking…"),
+        ]
+
+    async def test_a_tool_call_suppresses_thinking_for_the_rest_of_the_run(self) -> None:
+        out = await _statuses(
+            [_tool_call("get_weather"), ThoughtDeltaFrame(id="th1", delta="a")]
+        )
+        statuses = [f for f in out if isinstance(f, StatusFrame)]
+        assert statuses == [
+            StatusFrame(text="Calling get_weather…", server=None, tool="get_weather")
+        ]
+
+    async def test_the_run_terminator_rearms_both_flags(self) -> None:
+        out = await _statuses(
+            [
+                _tool_call("get_weather"),
+                _done(text="hi"),
+                ThoughtDeltaFrame(id="th1", delta="next run"),
+            ]
+        )
+        assert [f.text for f in out if isinstance(f, StatusFrame)] == [
+            "Calling get_weather…",
+            "Thinking…",
+        ]
+
+    async def test_an_error_frame_also_rearms(self) -> None:
+        out = await _statuses(
+            [
+                _tool_call("get_weather"),
+                ErrorFrame(message="boom", detail={}),
+                ThoughtDeltaFrame(id="th1", delta="next run"),
+            ]
+        )
+        assert [f.text for f in out if isinstance(f, StatusFrame)] == [
+            "Calling get_weather…",
+            "Thinking…",
+        ]
+
+    async def test_originals_flow_through_first_and_unchanged(self) -> None:
+        source = [
+            ThoughtDeltaFrame(id="th1", delta="a"),
+            TextDeltaFrame(block_id="b1", delta="hi"),
+            _done(text="hi"),
+        ]
+        out = await _statuses(source)
+        assert [f for f in out if not isinstance(f, StatusFrame)] == source
+
+
+async def _fallback(frames: Iterable[WireFrame]) -> list[WireFrame]:
+    return [f async for f in with_text_fallback(_stream_frames(frames))]
+
+
+class TestWithTextFallback:
+    async def test_a_texty_run_passes_through_untouched(self) -> None:
+        source = [
+            TextDeltaFrame(block_id="b1", delta="hi"),
+            TextEndFrame(block_id="b1"),
+            _done(text="hi there"),
+        ]
+        assert await _fallback(source) == source
+
+    async def test_reasoning_fallback_synthesises_the_answer(self) -> None:
+        out = await _fallback(
+            [
+                ThoughtDeltaFrame(id="th1", delta="hmm"),
+                _done(text="The answer.", ids=("inf-1",), source="thought"),
+            ]
+        )
+        assert out == [
+            ThoughtDeltaFrame(id="th1", delta="hmm"),
+            TextDeltaFrame(block_id="inf-1", delta="The answer."),
+            TextEndFrame(block_id="inf-1"),
+            _done(text="The answer.", ids=("inf-1",), source="thought"),
+        ]
+
+    async def test_the_belt_covers_a_blank_response(self) -> None:
+        out = await _fallback([_done(text="   \n\t  ", ids=("inf-9",))])
+        assert out[:2] == [
+            TextDeltaFrame(block_id="inf-9", delta=EMPTY_TURN_RETRY_TEXT),
+            TextEndFrame(block_id="inf-9"),
+        ]
+
+    async def test_no_inference_ids_uses_the_fallback_block_id(self) -> None:
+        out = await _fallback([_done(text="hi", ids=())])
+        assert out[0] == TextDeltaFrame(block_id=FALLBACK_BLOCK_ID, delta="hi")
+
+    async def test_blank_only_deltas_do_not_count_as_text(self) -> None:
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta=""),
+                TextEndFrame(block_id="b1"),
+                _done(text="answer", ids=("inf-1",)),
+            ]
+        )
+        assert TextDeltaFrame(block_id="inf-1", delta="answer") in out
+
+    async def test_saw_text_rearms_per_run_on_a_long_lived_stream(self) -> None:
+        """Deliberate deviation from vest-ai's projector, which never
+        re-arms ``_saw_text`` and so suppresses the reasoning fallback
+        for every run after the first texty one on the same connection.
+        The library re-arms per run, consistent with the status
+        translator's terminator semantics."""
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta="run one"),
+                _done(text="run one"),
+                ThoughtDeltaFrame(id="th1", delta="run two thinks"),
+                _done(text="run two answer", ids=("inf-2",), source="thought"),
+            ]
+        )
+        assert TextDeltaFrame(block_id="inf-2", delta="run two answer") in out
+
+    async def test_an_elicitation_prompt_does_not_suppress_the_fallback(self) -> None:
+        out = await _fallback(
+            [
+                ElicitationRequestFrame(
+                    id="e1", message="Proceed?", response_type=None, schema_json="{}"
+                ),
+                _done(text="done after prompt", ids=("inf-3",)),
+            ]
+        )
+        assert TextDeltaFrame(block_id="inf-3", delta="done after prompt") in out
