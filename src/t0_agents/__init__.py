@@ -66,6 +66,7 @@ from t0_agents.stream import (
     DoneEvent,
     ErrorEvent,
     RunErrorEvent,
+    Status,
     StreamingAgentLoop,
     TextDeltaEvent,
     TextEndEvent,
@@ -79,6 +80,8 @@ from t0_agents.stream import (
     TurnStreamAssembler,
     event_from_dict,
     event_to_dict,
+    split_tool_identity,
+    synthesize_statuses,
 )
 from t0_agents.tooling import FilteredToolProvider
 
@@ -122,6 +125,7 @@ __all__ = [
     "RunInput",
     "RunState",
     "RunUsage",
+    "Status",
     "StreamingAgentLoop",
     "StreamingOutput",
     "StructuredInferenceResult",
@@ -149,6 +153,8 @@ __all__ = [
     "event_to_dict",
     "permissive_parse",
     "run_agent",
+    "split_tool_identity",
+    "synthesize_statuses",
 ]
 
 # Library best practice: prevent "No handler found" warnings.

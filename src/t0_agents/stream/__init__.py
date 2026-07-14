@@ -36,6 +36,7 @@ from t0_agents.stream.events import (
     TurnEndEvent,
 )
 from t0_agents.stream.runner import StreamingAgentLoop
+from t0_agents.stream.status import Status, split_tool_identity, synthesize_statuses
 
 __all__ = [
     "CODEC_VERSION",
@@ -43,6 +44,7 @@ __all__ = [
     "DoneEvent",
     "ErrorEvent",
     "RunErrorEvent",
+    "Status",
     "StreamingAgentLoop",
     "TextDeltaEvent",
     "TextEndEvent",
@@ -56,4 +58,6 @@ __all__ = [
     "TurnStreamAssembler",
     "event_from_dict",
     "event_to_dict",
+    "split_tool_identity",
+    "synthesize_statuses",
 ]
