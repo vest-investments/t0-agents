@@ -164,3 +164,90 @@ async def test_regex_guardrail_on_return_annotation_blocks_response() -> None:
         with pytest.raises(GuardrailBlockedError, match="SSN"):
             async with app.lifespan():
                 await support("Please return the placeholder SSN now.")
+
+
+# ---------------------------------------------------------------------------
+# M3 (glow v2): model= functionless routing
+# ---------------------------------------------------------------------------
+
+
+async def test_model_agent_runs_functionless_with_tools_episode_and_streaming() -> None:
+    """The functionless 4-way combo end-to-end through glow: ``model=``
+    (zero TOML) + an ``@app.tool`` + episode continuity + ``events()``
+    streaming.  Mirrors the Q19 probe that gated this design.
+    """
+    from t0_agents.stream.events import DoneEvent, ToolResultEvent
+
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        @app.tool
+        def get_capital(country: str) -> str:
+            """Return the capital city of a country."""
+            return {"France": "Paris"}.get(country, "unknown")
+
+        @app.agent("geo", model="groq::openai/gpt-oss-20b")
+        async def geo(q: str) -> str:  # type: ignore[empty-body]
+            """A geography assistant. Always call the get_capital tool
+            before answering questions about capitals."""
+
+        async with app.lifespan():
+            first = await geo("Say the word ready.").result()
+            assert first.episode_id
+
+            events: list[Any] = []
+            follow_up = geo(
+                "What is the capital of France? You MUST call the "
+                "get_capital tool first."
+            ).with_(episode_id=first.episode_id)
+            async for event in follow_up.events():
+                events.append(event)
+
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response.strip() != ""
+    assert done[0].result.episode_id == first.episode_id
+    assert any(isinstance(e, ToolResultEvent) for e in events)
+
+
+async def test_functionless_inferences_store_under_default_with_auto_tag() -> None:
+    """Functionless runs land under ``tensorzero::default`` carrying the
+    ``t0_agents.agent`` auto-tag — the per-agent observability handle
+    (and the documented ``TensorZeroMemory(tag_filter=...)`` cover for
+    the function_name-filter blind spot).
+    """
+    import asyncio
+    from uuid import uuid4
+
+    from tensorzero import InferenceFilterTag, ListInferencesRequest, OrderBy
+
+    agent_name = f"tagcheck-{uuid4().hex[:8]}"
+    async with await _gateway_factory() as t0:
+        app = App(t0=t0)
+
+        @app.agent(agent_name, model="groq::openai/gpt-oss-20b")
+        async def tagged(q: str) -> str:  # type: ignore[empty-body]
+            """Reply in one word."""
+
+        async with app.lifespan():
+            await tagged("Say ok.")
+
+        await asyncio.sleep(2)  # ClickHouse ingest is asynchronous
+        request = ListInferencesRequest(
+            function_name="tensorzero::default",
+            filters=InferenceFilterTag(
+                key="t0_agents.agent",
+                value=agent_name,
+                comparison_operator="=",
+            ),
+            order_by=[
+                OrderBy(by="timestamp", direction="descending")  # type: ignore[list-item]
+            ],
+            limit=5,
+        )
+        stored = await t0.list_inferences(request=request)
+
+    assert len(stored.inferences) >= 1
+    assert all(
+        inf.function_name == "tensorzero::default" for inf in stored.inferences
+    )
