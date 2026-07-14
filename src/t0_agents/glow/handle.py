@@ -19,7 +19,7 @@ hatch for the full :class:`AgentResult` (``episode_id`` /
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
@@ -85,10 +85,13 @@ class FluentRun(Generic[T]):
     FluentRun's output is overridden a second time (e.g. ``.json(A).json(B)``),
     the second override logs DEBUG so overlap is observable.
 
-    Consumption is lazy: the build closure does not fire until
-    :meth:`__await__`, :meth:`result`, or :meth:`events` is called; the
-    resulting :class:`Run` is cached so the second consumer joins the
-    first's drive task (standard ``Run`` first-consumer-wins semantics).
+    Consumption is lazy: the build closure does not fire until the
+    handle is actually consumed — ``await``, :meth:`result`, or the
+    first iteration of :meth:`events` / :meth:`stream_text` (all via
+    the async :meth:`_ensure_run` seam, which also awaits glow's
+    ``prepare`` auto-build hook once).  The resulting :class:`Run` is
+    cached so the second consumer joins the first's drive task
+    (standard ``Run`` first-consumer-wins semantics).
     """
 
     def __init__(
@@ -98,8 +101,13 @@ class FluentRun(Generic[T]):
         *,
         value_transform: Callable[[Any], T] | None = None,
         known_servers: tuple[str, ...] = (),
+        prepare: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._build: Callable[..., Run[Any]] = build
+        # Awaited once before the build closure fires (see _ensure_run).
+        # ``App._invoke`` injects the auto-build hook here; direct
+        # constructions (tests, custom integrations) may leave it None.
+        self._prepare: Callable[[], Awaitable[None]] | None = prepare
         self._chosen_output: OutputMode[Any] = default_output
         self._has_override: bool = False
         self._run: Run[Any] | None = None
@@ -190,6 +198,7 @@ class FluentRun(Generic[T]):
             self._chosen_output,
             value_transform=self._value_transform,
             known_servers=self._known_servers,
+            prepare=self._prepare,
         )
         new._has_override = self._has_override
         new._call_kwargs = {**self._call_kwargs, **call_kwargs}
@@ -215,7 +224,10 @@ class FluentRun(Generic[T]):
                 new_output.name,
             )
         new: FluentRun[Any] = FluentRun(
-            self._build, new_output, known_servers=self._known_servers
+            self._build,
+            new_output,
+            known_servers=self._known_servers,
+            prepare=self._prepare,
         )
         new._has_override = True
         new._call_kwargs = dict(self._call_kwargs)
@@ -224,6 +236,23 @@ class FluentRun(Generic[T]):
     # ------------------------------------------------------------------
     # Consumption — builds the underlying Run lazily
     # ------------------------------------------------------------------
+
+    async def _ensure_run(self) -> Run[Any]:
+        """Build (once) and return the underlying :class:`Run`.
+
+        The async seam of the boot collapse: when a ``prepare`` hook was
+        injected (``App._invoke`` passes the App's auto-build), it is
+        awaited exactly once — before the build closure fires — so the
+        first consumption pays the App boot (gateway resolution, MCP
+        mounts, client connection, ``tools=`` filters) instead of the
+        handle construction.  The built Run is cached; concurrent and
+        subsequent consumers join it (first-consumer-wins).
+        """
+        if self._run is None:
+            if self._prepare is not None:
+                await self._prepare()
+            self._run = self._build(self._chosen_output, **self._call_kwargs)
+        return self._run
 
     @overload
     def events(
@@ -271,8 +300,11 @@ class FluentRun(Generic[T]):
     ) -> AsyncIterator[Any]:
         """Iterate the underlying ``Run.events()`` stream, optionally filtered.
 
-        Builds the ``Run`` synchronously at call time so subsequent
-        ``__await__`` joins the same cached buffer (standard
+        Selector arguments are validated eagerly at call time (a bad
+        argument raises here, not mid-stream); the ``Run`` itself is
+        built on first iteration — via :meth:`_ensure_run`, so glow's
+        auto-build ``prepare`` hook runs first — and cached, so a
+        subsequent ``__await__`` joins the same buffer (standard
         first-consumer-wins semantics).
 
         When no selectors are passed, yields every :class:`AgentEvent`
@@ -301,11 +333,6 @@ class FluentRun(Generic[T]):
         clear message rather than failing with an opaque
         ``AttributeError`` mid-stream.
         """
-        if self._run is None:
-            self._run = self._build(self._chosen_output, **self._call_kwargs)
-        run = self._run
-        if not selectors:
-            return run.events(on_error=on_error)
         for s in selectors:
             if not isinstance(s, Selector):
                 raise TypeError(
@@ -316,22 +343,36 @@ class FluentRun(Generic[T]):
                     f"`t0_agents.glow` and chain with `.where(...)` / "
                     f"`.map(...)` if you need filters."
                 )
-        return _filter_with_selectors(run.events(on_error=on_error), selectors)
+
+        async def _stream() -> AsyncIterator[Any]:
+            run = await self._ensure_run()
+            source: AsyncIterator[Any] = run.events(on_error=on_error)
+            if selectors:
+                source = _filter_with_selectors(source, selectors)
+            async for item in source:
+                yield item
+
+        return _stream()
 
     def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
         """Stream the assistant text — the UI one-liner, reasoning-safe.
 
         Delegates to :meth:`Run.stream_text`, building the ``Run``
-        lazily exactly like :meth:`events`.  ``fallback=True`` (default)
-        covers reasoning models that route the answer through thought
+        lazily exactly like :meth:`events` (on first iteration, through
+        :meth:`_ensure_run`).  ``fallback=True`` (default) covers
+        reasoning models that route the answer through thought
         summaries and stream no text deltas: the final
         ``result.response`` is yielded once after the drain.  Fatal
         errors raise out of the iterator — use
         ``events(on_error="event")`` when you need a terminal event.
         """
-        if self._run is None:
-            self._run = self._build(self._chosen_output, **self._call_kwargs)
-        return self._run.stream_text(fallback=fallback)
+
+        async def _stream() -> AsyncIterator[str]:
+            run = await self._ensure_run()
+            async for chunk in run.stream_text(fallback=fallback):
+                yield chunk
+
+        return _stream()
 
     def statuses(self) -> AsyncIterator[AgentEvent | Status]:
         """Iterate events with user-facing :class:`Status` hints interleaved.
@@ -364,9 +405,8 @@ class FluentRun(Generic[T]):
         :func:`dataclasses.replace`; every other field (present and
         future) is carried over untouched.
         """
-        if self._run is None:
-            self._run = self._build(self._chosen_output, **self._call_kwargs)
-        raw = await self._run.result()
+        run = await self._ensure_run()
+        raw = await run.result()
         if self._value_transform is None:
             return cast(AgentResult[T], raw)
         # ``replace`` (vs a field-by-field copy) carries over every
