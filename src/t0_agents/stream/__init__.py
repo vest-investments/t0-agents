@@ -4,8 +4,9 @@ Public surface:
 
 * :data:`AgentEvent` and every variant dataclass (``TextDeltaEvent``,
   ``TextEndEvent``, ``ToolCallDeltaEvent``, ``ToolCallEvent``,
-  ``ToolResultEvent``, ``ThoughtDeltaEvent``, ``ThoughtEvent``,
-  ``TurnEndEvent``, ``DoneEvent``, ``ErrorEvent``).
+  ``ToolResultEvent``, ``ToolProgressEvent``, ``ThoughtDeltaEvent``,
+  ``ThoughtEvent``, ``TurnEndEvent``, ``DoneEvent``, ``ErrorEvent``,
+  ``RunErrorEvent``).
 * :class:`StreamingAgentLoop` — streaming analogue of
   :func:`t0_agents.mcp.loop.run_agent`.
 * :class:`TurnStreamAssembler` — folds T0 chunks into ``AgentEvent`` s.
@@ -22,12 +23,14 @@ from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
     ErrorEvent,
+    RunErrorEvent,
     TextDeltaEvent,
     TextEndEvent,
     ThoughtDeltaEvent,
     ThoughtEvent,
     ToolCallDeltaEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
@@ -37,6 +40,7 @@ __all__ = [
     "AgentEvent",
     "DoneEvent",
     "ErrorEvent",
+    "RunErrorEvent",
     "StreamingAgentLoop",
     "TextDeltaEvent",
     "TextEndEvent",
@@ -44,6 +48,7 @@ __all__ = [
     "ThoughtEvent",
     "ToolCallDeltaEvent",
     "ToolCallEvent",
+    "ToolProgressEvent",
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",

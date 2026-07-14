@@ -75,6 +75,24 @@ class ToolResultEvent:
 
 
 @dataclass(slots=True)
+class ToolProgressEvent:
+    """Progress notification from the MCP tool executing under ``id``.
+
+    ``id`` matches the :class:`ToolCallEvent` (and eventual
+    :class:`ToolResultEvent`) it reports on.  Emitted only while streaming —
+    fastmcp delivers server-side ``ctx.report_progress(...)`` calls to a
+    per-call handler, and the loop forwards them here instead of dropping
+    them.  ``total`` and ``message`` are ``None`` when the server omits them.
+    """
+
+    id: str
+    progress: float
+    total: float | None = None
+    message: str | None = None
+    type: Literal["tool_progress"] = "tool_progress"
+
+
+@dataclass(slots=True)
 class ThoughtDeltaEvent:
     """One delta of reasoning text for the thought block ``id``."""
 
@@ -110,17 +128,42 @@ class DoneEvent:
 
 @dataclass(slots=True)
 class ErrorEvent:
-    """Non-fatal anomaly surfaced inline.
+    """Non-fatal anomaly surfaced inline — the stream continues after it.
 
-    Fatal errors (``MaxTurnsExceededError``, ``GuardrailBlockedError``) still
-    raise out of the async iterator rather than converting to this event.
     Used for recoverable artefacts — invalid tool-call JSON, unknown chunk
-    types, recoverable ``TensorZeroError`` retries.
+    types, recoverable ``TensorZeroError`` retries.  Fatal errors
+    (``MaxTurnsExceededError``, ``GuardrailBlockedError``) never convert to
+    this event: with the default ``Run.events(on_error="raise")`` they raise
+    out of the async iterator; with ``on_error="event"`` they end the stream
+    as a single terminal :class:`RunErrorEvent`.
     """
 
     message: str
     detail: dict[str, Any] = field(default_factory=dict)
     type: Literal["error"] = "error"
+
+
+@dataclass(slots=True)
+class RunErrorEvent:
+    """Terminal event: the run failed and the stream ends here.
+
+    Emitted only under ``Run.events(on_error="event")``, in place of the
+    fatal exception that ``on_error="raise"`` would re-raise.  A stream in
+    that mode ends with exactly one ``DoneEvent | RunErrorEvent``.  Contrast
+    with :class:`ErrorEvent`, which is recoverable and inline.
+
+    ``error_type`` is the exception class name (e.g.
+    ``"MaxTurnsExceededError"``) and ``detail`` carries structured,
+    JSON-serialisable extras (e.g. ``{"max_turns": 20}``).  ``exception`` is
+    the original exception for in-process consumers (logging, re-raise); it
+    is deliberately excluded from the codec and never crosses a wire.
+    """
+
+    error_type: str
+    message: str
+    detail: dict[str, Any] = field(default_factory=dict)
+    exception: BaseException | None = field(default=None, repr=False, compare=False)
+    type: Literal["run_error"] = "run_error"
 
 
 AgentEvent = (
@@ -129,9 +172,11 @@ AgentEvent = (
     | ToolCallDeltaEvent
     | ToolCallEvent
     | ToolResultEvent
+    | ToolProgressEvent
     | ThoughtDeltaEvent
     | ThoughtEvent
     | TurnEndEvent
     | DoneEvent
     | ErrorEvent
+    | RunErrorEvent
 )
