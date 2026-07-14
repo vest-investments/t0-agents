@@ -820,3 +820,18 @@ class TestRunAgentModelRouting:
         assert call["variant_name"] is None
         assert call["params"] is None
         assert call["cache_options"] is None
+
+    async def test_system_arguments_with_model_name_rejected_eagerly(self) -> None:
+        """Direct run_agent callers get the fail-fast too — the passthrough
+        has no system template, so the combination could only surface as
+        an opaque gateway 400."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        with pytest.raises(ValueError, match="system_arguments"):
+            await run_agent(
+                cast(AsyncTensorZeroGateway, t0),
+                cast(Client[Any], FakeMCPClient()),
+                "go",
+                model_name="groq::llama-3.3-70b-versatile",
+                system_arguments={"k": "v"},
+            )
+        assert t0.calls == []

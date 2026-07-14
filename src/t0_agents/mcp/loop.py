@@ -399,6 +399,13 @@ async def run_agent(
             "Pass either `system` (raw string for input.system) or "
             "`system_arguments` (dict for template variables), not both."
         )
+    if system_arguments is not None and model_name is not None:
+        raise ValueError(
+            "system_arguments requires a tensorzero.toml function with a "
+            "system template; model_name routes via the functionless "
+            "passthrough, which has none. Pass system= (a raw prompt "
+            "string), or declare the function and use function_name=."
+        )
     if not user_message or not (function_name or model_name):
         raise ValueError(
             "`run_agent` requires non-empty `user_message` and a routing "

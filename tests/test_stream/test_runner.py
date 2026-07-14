@@ -536,3 +536,20 @@ async def test_streaming_loop_forwards_model_routing() -> None:
     assert call["function_name"] is None
     assert call["params"] == {"chat_completion": {"temperature": 0.1}}
     assert call["cache_options"] == {"enabled": "on"}
+
+
+async def test_streaming_loop_system_arguments_with_model_name_rejected() -> None:
+    """stream() rejects system_arguments on the functionless path before
+    opening the stream — mirrors run_agent's eager guard."""
+    fake_t0 = FakeT0(responses=[])
+    runner = StreamingAgentLoop()
+    with pytest.raises(ValueError, match="system_arguments"):
+        async for _ in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, FakeMCPClient(tools=[])),
+            "hi",
+            model_name="groq::llama-3.3-70b-versatile",
+            system_arguments={"k": "v"},
+        ):
+            pass
+    assert fake_t0.calls == []
