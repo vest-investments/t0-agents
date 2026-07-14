@@ -61,6 +61,7 @@ from t0_agents.core.types import (
 from t0_agents.delegation import SubAgentToolProvider
 from t0_agents.mcp import run_agent
 from t0_agents.stream import (
+    CODEC_VERSION,
     AgentEvent,
     DoneEvent,
     ErrorEvent,
@@ -76,10 +77,13 @@ from t0_agents.stream import (
     ToolResultEvent,
     TurnEndEvent,
     TurnStreamAssembler,
+    event_from_dict,
+    event_to_dict,
 )
 from t0_agents.tooling import FilteredToolProvider
 
 __all__ = [
+    "CODEC_VERSION",
     "Agent",
     "AgentConfig",
     "AgentEvent",
@@ -141,6 +145,8 @@ __all__ = [
     "TurnEndEvent",
     "TurnStreamAssembler",
     "__version__",
+    "event_from_dict",
+    "event_to_dict",
     "permissive_parse",
     "run_agent",
 ]

@@ -19,6 +19,7 @@ top-level :mod:`t0_agents` package without an extras gate.
 from __future__ import annotations
 
 from t0_agents.stream.assembler import TurnStreamAssembler
+from t0_agents.stream.codec import CODEC_VERSION, event_from_dict, event_to_dict
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
@@ -37,6 +38,7 @@ from t0_agents.stream.events import (
 from t0_agents.stream.runner import StreamingAgentLoop
 
 __all__ = [
+    "CODEC_VERSION",
     "AgentEvent",
     "DoneEvent",
     "ErrorEvent",
@@ -52,4 +54,6 @@ __all__ = [
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",
+    "event_from_dict",
+    "event_to_dict",
 ]
