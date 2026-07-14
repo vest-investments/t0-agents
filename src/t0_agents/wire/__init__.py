@@ -38,8 +38,17 @@ from t0_agents.wire.frames import (
     frame_from_dict,
     frame_to_dict,
 )
+from t0_agents.wire.stages import (
+    MAX_ARG_BYTES,
+    MAX_RAW_BYTES,
+    MAX_RESULT_BYTES,
+    project,
+)
 
 __all__ = [
+    "MAX_ARG_BYTES",
+    "MAX_RAW_BYTES",
+    "MAX_RESULT_BYTES",
     "WIRE_VERSION",
     "DoneFrame",
     "ElicitationRequestFrame",
@@ -59,4 +68,5 @@ __all__ = [
     "WireFrame",
     "frame_from_dict",
     "frame_to_dict",
+    "project",
 ]
