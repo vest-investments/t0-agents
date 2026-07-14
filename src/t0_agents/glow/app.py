@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from fastmcp import Client, FastMCP
 from fastmcp.server import create_proxy
@@ -46,9 +46,19 @@ from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
 
 if TYPE_CHECKING:
+    from tensorzero import ToolChoice
+
+    from t0_agents.core.middleware.base import Middleware
+    from t0_agents.core.types import MemoryProvider
     from t0_agents.glow.decorators import _AgentWrapper
 
 __all__ = ["App"]
+
+# Sentinel telling ``@app.agent`` "caller omitted this knob" apart from an
+# explicit ``None`` — which is a meaningful value for e.g. ``tool_choice`` /
+# ``tags`` / ``middleware``.  Only knobs the caller actually passes are
+# forwarded into ``AgentConfig``; the rest keep their declarative defaults.
+_UNSET: Any = object()
 
 # Method-local generics used by ``App.agent`` so static checkers can
 # unify the decorated function's parameters / return type with the
@@ -146,6 +156,18 @@ class App:
         name: str,
         *,
         function_name: str = "agent",
+        max_turns: int = _UNSET,
+        tool_timeout: float | None = _UNSET,
+        parallel_tools: bool = _UNSET,
+        dryrun: bool = _UNSET,
+        tool_choice: ToolChoice | None = _UNSET,
+        tags: dict[str, str] | None = _UNSET,
+        namespace: str | None = _UNSET,
+        memory: MemoryProvider | None = _UNSET,
+        memory_strategy: Literal[
+            "auto", "system_template", "prepended_message", "messages"
+        ] = _UNSET,
+        middleware: list[Middleware] | None = _UNSET,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
         """Return the ``@app.agent("name")`` decorator factory.
 
@@ -156,13 +178,37 @@ class App:
         ``async def tutor(q: str) -> str``.  Construction logic lives
         in :mod:`t0_agents.glow.decorators`; this method is the typed
         thin shim that delegates to ``_make_decorator``.
+
+        Every keyword beyond ``name``/``function_name`` maps 1:1 onto the
+        corresponding :class:`~t0_agents.core.config.AgentConfig` field
+        (``max_turns``, ``tool_timeout``, ``parallel_tools``, ``dryrun``,
+        ``tool_choice``, ``tags``, ``namespace``, ``memory``,
+        ``memory_strategy``, ``middleware``).  Omitted knobs keep their
+        ``AgentConfig`` defaults; supplied knobs are layered over any
+        App-level defaults (agent-level wins — see :meth:`__init__`).
         """
         # Imported lazily to break the import cycle between
         # ``glow.app`` and ``glow.decorators`` (the latter imports
         # :class:`App` for type purposes).
         from t0_agents.glow.decorators import _make_decorator
 
-        return _make_decorator(self, name, function_name=function_name)
+        knobs: dict[str, Any] = {
+            "max_turns": max_turns,
+            "tool_timeout": tool_timeout,
+            "parallel_tools": parallel_tools,
+            "dryrun": dryrun,
+            "tool_choice": tool_choice,
+            "tags": tags,
+            "namespace": namespace,
+            "memory": memory,
+            "memory_strategy": memory_strategy,
+            "middleware": middleware,
+        }
+        config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
+
+        return _make_decorator(
+            self, name, function_name=function_name, config_overrides=config_overrides
+        )
 
     def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register ``fn`` as a FastMCP tool on the App-owned server.
@@ -234,6 +280,11 @@ class App:
             # ``GuardrailsMiddleware`` picks them up at runtime without
             # further glow plumbing.
             config_kwargs["guardrails"] = spec.guardrails
+        # Remaining ``AgentConfig`` knobs passed to ``@app.agent`` (never
+        # ``name``/``function_name``/``output``/``sub_agents``/``guardrails``,
+        # which are managed above) flow through verbatim.  ``AgentConfig``
+        # validates them in ``__post_init__``.
+        config_kwargs.update(spec.config_overrides)
         # tool_provider is the App-owned client when at least one tool
         # or MCP server is configured; otherwise None lets Agent.__init__
         # auto-allocate a SubAgentToolProvider for the sub-agents-only

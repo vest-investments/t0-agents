@@ -51,3 +51,10 @@ class _AgentSpec:
     # into ``AgentConfig.guardrails`` at first build; the runtime path
     # through ``GuardrailsMiddleware`` is unchanged.
     guardrails: list[Guardrail] = field(default_factory=list)
+    # Remaining ``AgentConfig`` fields passed as ``@app.agent`` keyword
+    # arguments (``max_turns``, ``tool_timeout``, ``tags``, ``namespace``,
+    # ``memory``, ``middleware``, …).  Only knobs the caller actually
+    # supplied are present.  Merged into ``AgentConfig(**config_kwargs)``
+    # by :meth:`~t0_agents.glow.app.App._lookup_or_build`, layered over any
+    # App-level defaults so agent-level values win.
+    config_overrides: dict[str, Any] = field(default_factory=dict)

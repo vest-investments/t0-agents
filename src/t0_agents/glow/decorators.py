@@ -132,13 +132,15 @@ def _make_decorator(
     name: str,
     *,
     function_name: str,
+    config_overrides: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, Awaitable[R]]], _AgentWrapper[P, R]]:
     """Build the decorator returned by ``App.agent(name)``.
 
     The decorator captures registration-time information (``OutputMode``,
-    system prompt, return type, ``value_transform``) so it never has to
-    walk the signature on invocation.  Forward-ref failures in the
-    return annotation surface here as :class:`ConfigurationError`
+    system prompt, return type, ``value_transform``, and the
+    ``config_overrides`` collected from the ``@app.agent`` knob kwargs) so
+    it never has to walk the signature on invocation.  Forward-ref failures
+    in the return annotation surface here as :class:`ConfigurationError`
     (raised by :func:`output_mode_from_return_type`) before the wrapper
     can be called.
     """
@@ -212,6 +214,7 @@ def _make_decorator(
             value_transform=value_transform,
             sub_agent_specs=sub_agent_specs,
             guardrails=guardrails,
+            config_overrides=dict(config_overrides or {}),
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)
