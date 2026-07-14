@@ -13,9 +13,11 @@ Fidelity contract:
   :attr:`RunErrorEvent.exception` (in-process only — decodes as
   ``None``) and :attr:`AgentResult.value` for non-primitive payloads:
   a pydantic model encodes via its ``model_dump()``, a dataclass via
-  :func:`dataclasses.asdict`, anything else passes through and must be
-  JSON-serialisable.  The decoded ``value`` is therefore plain data,
-  not a re-hydrated instance — the codec cannot know the class.
+  :func:`dataclasses.asdict`, ``list`` / ``tuple`` / ``dict``
+  containers recurse (tuples decode as lists — JSON has no tuple),
+  anything else passes through and must be JSON-serialisable.  The
+  decoded ``value`` is therefore plain data, not a re-hydrated
+  instance — the codec cannot know the class.
 * Unknown ``type`` values and codec-version mismatches raise
   :class:`ValueError` — an outdated payload must fail loudly, never
   degrade silently.
@@ -119,7 +121,18 @@ def event_from_dict(data: Mapping[str, Any]) -> AgentEvent:
 
 
 def _value_to_data(value: Any) -> Any:
-    """Degrade ``value`` to plain data (see module fidelity contract)."""
+    """Degrade ``value`` to plain data (see module fidelity contract).
+
+    Recurses through ``list`` / ``tuple`` / ``dict`` containers so a
+    collection-shaped ``value`` (e.g. a structured-list result) with
+    models or dataclasses inside still encodes to plain JSON data.
+    """
+    if isinstance(value, list):
+        return [_value_to_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_value_to_data(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _value_to_data(item) for key, item in value.items()}
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         return model_dump()

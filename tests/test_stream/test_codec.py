@@ -146,6 +146,23 @@ class TestValueDegradation:
         assert isinstance(decoded, DoneEvent)
         assert decoded.result.value == {"x": 1, "y": 2}
 
+    def test_collections_of_models_degrade_recursively(self) -> None:
+        class Item(BaseModel):
+            name: str
+
+        @dataclasses.dataclass
+        class Point:
+            x: int
+
+        value = {"items": [Item(name="a"), Item(name="b")], "origin": (Point(1),)}
+        done = DoneEvent(result=AgentResult(value=value, turns=1))
+        decoded = event_from_dict(json.loads(json.dumps(event_to_dict(done))))
+        assert isinstance(decoded, DoneEvent)
+        assert decoded.result.value == {
+            "items": [{"name": "a"}, {"name": "b"}],
+            "origin": [{"x": 1}],  # tuples decode as lists — JSON has no tuple
+        }
+
 
 class TestDecodeErrors:
     def test_unknown_type_raises(self) -> None:
