@@ -237,7 +237,7 @@ class TestAgent:
         assert call["function_name"] == "agent"
         assert call["dryrun"] is False
         assert call["tool_choice"] is None
-        assert call["tags"] is None
+        assert call["tags"] == {"t0_agents.agent": "test"}
         assert call["namespace"] is None
 
     async def test_forwards_every_config_field(self) -> None:
@@ -257,7 +257,7 @@ class TestAgent:
         call = t0.calls[0]
         assert call["dryrun"] is True
         assert call["tool_choice"] == "required"
-        assert call["tags"] == {"env": "test"}
+        assert call["tags"] == {"t0_agents.agent": "test", "env": "test"}
         assert call["namespace"] == "staging"
 
     async def test_episode_id_plumbing(self) -> None:
@@ -298,7 +298,7 @@ class TestAgent:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"k": "v"})
         await agent.invoke("go")
-        assert t0.calls[0]["tags"] == {"k": "v"}
+        assert t0.calls[0]["tags"] == {"t0_agents.agent": "test", "k": "v"}
 
     async def test_run_tags_override_merges_with_config(self) -> None:
         """Per-call tags shallow-merge on top of AgentConfig.tags."""
@@ -306,6 +306,7 @@ class TestAgent:
         agent = _make_agent(t0=t0, tags={"env": "prod", "app": "api"})
         await agent.invoke("go", tags={"request_id": "r-1"})
         assert t0.calls[0]["tags"] == {
+            "t0_agents.agent": "test",
             "env": "prod",
             "app": "api",
             "request_id": "r-1",
@@ -316,21 +317,38 @@ class TestAgent:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"env": "prod"})
         await agent.invoke("go", tags={"env": "staging"})
-        assert t0.calls[0]["tags"] == {"env": "staging"}
+        assert t0.calls[0]["tags"] == {
+            "t0_agents.agent": "test",
+            "env": "staging",
+        }
 
     async def test_run_tags_none_preserves_config_only(self) -> None:
-        """Default tags=None leaves config.tags untouched (byte-identity)."""
+        """Default tags=None leaves config.tags untouched."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0, tags={"env": "prod"})
         await agent.invoke("go")
-        assert t0.calls[0]["tags"] == {"env": "prod"}
+        assert t0.calls[0]["tags"] == {"t0_agents.agent": "test", "env": "prod"}
 
-    async def test_run_tags_empty_config_and_override_forwards_none(self) -> None:
-        """No config.tags and no override → tags=None reaches run_agent."""
+    async def test_run_tags_default_carries_only_the_auto_tag(self) -> None:
+        """No config.tags and no override → the observability auto-tag
+        still reaches every inference (M3 behavior change: tags are
+        never None on Agent-driven calls)."""
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
         agent = _make_agent(t0=t0)  # no tags in config
         await agent.invoke("go")
-        assert t0.calls[0]["tags"] is None
+        assert t0.calls[0]["tags"] == {"t0_agents.agent": "test"}
+
+    async def test_auto_tag_overridable_by_config_and_call(self) -> None:
+        """Precedence: per-call beats config.tags beats the auto-tag."""
+        t0 = FakeT0([
+            FakeChatResponse(content=[Text(text="a")]),
+            FakeChatResponse(content=[Text(text="b")]),
+        ])
+        agent = _make_agent(t0=t0, tags={"t0_agents.agent": "renamed"})
+        await agent.invoke("one")
+        assert t0.calls[0]["tags"] == {"t0_agents.agent": "renamed"}
+        await agent.invoke("two", tags={"t0_agents.agent": "per-call"})
+        assert t0.calls[1]["tags"] == {"t0_agents.agent": "per-call"}
 
     async def test_namespace_forwarded(self) -> None:
         t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
@@ -492,3 +510,15 @@ class TestAgentModelRouting:
         agent = _make_agent(t0=t0, variant="pinned_v2")
         await agent.invoke("go")
         assert t0.calls[0]["variant_name"] == "pinned_v2"
+
+    async def test_system_arguments_with_model_rejected(self) -> None:
+        """system_arguments targets a declared function's system template;
+        the functionless passthrough has none — reject before the gateway
+        returns an opaque 400."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(
+            t0=t0, function_name=None, model="groq::llama-3.3-70b-versatile"
+        )
+        with pytest.raises(ValueError, match="system_arguments"):
+            await agent.invoke("go", system_arguments={"k": "v"})
+        assert t0.calls == []

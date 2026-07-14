@@ -612,21 +612,24 @@ class Agent:
     def _merge_tags(
         self,
         override: dict[str, str] | None,
-    ) -> dict[str, str] | None:
-        """Shallow-merge a per-call ``tags`` override onto ``config.tags``.
+    ) -> dict[str, str]:
+        """Merge the auto-tag, ``config.tags``, and a per-call override.
 
-        Matches :meth:`t0_agents.serve.session.SessionFactory._merge_tags`
-        so the streaming-WS path (one :class:`Agent` shared across frames)
-        and the per-HTTP path (fresh :class:`Agent` per request) stay
-        behaviourally identical.  Returns ``None`` when both inputs are
-        empty — preserves the byte-identity guarantee for callers that
-        never supply tags.
+        Every inference carries ``t0_agents.agent = config.name`` so
+        per-agent observability survives shared functions and the
+        functionless passthrough (whose inferences all land under
+        ``tensorzero::default``).  Precedence: per-call ``override``
+        beats ``config.tags`` beats the auto-tag.
+
+        :meth:`t0_agents.serve.session.SessionFactory._merge_tags` feeds
+        ``config.tags`` upstream of this merge, so the serve path
+        inherits the auto-tag without duplicating it.
         """
-        base = self._config.tags or {}
-        extra = override or {}
-        if not base and not extra:
-            return None
-        return {**base, **extra}
+        return {
+            "t0_agents.agent": self._config.name,
+            **(self._config.tags or {}),
+            **(override or {}),
+        }
 
     def _validate_system_kwargs(
         self,
@@ -646,7 +649,20 @@ class Agent:
         ``"prepended_message"`` and ``"messages"`` memory strategies
         leave ``input.system`` untouched and are compatible with both
         kwargs.
+
+        ``system_arguments`` additionally requires a declared function
+        with a system template — the functionless passthrough behind
+        ``model=`` has none, so that combination is rejected up front
+        rather than surfacing as an opaque gateway 400.
         """
+        if system_arguments is not None and self._config.model is not None:
+            raise ValueError(
+                "system_arguments= requires a tensorzero.toml function with "
+                "a system template; this agent routes via model= (the "
+                "functionless passthrough has no templates). Pass system= "
+                "(a raw prompt string), or declare the function and use "
+                "function_name=."
+            )
         if system is None:
             return
         if system_arguments is not None:
