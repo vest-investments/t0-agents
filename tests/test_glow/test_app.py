@@ -644,6 +644,28 @@ async def test_app_level_defaults_and_agent_override(
     assert overrides_cfg.tags == {"env": "dev", "team": "cs"}
 
 
+async def test_explicit_agent_tags_none_opts_out_of_app_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``@app.agent(tags=None)`` overrides the App default to None.
+
+    Regression: an explicit ``None`` must stay distinct from omission — it
+    must not be silently replaced by the App-level default tags.
+    """
+    _FakeAgent.construct_count = 0
+    _FakeAgent.last_invoke_kwargs = {}
+    _FakeAgent.fake_value = "hello-from-fake"
+    monkeypatch.setattr("t0_agents.glow.app.Agent", _FakeAgent)
+    app = App(t0=_fake_t0(), tags={"env": "prod"})
+
+    @app.agent("no_tags", tags=None)
+    async def no_tags(q: str) -> str:  # type: ignore[empty-body]
+        """Explicitly opts out of the App-level tags."""
+
+    await no_tags("hi")
+    assert no_tags.agent._config.tags is None  # explicit None, not the App default
+
+
 async def test_per_call_with_reaches_invoke(app_with_fake_agent: App) -> None:
     """``.with_(episode_id=, prior_messages=, tags=)`` reaches ``Agent.invoke``."""
 

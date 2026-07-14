@@ -269,15 +269,22 @@ class App:
         agent supplied one, else the App default.  ``tags`` dict-merge so
         ``App(tags={"env": "prod"})`` + ``@app.agent(tags={"team": "cs"})``
         yields both, with agent-level keys winning on collision (mirrors the
-        core ``Agent._merge_tags`` precedence).
+        core ``Agent._merge_tags`` precedence).  An explicit agent-level
+        ``tags=None`` opts out of the App default (distinct from omission).
         """
         overrides: dict[str, Any] = dict(spec.config_overrides)
         if "namespace" not in overrides and self._default_namespace is not None:
             overrides["namespace"] = self._default_namespace
         if "middleware" not in overrides and self._default_middleware is not None:
             overrides["middleware"] = self._default_middleware
-        if self._default_tags is not None:
-            overrides["tags"] = {**self._default_tags, **(overrides.get("tags") or {})}
+        # ``tags`` dict-merge (agent keys win), but an explicit agent-level
+        # ``tags=None`` opts out of the App default entirely — an explicit
+        # None stays distinct from omission (the ``_UNSET`` contract).
+        if "tags" not in overrides:
+            if self._default_tags is not None:
+                overrides["tags"] = dict(self._default_tags)
+        elif overrides["tags"] is not None and self._default_tags is not None:
+            overrides["tags"] = {**self._default_tags, **overrides["tags"]}
         return overrides
 
     def _lookup_or_build(self, spec: _AgentSpec) -> Agent:
