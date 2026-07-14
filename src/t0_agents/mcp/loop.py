@@ -36,10 +36,36 @@ from tensorzero import (
 from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
-from t0_agents.core.types import AgentResult
+from t0_agents.core.types import AgentResult, ToolProgressHandler
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[str, float, float | None, str | None], Awaitable[None]]
+"""Per-tool-call progress relay: ``(tool_call_id, progress, total, message)``.
+
+The loop wraps this per ``ToolCall`` block into a fastmcp
+``progress_handler`` closure, so server-side ``ctx.report_progress(...)``
+notifications reach the caller instead of dying inside the loop.
+``tool_call_id`` is the block's id — the same id the streaming layer puts
+on ``ToolCallEvent`` / ``ToolResultEvent``, so notifications correlate.
+Kept as a plain callable: ``mcp/`` stays standalone and never imports the
+event types built on top of it.
+"""
+
+
+def _progress_handler_for(
+    block_id: str, progress_callback: ProgressCallback
+) -> ToolProgressHandler:
+    """Bind ``progress_callback`` to one tool-call id, fastmcp-handler shaped."""
+
+    async def _forward(
+        progress: float, total: float | None, message: str | None
+    ) -> None:
+        await progress_callback(block_id, progress, total, message)
+
+    return _forward
+
 
 # Patterns in TensorZeroError.text that indicate a recoverable inference
 # failure.  When a match is found AND the status code is in
@@ -72,7 +98,10 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
 
 
 async def _execute_single_tool_call(
-    tool_provider: Client[Any], block: ToolCall, timeout: float
+    tool_provider: Client[Any],
+    block: ToolCall,
+    timeout: float,
+    progress_callback: ProgressCallback | None = None,
 ) -> ToolResult:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
 
@@ -119,9 +148,20 @@ async def _execute_single_tool_call(
     logger.debug("Executing tool %r with args: %s", name, block.arguments)
     start = time.monotonic()
     try:
-        mcp_result = await tool_provider.call_tool(
-            block.name, block.arguments, timeout=timeout
-        )
+        # The kwarg is only passed when progress is actually wired, so
+        # providers predating ``progress_handler`` keep working on every
+        # progress-free path (run_agent, streaming without a sink).
+        if progress_callback is None:
+            mcp_result = await tool_provider.call_tool(
+                block.name, block.arguments, timeout=timeout
+            )
+        else:
+            mcp_result = await tool_provider.call_tool(
+                block.name,
+                block.arguments,
+                timeout=timeout,
+                progress_handler=_progress_handler_for(block.id, progress_callback),
+            )
     except T0AgentsFatalError:
         # Guardrail-level hard block (or any future fatal marker) must
         # propagate past the belt-and-braces ``except Exception`` below,
@@ -166,14 +206,18 @@ async def execute_tool_calls(
     tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
+    *,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ToolResult]:
     """Execute every ``ToolCall`` in ``content_blocks`` sequentially.
 
     Non-``ToolCall`` blocks (``Text``, ``Thought``, etc.) are skipped silently.
     The output preserves the input order of the ``ToolCall`` blocks.
+    ``progress_callback`` (when given) receives every server-side progress
+    notification, tagged with the emitting block's id.
     """
     return [
-        await _execute_single_tool_call(tool_provider, b, timeout)
+        await _execute_single_tool_call(tool_provider, b, timeout, progress_callback)
         for b in content_blocks
         if isinstance(b, ToolCall)
     ]
@@ -183,6 +227,8 @@ async def execute_tool_calls_parallel(
     tool_provider: Client[Any],
     content_blocks: list[Any],
     timeout: float = 30.0,
+    *,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ToolResult]:
     """Execute ``ToolCall`` blocks concurrently via ``asyncio.gather``.
 
@@ -190,13 +236,18 @@ async def execute_tool_calls_parallel(
     the underlying tools are I/O-bound. The returned list preserves the input
     order of the ``ToolCall`` blocks (``asyncio.gather`` returns results in the
     order of its arguments, regardless of completion order).
+    ``progress_callback`` notifications from concurrent tools interleave; the
+    block id tags each one.
     """
     tool_calls = [b for b in content_blocks if isinstance(b, ToolCall)]
     if not tool_calls:
         return []
     return list(
         await asyncio.gather(
-            *[_execute_single_tool_call(tool_provider, tc, timeout) for tc in tool_calls]
+            *[
+                _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
+                for tc in tool_calls
+            ]
         )
     )
 

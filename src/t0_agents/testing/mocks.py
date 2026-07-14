@@ -37,6 +37,8 @@ from tensorzero.types import (
     Usage,
 )
 
+from t0_agents.core.types import ToolProgressHandler
+
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
@@ -571,14 +573,16 @@ class MockToolProvider:
         arguments: dict[str, Any],
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> CallToolResult:
         """Dispatch to the registered handler and wrap the result.
 
-        ``timeout`` is accepted for interface parity with
-        :class:`fastmcp.Client.call_tool` but intentionally ignored —
-        the mock runs inline, never over a transport.  Unknown tool
-        names raise :class:`KeyError` so the test surfaces the
-        misconfiguration immediately rather than silently succeeding.
+        ``timeout`` and ``progress_handler`` are accepted for interface
+        parity with :class:`fastmcp.Client.call_tool` but intentionally
+        ignored — the mock runs inline, never over a transport, and
+        emits no progress.  Unknown tool names raise :class:`KeyError`
+        so the test surfaces the misconfiguration immediately rather
+        than silently succeeding.
         """
         self.calls.append({"name": name, "arguments": dict(arguments)})
         handler = self._tools.get(name)

@@ -424,6 +424,7 @@ class Agent:
             namespace=self._config.namespace,
             on_inference=ctx.on_inference,
             system=ctx.system,
+            progress_sink=run._buffer.put,
             **extra_kwargs,
         ):
             if isinstance(event, DoneEvent):

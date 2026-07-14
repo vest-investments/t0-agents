@@ -76,6 +76,19 @@ async def slow_tool(delay_seconds: float) -> str:
     return "done"
 
 
+@mcp.tool
+async def count_with_progress(steps: int, ctx: Context) -> str:
+    """Report progress ``steps`` times via ``ctx.report_progress``, then return.
+
+    Exercises the E4 progress channel end-to-end through the real FastMCP
+    server→client notification path: each step emits
+    ``(progress=i, total=steps, message="step i")``.
+    """
+    for i in range(1, steps + 1):
+        await ctx.report_progress(i, steps, f"step {i}")
+    return f"counted {steps}"
+
+
 # --- Elicitation test fixtures ------------------------------------------------
 # These tools exercise MCP Elicitation (human-in-the-loop approval and
 # structured input).  They require a Client created with an
