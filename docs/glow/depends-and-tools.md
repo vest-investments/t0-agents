@@ -58,6 +58,7 @@ async def orchestrator(
     write: Agent    = Depends(writer),
 ) -> str:
     """Calls research → write."""
+    return llm()
 ```
 
 The sub-agents become `{name}_ask` tools on the orchestrator's MCP

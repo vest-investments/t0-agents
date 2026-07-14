@@ -9,12 +9,13 @@ A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
 agent, glow takes four:
 
 ```python
-from t0_agents.glow import App
+from t0_agents.glow import App, llm
 app = App(t0=t0)
 
 @app.agent("tutor")
 async def tutor(query: str) -> str:
     """An English tutor that explains grammar like you're 12."""
+    return llm()
 
 print(await tutor("How do I say hello in formal Japanese?"))
 ```
