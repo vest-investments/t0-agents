@@ -44,8 +44,10 @@ from t0_agents.wire.stages import (
     MAX_ARG_BYTES,
     MAX_RAW_BYTES,
     MAX_RESULT_BYTES,
+    PublicEvent,
     as_terminal_safe,
     project,
+    public_allowlist,
     with_status,
     with_text_fallback,
 )
@@ -62,6 +64,7 @@ __all__ = [
     "ElicitationResolvedFrame",
     "ErrorFrame",
     "InitFrame",
+    "PublicEvent",
     "StatusFrame",
     "TextDeltaFrame",
     "TextEndFrame",
@@ -77,6 +80,7 @@ __all__ = [
     "frame_from_dict",
     "frame_to_dict",
     "project",
+    "public_allowlist",
     "with_status",
     "with_text_fallback",
 ]

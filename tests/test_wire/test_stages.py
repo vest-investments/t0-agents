@@ -9,6 +9,7 @@ separately by the ported vest-ai golden in ``test_public_golden.py``.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Iterable
 
 import pytest
@@ -36,7 +37,10 @@ from t0_agents.wire import (
     FALLBACK_BLOCK_ID,
     DoneFrame,
     ElicitationRequestFrame,
+    ElicitationResolvedFrame,
     ErrorFrame,
+    InitFrame,
+    PublicEvent,
     StatusFrame,
     TextDeltaFrame,
     TextEndFrame,
@@ -53,6 +57,7 @@ from t0_agents.wire.stages import (
     MAX_ARG_BYTES,
     as_terminal_safe,
     project,
+    public_allowlist,
     with_status,
     with_text_fallback,
 )
@@ -459,3 +464,109 @@ class TestWithTextFallback:
             ]
         )
         assert TextDeltaFrame(block_id="inf-3", delta="done after prompt") in out
+
+
+async def _public(frames: Iterable[WireFrame]) -> list[PublicEvent]:
+    return [event async for event in public_allowlist(_stream_frames(frames))]
+
+
+class TestPublicAllowlist:
+    async def test_init_and_error_and_status_payloads_carry_no_type_field(self) -> None:
+        out = await _public(
+            [
+                InitFrame(conversation_id="conv-1"),
+                ErrorFrame(message="boom", detail={"k": "v"}),
+                StatusFrame(text="Thinking…"),
+            ]
+        )
+        assert out == [
+            PublicEvent("init", {"conversation_id": "conv-1"}),
+            PublicEvent("error", {"message": "boom", "detail": {"k": "v"}}),
+            PublicEvent("status", {"text": "Thinking…", "server": None, "tool": None}),
+        ]
+
+    async def test_text_frames_project_as_chunk_and_end(self) -> None:
+        out = await _public(
+            [
+                TextDeltaFrame(block_id="b1", delta="Hola — ñandú"),
+                TextEndFrame(block_id="b1"),
+            ]
+        )
+        assert out == [
+            PublicEvent(
+                "chunk", {"type": "chunk", "content": "Hola — ñandú", "message_id": "b1"}
+            ),
+            PublicEvent("end", {"type": "end", "id": "b1"}),
+        ]
+
+    async def test_done_id_is_the_last_inference_id(self) -> None:
+        [event] = await _public([_done(text="hi", ids=("inf-1", "inf-2"))])
+        assert event == PublicEvent(
+            "done",
+            {"type": "done", "id": "inf-2", "turns": 1, "response_source": "text"},
+        )
+
+    async def test_done_without_inference_ids_uses_the_fallback_id(self) -> None:
+        [event] = await _public([_done(text="hi", ids=())])
+        assert event.data["id"] == FALLBACK_BLOCK_ID
+
+    async def test_elicitation_request_reparses_the_schema(self) -> None:
+        schema = {"type": "object", "properties": {"value": {"type": "boolean"}}}
+        [event] = await _public(
+            [
+                ElicitationRequestFrame(
+                    id="e1",
+                    message="Confirm?",
+                    response_type="bool",
+                    schema_json=json.dumps(schema),
+                )
+            ]
+        )
+        assert event == PublicEvent(
+            "elicitation_request",
+            {
+                "type": "elicitation_request",
+                "id": "e1",
+                "message": "Confirm?",
+                "response_type": "bool",
+                "schema": schema,
+            },
+        )
+
+    async def test_a_malformed_schema_degrades_to_an_empty_object(self) -> None:
+        [event] = await _public(
+            [
+                ElicitationRequestFrame(
+                    id="e1", message="?", response_type=None, schema_json="{not json"
+                )
+            ]
+        )
+        assert event.data["schema"] == {}
+
+    async def test_elicitation_resolved_payload(self) -> None:
+        [event] = await _public([ElicitationResolvedFrame(id="e1", action="accept")])
+        assert event == PublicEvent(
+            "elicitation_resolved",
+            {"type": "elicitation_resolved", "id": "e1", "action": "accept"},
+        )
+
+    async def test_the_privacy_guard_drops_tool_thought_and_turn_frames(self) -> None:
+        out = await _public(
+            [
+                _tool_call("get_weather"),
+                ToolCallDeltaFrame(id="t1", raw_name_delta="x", raw_arguments_delta=""),
+                ToolResultFrame(
+                    id="t1",
+                    name="get_weather",
+                    result="72F",
+                    is_error=False,
+                    truncated_from=None,
+                    raw_event_json="{}",
+                ),
+                ToolProgressFrame(id="t1", progress=1.0, total=None, message=None),
+                ThoughtFrame(id="th1", text="secret reasoning"),
+                ThoughtDeltaFrame(id="th1", delta="secret"),
+                TurnEndFrame(turn=1),
+            ]
+        )
+        assert out == []

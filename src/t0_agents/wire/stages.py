@@ -24,7 +24,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final, assert_never
+from typing import Any, Final, NamedTuple, assert_never
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.stream.events import (
@@ -349,14 +349,128 @@ async def with_text_fallback(
                 assert_never(frame)
 
 
+class PublicEvent(NamedTuple):
+    """One public wire event: a frozen ``name`` plus its payload dict.
+
+    The terminal output of :func:`public_allowlist` — the consumer
+    serialises it onto its transport (an SSE endpoint writes
+    ``event: {name}\\ndata: {json.dumps(data)}\\n\\n``); the names and
+    payload shapes are the frozen contract, the bytes are the
+    consumer's.
+    """
+
+    name: str
+    data: dict[str, Any]
+
+
+async def public_allowlist(
+    frames: AsyncIterator[WireFrame],
+) -> AsyncIterator[PublicEvent]:
+    """Project frames onto the frozen public wire — the privacy guard.
+
+    Exactly eight event names exist: ``init, chunk, end, status, error,
+    done, elicitation_request, elicitation_resolved``. Tool activity
+    (:class:`ToolCallFrame` / :class:`ToolCallDeltaFrame` /
+    :class:`ToolResultFrame` / :class:`ToolProgressFrame`) and
+    reasoning (:class:`ThoughtFrame` / :class:`ThoughtDeltaFrame`), plus
+    :class:`TurnEndFrame`, are dropped: arguments, results, and thought
+    content must never reach a public client, and the ``assert_never``
+    arm forces an explicit render-vs-drop decision for every future
+    frame — render-by-default would be a privacy regression.
+
+    Payload shapes are frozen exactly as production emits them,
+    including which payloads carry a ``"type"`` field and which do not.
+    Compose after :func:`with_text_fallback` so synthesised fallback
+    text is projected like streamed text.
+    """
+    async for frame in frames:
+        match frame:
+            case InitFrame(conversation_id=conversation_id):
+                yield PublicEvent("init", {"conversation_id": conversation_id})
+            case TextDeltaFrame(block_id=block_id, delta=delta):
+                yield PublicEvent(
+                    "chunk",
+                    {"type": "chunk", "content": delta, "message_id": block_id},
+                )
+            case TextEndFrame(block_id=block_id):
+                yield PublicEvent("end", {"type": "end", "id": block_id})
+            case ErrorFrame(message=message, detail=detail):
+                yield PublicEvent("error", {"message": message, "detail": detail})
+            case StatusFrame(text=text, server=server, tool=tool):
+                yield PublicEvent(
+                    "status", {"text": text, "server": server, "tool": tool}
+                )
+            case DoneFrame(
+                turns=turns, response_source=response_source, inference_ids=ids
+            ):
+                msg_id = ids[-1] if ids else FALLBACK_BLOCK_ID
+                yield PublicEvent(
+                    "done",
+                    {
+                        "type": "done",
+                        "id": msg_id,
+                        "turns": turns,
+                        "response_source": response_source,
+                    },
+                )
+            case ElicitationRequestFrame(
+                id=elicitation_id,
+                message=message,
+                response_type=response_type,
+                schema_json=schema_json,
+            ):
+                # schema_json is re-parsed into an object so the client
+                # decodes the payload once instead of double-decoding an
+                # embedded string; malformed degrades to {} rather than
+                # raising, which would tear down the stream
+                # mid-conversation.
+                try:
+                    schema: Any = json.loads(schema_json) if schema_json else {}
+                except (json.JSONDecodeError, TypeError):
+                    schema = {}
+                yield PublicEvent(
+                    "elicitation_request",
+                    {
+                        "type": "elicitation_request",
+                        "id": elicitation_id,
+                        "message": message,
+                        "response_type": response_type,
+                        "schema": schema,
+                    },
+                )
+            case ElicitationResolvedFrame(id=elicitation_id, action=action):
+                yield PublicEvent(
+                    "elicitation_resolved",
+                    {
+                        "type": "elicitation_resolved",
+                        "id": elicitation_id,
+                        "action": action,
+                    },
+                )
+            case (
+                ToolCallFrame()
+                | ToolCallDeltaFrame()
+                | ToolResultFrame()
+                | ToolProgressFrame()
+                | ThoughtFrame()
+                | ThoughtDeltaFrame()
+                | TurnEndFrame()
+            ):
+                continue
+            case _:
+                assert_never(frame)
+
+
 __all__ = [
     "EMPTY_TURN_RETRY_TEXT",
     "FALLBACK_BLOCK_ID",
     "MAX_ARG_BYTES",
     "MAX_RAW_BYTES",
     "MAX_RESULT_BYTES",
+    "PublicEvent",
     "as_terminal_safe",
     "project",
+    "public_allowlist",
     "with_status",
     "with_text_fallback",
 ]
