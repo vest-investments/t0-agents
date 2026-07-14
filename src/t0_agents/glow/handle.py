@@ -2,11 +2,12 @@
 
 Defers OutputMode selection until ``__await__`` (or ``events()``) so the
 caller can apply per-call overrides — ``.text()``, ``.json()``,
-``.json(M)``, ``.as_(mode)`` — without rebuilding the underlying
-:class:`~t0_agents.core.run.Run`.  Construction stores a build closure
-that takes the chosen mode and produces a Run; the ``@app.agent``
-decorator supplies that closure as ``lambda mode: agent.invoke(msg,
-output=mode, eager=False)``.
+``.json(M)``, ``.as_(mode)`` for output shape and ``.with_(...)`` for the
+per-call ``Agent.invoke`` surface (``episode_id``, ``tags``,
+``system_arguments``, ``prior_messages``, …) — without rebuilding the
+underlying :class:`~t0_agents.core.run.Run`.  Construction stores a build
+closure that takes the chosen mode plus those per-call kwargs and produces
+a Run; the ``@app.agent`` decorator supplies it (see ``App._invoke``).
 
 ``__await__`` returns the *unwrapped* ``T`` directly (the Pythonic fast
 path: ``answer = await tutor(query)``).  :meth:`result` is the escape
@@ -22,6 +23,7 @@ from typing import Any, Generic, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
+from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.outputs.json import JsonOutput
@@ -35,6 +37,23 @@ __all__ = ["FluentRun"]
 
 logger = logging.getLogger(__name__)
 
+# Per-call invoke kwargs reachable via ``.with_()`` — the ``Agent.invoke``
+# keyword surface minus ``output`` (use ``.text()`` / ``.json()`` / ``.as_()``)
+# and ``eager`` (glow always defers).  Per-agent config knobs (``max_turns``,
+# ``namespace``, ``memory``, ``memory_strategy``, ``tool_timeout``, …) are set
+# on ``@app.agent(...)``, not here.
+_WITH_KWARGS = frozenset(
+    {
+        "episode_id",
+        "tags",
+        "system_arguments",
+        "system",
+        "prior_messages",
+        "middleware",
+        "context",
+    }
+)
+
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -44,13 +63,13 @@ M = TypeVar("M", bound=BaseModel)
 class FluentRun(Generic[T]):
     """Lazy, fluent wrapper over :class:`~t0_agents.core.run.Run`.
 
-    Construction stores a build closure (``Callable[[OutputMode[Any]],
-    Run[Any]]``) and a default :class:`OutputMode`.  Each fluent
-    override (:meth:`text`, :meth:`json`, :meth:`as_`) returns a *new*
-    ``FluentRun`` with the override applied; the prior instance is
-    unchanged.  When the same FluentRun is overridden a second time
-    (e.g. ``.json(A).json(B)``), the second override logs DEBUG so
-    overlap is observable.
+    Construction stores a build closure (``Callable[..., Run[Any]]``,
+    taking the chosen mode plus per-call kwargs) and a default
+    :class:`OutputMode`.  Each fluent override (:meth:`text`, :meth:`json`,
+    :meth:`as_`, :meth:`with_`) returns a *new* ``FluentRun`` with the
+    override applied; the prior instance is unchanged.  When the same
+    FluentRun's output is overridden a second time (e.g. ``.json(A).json(B)``),
+    the second override logs DEBUG so overlap is observable.
 
     Consumption is lazy: the build closure does not fire until
     :meth:`__await__`, :meth:`result`, or :meth:`events` is called; the
@@ -60,15 +79,21 @@ class FluentRun(Generic[T]):
 
     def __init__(
         self,
-        build: Callable[[OutputMode[Any]], Run[Any]],
+        build: Callable[..., Run[Any]],
         default_output: OutputMode[T],
         *,
         value_transform: Callable[[Any], T] | None = None,
     ) -> None:
-        self._build: Callable[[OutputMode[Any]], Run[Any]] = build
+        self._build: Callable[..., Run[Any]] = build
         self._chosen_output: OutputMode[Any] = default_output
         self._has_override: bool = False
         self._run: Run[Any] | None = None
+        # Per-call ``Agent.invoke`` overrides accumulated via ``.with_()``
+        # (``episode_id``, ``tags``, ``system_arguments``, ``prior_messages``,
+        # …).  Forwarded to the build closure at consumption time and
+        # propagated across ``.text()`` / ``.json()`` / ``.as_()`` overrides
+        # (unlike ``value_transform``, which those deliberately reset).
+        self._call_kwargs: dict[str, Any] = {}
         # ``value_transform`` is applied to ``AgentResult.value`` when the
         # default ``OutputMode`` is in effect (i.e. the user did not call
         # a per-call override).  Decorator-driven path: ``@app.agent``
@@ -108,6 +133,44 @@ class FluentRun(Generic[T]):
         """Override to the supplied :class:`OutputMode`."""
         return cast(FluentRun[U], self._spawn(mode))
 
+    def with_(self, **call_kwargs: Any) -> FluentRun[T]:
+        """Attach per-call :meth:`Agent.invoke` overrides, returning a new FluentRun.
+
+        Accepts the per-call invoke surface — ``episode_id``, ``tags``,
+        ``system_arguments``, ``prior_messages``, ``middleware``,
+        ``context``, ``system`` — enabling multi-turn exchanges
+        (``episode_id`` + ``prior_messages``), tenancy (``tags``), and
+        server-side prompt templates (``system_arguments``) from glow.
+
+        Unlike :meth:`text` / :meth:`json` / :meth:`as_`, ``.with_()`` is
+        NOT an output override: it preserves ``value_transform`` and the
+        chosen :class:`OutputMode`, so ``tutor(q).with_(episode_id=eid)``
+        and ``.json(Model)`` compose in either order.  Repeated ``.with_()``
+        calls merge, the last value winning per key.
+
+        ``system_arguments`` and a raw ``system`` prompt are mutually
+        exclusive in the gateway; supplying both raises at consumption
+        time.  Per-agent config knobs (``max_turns``, ``namespace``,
+        ``memory``, …) belong on ``@app.agent(...)`` — passing one here
+        raises :class:`ConfigurationError`.
+        """
+        unknown = set(call_kwargs) - _WITH_KWARGS
+        if unknown:
+            raise ConfigurationError(
+                f"FluentRun.with_(): unknown per-call override(s) "
+                f"{sorted(unknown)!r}.  Valid keys: {sorted(_WITH_KWARGS)}.  "
+                f"Per-agent config knobs (max_turns, tool_timeout, namespace, "
+                f"memory, memory_strategy, …) are set on @app.agent(...)."
+            )
+        new: FluentRun[T] = FluentRun(
+            self._build,
+            self._chosen_output,
+            value_transform=self._value_transform,
+        )
+        new._has_override = self._has_override
+        new._call_kwargs = {**self._call_kwargs, **call_kwargs}
+        return new
+
     def _spawn(self, new_output: OutputMode[Any]) -> FluentRun[Any]:
         """Construct the next FluentRun in the chain.
 
@@ -116,6 +179,10 @@ class FluentRun(Generic[T]):
         for ``.json(A).json(B)``-style chains.  First-overrides on a
         default-output FluentRun are silent because that is the normal
         per-call shape (``await tutor(msg).json(Model)``).
+
+        ``value_transform`` is deliberately dropped (a per-call output
+        override opts out of the default shape), but any ``.with_()``
+        call kwargs are propagated so ``.with_(...).json(M)`` keeps them.
         """
         if self._has_override:
             logger.debug(
@@ -125,6 +192,7 @@ class FluentRun(Generic[T]):
             )
         new: FluentRun[Any] = FluentRun(self._build, new_output)
         new._has_override = True
+        new._call_kwargs = dict(self._call_kwargs)
         return new
 
     # ------------------------------------------------------------------
@@ -156,7 +224,7 @@ class FluentRun(Generic[T]):
         ``AttributeError`` mid-stream.
         """
         if self._run is None:
-            self._run = self._build(self._chosen_output)
+            self._run = self._build(self._chosen_output, **self._call_kwargs)
         run = self._run
         if not selectors:
             return run.events()
@@ -188,7 +256,7 @@ class FluentRun(Generic[T]):
         preserved.
         """
         if self._run is None:
-            self._run = self._build(self._chosen_output)
+            self._run = self._build(self._chosen_output, **self._call_kwargs)
         raw = await self._run.result()
         if self._value_transform is None:
             return cast(AgentResult[T], raw)

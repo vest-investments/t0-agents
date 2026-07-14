@@ -347,12 +347,30 @@ class App:
         agent = self._lookup_or_build(spec)
         system_prompt = spec.system_prompt
 
-        def build(mode: Any) -> Any:
+        def build(mode: Any, **call_kwargs: Any) -> Any:
+            # ``system_arguments`` (server-side template variables) and a
+            # raw ``system`` prompt are mutually exclusive in the
+            # TensorZero gateway.  Glow's implicit ``system`` is the
+            # docstring; when a caller supplies ``system_arguments`` via
+            # ``.with_()`` we drop the docstring so the gateway receives
+            # exactly one.  An explicit ``system=`` alongside
+            # ``system_arguments=`` is a caller error — raise noisily
+            # rather than silently pick one.
+            if call_kwargs.get("system_arguments") is not None:
+                if call_kwargs.get("system") is not None:
+                    raise ConfigurationError(
+                        "FluentRun.with_(): pass either system_arguments= "
+                        "(server-side template variables) or system= (a raw "
+                        "system prompt), not both — they are mutually "
+                        "exclusive in the TensorZero gateway."
+                    )
+                return agent.invoke(message, output=mode, eager=False, **call_kwargs)
             return agent.invoke(
                 message,
                 output=mode,
                 eager=False,
-                system=system_prompt,
+                system=call_kwargs.pop("system", system_prompt),
+                **call_kwargs,
             )
 
         return FluentRun(
