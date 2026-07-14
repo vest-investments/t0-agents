@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable, Generator
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
 from pydantic import BaseModel
@@ -255,24 +256,18 @@ class FluentRun(Generic[T]):
         If a ``value_transform`` was installed at construction time and
         the user has not applied a per-call override (.text / .json /
         .as_), the returned :class:`AgentResult` has ``value`` replaced
-        with ``value_transform(original.value)``.  Everything else
-        (``episode_id``, ``inference_ids``, ``turns``, etc.) is
-        preserved.
+        with ``value_transform(original.value)`` via
+        :func:`dataclasses.replace`; every other field (present and
+        future) is carried over untouched.
         """
         if self._run is None:
             self._run = self._build(self._chosen_output, **self._call_kwargs)
         raw = await self._run.result()
         if self._value_transform is None:
             return cast(AgentResult[T], raw)
-        return AgentResult(
-            value=self._value_transform(raw.value),
-            episode_id=raw.episode_id,
-            inference_ids=list(raw.inference_ids),
-            turns=raw.turns,
-            response_source=raw.response_source,
-            guardrail_log=list(raw.guardrail_log),
-            diagnostics=raw.diagnostics,
-        )
+        # ``replace`` (vs a field-by-field copy) carries over every
+        # AgentResult field, so fields added later are not silently dropped.
+        return cast(AgentResult[T], replace(raw, value=self._value_transform(raw.value)))
 
     def __await__(self) -> Generator[Any, None, T]:
         """``await fluent_run`` returns the unwrapped ``.value`` of type ``T``."""
