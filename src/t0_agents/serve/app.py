@@ -34,6 +34,7 @@ don't need them.
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -48,6 +49,9 @@ from t0_agents.serve.session import (
     SessionFactory,
     SessionProvider,
 )
+
+if TYPE_CHECKING:
+    from t0_agents.glow.app import App as GlowApp
 
 
 def create_app(
@@ -91,6 +95,59 @@ def create_app(
 
         app.include_router(build_streaming_router(session_factory=session_factory))
     return app
+
+
+async def create_app_from_glow(
+    glow_app: GlowApp,
+    *,
+    agent: str | None = None,
+    share_client: bool = True,
+    deployment_label: str | None = None,
+    streaming: bool = False,
+) -> FastAPI:
+    """Bridge a glow :class:`~t0_agents.glow.app.App` into :func:`create_app`.
+
+    Boots the App (``await glow_app.build()`` — gateway resolution, MCP
+    mounts, client connection, ``tools=`` filters; idempotent), selects
+    an agent (the sole registered one, or ``agent=`` by name — anything
+    else raises :class:`ConfigurationError` listing the options), and
+    delegates to :func:`create_app` with the built core
+    :class:`Agent`.
+
+    The **caller owns the glow lifecycle**: keep the App inside
+    ``async with glow_app:`` (or call ``glow_app.shutdown()``) for the
+    server's lifetime — mirroring ``share_client``'s "caller owns the
+    Client" contract.  ``share_client=True`` (the default) serves every
+    session over the App's connected FastMCP client; a toolless glow
+    App has no client, so :func:`create_app` raises its standard
+    ConfigurationError — compose :func:`create_app` directly with a
+    ``client_factory`` for that shape.
+    """
+    await glow_app.build()
+    registered = sorted(glow_app._agent_registry)
+    if not registered:
+        raise ConfigurationError(
+            "create_app_from_glow: the App has no registered agents."
+        )
+    if agent is None:
+        if len(registered) > 1:
+            raise ConfigurationError(
+                f"create_app_from_glow: the App registers {len(registered)} "
+                f"agents ({', '.join(registered)}); pick one with agent=."
+            )
+        agent = registered[0]
+    elif agent not in glow_app._agent_registry:
+        raise ConfigurationError(
+            f"create_app_from_glow: agent {agent!r} is not registered.  "
+            f"Available: {', '.join(registered)}."
+        )
+    core_agent = glow_app._lookup_or_build(glow_app._agent_registry[agent])
+    return create_app(
+        core_agent,
+        share_client=share_client,
+        deployment_label=deployment_label,
+        streaming=streaming,
+    )
 
 
 def mount_agent(

@@ -39,7 +39,7 @@ except ImportError as exc:  # pragma: no cover - depends on install profile
         "Install with: pip install 't0-agents[serve]'",
     ) from exc
 
-from t0_agents.serve.app import create_app, mount_agent
+from t0_agents.serve.app import create_app, create_app_from_glow, mount_agent
 from t0_agents.serve.session import (
     CallableSessionProvider,
     ClientFactory,
@@ -55,5 +55,6 @@ __all__ = [
     "SessionFactory",
     "SessionProvider",
     "create_app",
+    "create_app_from_glow",
     "mount_agent",
 ]
