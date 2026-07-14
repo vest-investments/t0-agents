@@ -816,3 +816,81 @@ async def test_model_with_structured_return_raises_with_stanza(
         await planner_m3("hi")
     assert "[functions.planner-m3]" in str(excinfo.value)
     assert 'type = "json"' in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# M3: client-side prompt templates — .with_(prompt_vars=...)
+# ---------------------------------------------------------------------------
+
+
+async def test_prompt_vars_format_the_docstring(app_with_fake_agent: App) -> None:
+    @app_with_fake_agent.agent("tpl")
+    async def tpl(q: str) -> str:  # type: ignore[empty-body]
+        """Tutor for {level} students."""
+
+    await tpl("hi").with_(prompt_vars={"level": "advanced"})
+    sent = _FakeAgent.last_invoke_kwargs
+    assert sent["system"] == "Tutor for advanced students."
+
+
+async def test_prompt_vars_format_an_explicit_system(
+    app_with_fake_agent: App,
+) -> None:
+    """prompt_vars applies to the *effective* system string uniformly —
+    an explicit .with_(system=...) override is formatted too."""
+
+    @app_with_fake_agent.agent("tpl2")
+    async def tpl2(q: str) -> str:  # type: ignore[empty-body]
+        """Unused docstring."""
+
+    await tpl2("hi").with_(system="Be {tone}.", prompt_vars={"tone": "kind"})
+    assert _FakeAgent.last_invoke_kwargs["system"] == "Be kind."
+
+
+async def test_docstring_without_prompt_vars_passes_through_verbatim(
+    app_with_fake_agent: App,
+) -> None:
+    """Braces in a docstring stay literal unless prompt_vars is passed."""
+
+    @app_with_fake_agent.agent("tpl3")
+    async def tpl3(q: str) -> str:  # type: ignore[empty-body]
+        """Return JSON like {"answer": 1}."""
+
+    await tpl3("hi")
+    assert _FakeAgent.last_invoke_kwargs["system"] == 'Return JSON like {"answer": 1}.'
+
+
+async def test_prompt_vars_missing_placeholder_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl4")
+    async def tpl4(q: str) -> str:  # type: ignore[empty-body]
+        """Tutor for {level} students."""
+
+    with pytest.raises(ConfigurationError, match="level"):
+        await tpl4("hi").with_(prompt_vars={"grade": "A"})
+
+
+async def test_prompt_vars_with_system_arguments_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl5")
+    async def tpl5(q: str) -> str:  # type: ignore[empty-body]
+        """Docstring."""
+
+    with pytest.raises(ConfigurationError, match="prompt_vars"):
+        await tpl5("hi").with_(
+            prompt_vars={"a": "b"}, system_arguments={"memory_context": "x"}
+        )
+
+
+async def test_prompt_vars_without_any_system_raises(
+    app_with_fake_agent: App,
+) -> None:
+    @app_with_fake_agent.agent("tpl6")
+    async def tpl6(q: str) -> str:  # type: ignore[empty-body]
+        # No docstring on purpose.
+        return None  # type: ignore[return-value]
+
+    with pytest.raises(ConfigurationError, match="no system prompt"):
+        await tpl6("hi").with_(prompt_vars={"a": "b"})

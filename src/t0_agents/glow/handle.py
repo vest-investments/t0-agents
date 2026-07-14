@@ -48,7 +48,9 @@ logger = logging.getLogger(__name__)
 # keyword surface minus ``output`` (use ``.text()`` / ``.json()`` / ``.as_()``)
 # and ``eager`` (glow always defers).  Per-agent config knobs (``max_turns``,
 # ``namespace``, ``memory``, ``memory_strategy``, ``tool_timeout``, …) are set
-# on ``@app.agent(...)``, not here.
+# on ``@app.agent(...)``, not here.  ``prompt_vars`` is glow-level: the
+# App's build closure consumes it (str.format on the effective system
+# prompt) and it never reaches ``Agent.invoke``.
 _WITH_KWARGS = frozenset(
     {
         "episode_id",
@@ -58,6 +60,7 @@ _WITH_KWARGS = frozenset(
         "prior_messages",
         "middleware",
         "context",
+        "prompt_vars",
     }
 )
 
@@ -157,6 +160,10 @@ class FluentRun(Generic[T]):
         ``context``, ``system`` — enabling multi-turn exchanges
         (``episode_id`` + ``prior_messages``), tenancy (``tags``), and
         server-side prompt templates (``system_arguments``) from glow.
+        ``prompt_vars`` fills ``{placeholders}`` in the effective system
+        prompt (the docstring, or an explicit ``system=``) client-side
+        via ``str.format`` — mutually exclusive with
+        ``system_arguments`` (TZ server-side templates).
 
         Unlike :meth:`text` / :meth:`json` / :meth:`as_`, ``.with_()`` is
         NOT an output override: it preserves ``value_transform`` and the

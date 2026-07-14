@@ -508,7 +508,10 @@ class App:
             # ``.with_()`` we drop the docstring so the gateway receives
             # exactly one.  An explicit ``system=`` alongside
             # ``system_arguments=`` is a caller error — raise noisily
-            # rather than silently pick one.
+            # rather than silently pick one.  ``prompt_vars`` is the
+            # client-side counterpart: it formats the effective system
+            # string and never reaches ``Agent.invoke``.
+            prompt_vars = call_kwargs.pop("prompt_vars", None)
             if call_kwargs.get("system_arguments") is not None:
                 if call_kwargs.get("system") is not None:
                     raise ConfigurationError(
@@ -517,12 +520,38 @@ class App:
                         "system prompt), not both — they are mutually "
                         "exclusive in the TensorZero gateway."
                     )
+                if prompt_vars is not None:
+                    raise ConfigurationError(
+                        "FluentRun.with_(): prompt_vars= (client-side "
+                        "str.format on the docstring/system prompt) and "
+                        "system_arguments= (TZ server-side templates) are "
+                        "mutually exclusive — pick one templating side."
+                    )
                 return agent.invoke(message, output=mode, eager=False, **call_kwargs)
+            system = call_kwargs.pop("system", system_prompt)
+            if prompt_vars is not None:
+                if system is None:
+                    raise ConfigurationError(
+                        f"FluentRun.with_(prompt_vars=...): agent "
+                        f"{spec.name!r} has no system prompt to format — "
+                        f"give the decorated function a docstring or pass "
+                        f"system= alongside."
+                    )
+                try:
+                    system = system.format(**prompt_vars)
+                except (IndexError, KeyError, ValueError) as exc:
+                    raise ConfigurationError(
+                        f"FluentRun.with_(prompt_vars=...): the system "
+                        f"prompt of agent {spec.name!r} could not be "
+                        f"formatted: {exc!r}. Placeholders use str.format "
+                        f"syntax — every {{name}} needs a matching "
+                        f"prompt_vars key; literal braces need doubling."
+                    ) from exc
             return agent.invoke(
                 message,
                 output=mode,
                 eager=False,
-                system=call_kwargs.pop("system", system_prompt),
+                system=system,
                 **call_kwargs,
             )
 
