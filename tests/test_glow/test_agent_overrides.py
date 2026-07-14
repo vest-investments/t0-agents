@@ -56,15 +56,23 @@ async def test_overridden_agent_events_flow_through_selectors() -> None:
     assert text_events == ["TextDeltaEvent"]
 
 
-async def test_unoverridden_agent_without_a_gateway_fails_loudly() -> None:
+async def test_unoverridden_agent_without_a_gateway_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A bare App() is a deferred gateway source (M7): without these env
+    # vars unset the test would inherit the developer's shell config.
+    monkeypatch.delenv("TENSORZERO_URL", raising=False)
+    monkeypatch.delenv("TENSORZERO_CONFIG", raising=False)
     app = App()
 
     @app.agent("forecaster")
     async def forecaster(query: str) -> str:
         """Forecast the weather."""
 
+    # M7 defers the failure from the call to the first consumption —
+    # handing out the handle is free; awaiting it demands a gateway.
     with pytest.raises(ConfigurationError, match="no gateway"):
-        forecaster("q")
+        await forecaster("q")
 
 
 async def test_glow_events_never_raise_mid_stream() -> None:
