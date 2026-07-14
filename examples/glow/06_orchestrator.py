@@ -22,12 +22,11 @@ Anti-recursion guardrail — ``max_turns``
 
 The orchestrator's LLM can in principle call the same sub-agent tool
 repeatedly (an LLM-driven loop, not a code-driven loop).  Glow uses
-v1.0's ``AgentConfig.max_turns`` default (20) unless overridden.  If
-you need a tighter or looser bound, drop down to the v1.0 escape
-hatch (``orchestrator._agent.config.max_turns = N``) before
-``app.lifespan()`` builds the underlying ``Agent`` — or, in production
-configurations, declare a dedicated TensorZero function with a
-template that hard-codes the budget.
+v1.0's ``AgentConfig.max_turns`` default (20) unless overridden.  Pass
+``max_turns=`` directly to ``@app.agent(...)`` for a tighter or looser
+bound (this example uses ``max_turns=8`` below) — or, in production
+configurations, declare a dedicated TensorZero function with a template
+that hard-codes the budget.
 
 Prerequisites:
     1. Set ``GROQ_API_KEY`` in ``.env`` at the project root.
@@ -71,7 +70,7 @@ async def main() -> None:
         async def writer(query: str) -> str:  # type: ignore[empty-body]
             """Format the provided summary as a single markdown bullet."""
 
-        @app.agent("orchestrator", function_name="orchestrator")
+        @app.agent("orchestrator", function_name="orchestrator", max_turns=8)
         async def orchestrator(  # type: ignore[empty-body]
             query: str,
             research: Any = Depends(researcher),

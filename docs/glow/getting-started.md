@@ -119,8 +119,9 @@ the swap logs at DEBUG).  `.as_(custom_mode)` accepts any
 
 The `await tutor("Plan Lisbon trip").result()` escape hatch returns
 the full `AgentResult[T]` — `episode_id`, `inference_ids`, the
-guardrail log, aggregated cost — for callers who need more than the
-unwrapped value.
+guardrail log, diagnostics — for callers who need more than the
+unwrapped value; aggregate cost and token usage come from the run
+handle's `.cost()` / `.usage()`.
 
 ---
 

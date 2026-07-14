@@ -65,26 +65,30 @@ inference, matching FastAPI's fail-fast ergonomics.
 
 ## Drop-down recipes
 
-### Middleware not configurable from `@app.agent`
+### Middleware
 
-Glow exposes [middleware](../middleware.md) at the `App` level
-(`App(t0=t0, middleware=[...])`).  Per-agent middleware is a v1.0
-feature — drop down:
+[Middleware](../middleware.md) is a first-class glow knob at every level —
+no drop-down needed: App-wide via `App(t0=t0, middleware=[...])`, per-agent
+via `@app.agent("tutor", middleware=[...])`, and per-call via
+`.with_(middleware=[...])`.  App- and agent-level layer (an agent-level
+list replaces the App default); `.with_()` overrides that one call only.
 
 ```python
-from t0_agents.middleware import TimingMiddleware
+from t0_agents import CostTrackingMiddleware
 
-@app.agent("tutor")
+app = App(t0=t0, middleware=[CostTrackingMiddleware()])   # App-wide default
+
+@app.agent("tutor", middleware=[CostTrackingMiddleware()])
 async def tutor(q: str) -> str:
     """An English tutor."""
 
 async with app.lifespan():
-    run = tutor._agent.invoke(
-        "Say hi",
-        middleware=[TimingMiddleware()],   # per-call override
-    )
-    await run
+    # per-call override, for this invocation only
+    answer = await tutor("Say hi").with_(middleware=[CostTrackingMiddleware()])
 ```
+
+For the raw base-API surface, `tutor.agent.invoke(...)` (the public
+accessor; raises a clear error before the App is built) still works.
 
 ### Custom `OutputMode` for a single call
 

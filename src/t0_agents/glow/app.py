@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from fastmcp import Client, FastMCP
 from fastmcp.server import create_proxy
@@ -46,9 +46,19 @@ from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
 
 if TYPE_CHECKING:
+    from tensorzero import ToolChoice
+
+    from t0_agents.core.middleware.base import Middleware
+    from t0_agents.core.types import MemoryProvider
     from t0_agents.glow.decorators import _AgentWrapper
 
 __all__ = ["App"]
+
+# Sentinel telling ``@app.agent`` "caller omitted this knob" apart from an
+# explicit ``None`` — which is a meaningful value for e.g. ``tool_choice`` /
+# ``tags`` / ``middleware``.  Only knobs the caller actually passes are
+# forwarded into ``AgentConfig``; the rest keep their declarative defaults.
+_UNSET: Any = object()
 
 # Method-local generics used by ``App.agent`` so static checkers can
 # unify the decorated function's parameters / return type with the
@@ -81,6 +91,10 @@ class App:
     TensorZero gateway — those paths call into the App-owned FastMCP
     ``Client``, which is connected by :meth:`build` and disconnected by
     :meth:`shutdown`.
+
+    App-level ``tags`` / ``middleware`` / ``namespace`` set defaults for
+    every registered agent; per-agent ``@app.agent(...)`` knobs override
+    them (``tags`` dict-merge, agent-level keys winning).
     """
 
     def __init__(
@@ -88,8 +102,18 @@ class App:
         *,
         t0: AsyncTensorZeroGateway,
         servers: list[type[MCPServer]] | None = None,
+        tags: dict[str, str] | None = None,
+        middleware: list[Middleware] | None = None,
+        namespace: str | None = None,
     ) -> None:
         self._t0: AsyncTensorZeroGateway = t0
+        # App-level ``AgentConfig`` defaults, layered *under* per-agent
+        # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
+        # ``tags`` dict-merge with agent-level keys winning; ``namespace``
+        # and ``middleware`` are taken agent-level-first, else the default.
+        self._default_tags: dict[str, str] | None = tags
+        self._default_middleware: list[Middleware] | None = middleware
+        self._default_namespace: str | None = namespace
         self._agent_registry: dict[str, _AgentSpec] = {}
         # Public mapping consulted by ``DependencyResolver`` on every
         # ``Depends(...)`` resolution.  Lives here so users can install
@@ -146,6 +170,18 @@ class App:
         name: str,
         *,
         function_name: str = "agent",
+        max_turns: int = _UNSET,
+        tool_timeout: float | None = _UNSET,
+        parallel_tools: bool = _UNSET,
+        dryrun: bool = _UNSET,
+        tool_choice: ToolChoice | None = _UNSET,
+        tags: dict[str, str] | None = _UNSET,
+        namespace: str | None = _UNSET,
+        memory: MemoryProvider | None = _UNSET,
+        memory_strategy: Literal[
+            "auto", "system_template", "prepended_message", "messages"
+        ] = _UNSET,
+        middleware: list[Middleware] | None = _UNSET,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
         """Return the ``@app.agent("name")`` decorator factory.
 
@@ -156,13 +192,37 @@ class App:
         ``async def tutor(q: str) -> str``.  Construction logic lives
         in :mod:`t0_agents.glow.decorators`; this method is the typed
         thin shim that delegates to ``_make_decorator``.
+
+        Every keyword beyond ``name``/``function_name`` maps 1:1 onto the
+        corresponding :class:`~t0_agents.core.config.AgentConfig` field
+        (``max_turns``, ``tool_timeout``, ``parallel_tools``, ``dryrun``,
+        ``tool_choice``, ``tags``, ``namespace``, ``memory``,
+        ``memory_strategy``, ``middleware``).  Omitted knobs keep their
+        ``AgentConfig`` defaults; supplied knobs are layered over any
+        App-level defaults (agent-level wins — see :meth:`__init__`).
         """
         # Imported lazily to break the import cycle between
         # ``glow.app`` and ``glow.decorators`` (the latter imports
         # :class:`App` for type purposes).
         from t0_agents.glow.decorators import _make_decorator
 
-        return _make_decorator(self, name, function_name=function_name)
+        knobs: dict[str, Any] = {
+            "max_turns": max_turns,
+            "tool_timeout": tool_timeout,
+            "parallel_tools": parallel_tools,
+            "dryrun": dryrun,
+            "tool_choice": tool_choice,
+            "tags": tags,
+            "namespace": namespace,
+            "memory": memory,
+            "memory_strategy": memory_strategy,
+            "middleware": middleware,
+        }
+        config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
+
+        return _make_decorator(
+            self, name, function_name=function_name, config_overrides=config_overrides
+        )
 
     def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """Register ``fn`` as a FastMCP tool on the App-owned server.
@@ -202,6 +262,31 @@ class App:
             self._owned_client = Client(self._mcp_server)
         return self._mcp_server
 
+    def _resolve_config_overrides(self, spec: _AgentSpec) -> dict[str, Any]:
+        """Layer App-level defaults under the agent-level ``config_overrides``.
+
+        ``namespace`` and ``middleware`` take the agent-level value when the
+        agent supplied one, else the App default.  ``tags`` dict-merge so
+        ``App(tags={"env": "prod"})`` + ``@app.agent(tags={"team": "cs"})``
+        yields both, with agent-level keys winning on collision (mirrors the
+        core ``Agent._merge_tags`` precedence).  An explicit agent-level
+        ``tags=None`` opts out of the App default (distinct from omission).
+        """
+        overrides: dict[str, Any] = dict(spec.config_overrides)
+        if "namespace" not in overrides and self._default_namespace is not None:
+            overrides["namespace"] = self._default_namespace
+        if "middleware" not in overrides and self._default_middleware is not None:
+            overrides["middleware"] = self._default_middleware
+        # ``tags`` dict-merge (agent keys win), but an explicit agent-level
+        # ``tags=None`` opts out of the App default entirely — an explicit
+        # None stays distinct from omission (the ``_UNSET`` contract).
+        if "tags" not in overrides:
+            if self._default_tags is not None:
+                overrides["tags"] = dict(self._default_tags)
+        elif overrides["tags"] is not None and self._default_tags is not None:
+            overrides["tags"] = {**self._default_tags, **overrides["tags"]}
+        return overrides
+
     def _lookup_or_build(self, spec: _AgentSpec) -> Agent:
         """Return the underlying :class:`Agent`, constructing it if needed.
 
@@ -234,6 +319,12 @@ class App:
             # ``GuardrailsMiddleware`` picks them up at runtime without
             # further glow plumbing.
             config_kwargs["guardrails"] = spec.guardrails
+        # Remaining ``AgentConfig`` knobs passed to ``@app.agent`` (never
+        # ``name``/``function_name``/``output``/``sub_agents``/``guardrails``,
+        # which are managed above), layered over App-level defaults, flow
+        # through verbatim.  ``AgentConfig`` validates them in
+        # ``__post_init__``.
+        config_kwargs.update(self._resolve_config_overrides(spec))
         # tool_provider is the App-owned client when at least one tool
         # or MCP server is configured; otherwise None lets Agent.__init__
         # auto-allocate a SubAgentToolProvider for the sub-agents-only
@@ -263,12 +354,30 @@ class App:
         agent = self._lookup_or_build(spec)
         system_prompt = spec.system_prompt
 
-        def build(mode: Any) -> Any:
+        def build(mode: Any, **call_kwargs: Any) -> Any:
+            # ``system_arguments`` (server-side template variables) and a
+            # raw ``system`` prompt are mutually exclusive in the
+            # TensorZero gateway.  Glow's implicit ``system`` is the
+            # docstring; when a caller supplies ``system_arguments`` via
+            # ``.with_()`` we drop the docstring so the gateway receives
+            # exactly one.  An explicit ``system=`` alongside
+            # ``system_arguments=`` is a caller error — raise noisily
+            # rather than silently pick one.
+            if call_kwargs.get("system_arguments") is not None:
+                if call_kwargs.get("system") is not None:
+                    raise ConfigurationError(
+                        "FluentRun.with_(): pass either system_arguments= "
+                        "(server-side template variables) or system= (a raw "
+                        "system prompt), not both — they are mutually "
+                        "exclusive in the TensorZero gateway."
+                    )
+                return agent.invoke(message, output=mode, eager=False, **call_kwargs)
             return agent.invoke(
                 message,
                 output=mode,
                 eager=False,
-                system=system_prompt,
+                system=call_kwargs.pop("system", system_prompt),
+                **call_kwargs,
             )
 
         return FluentRun(
