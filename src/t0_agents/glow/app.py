@@ -263,7 +263,11 @@ class App:
         self,
         name: str,
         *,
-        function_name: str = "agent",
+        function_name: str | None = None,
+        model: str | None = _UNSET,
+        variant: str | None = _UNSET,
+        params: dict[str, Any] | None = _UNSET,
+        cache: dict[str, Any] | None = _UNSET,
         max_turns: int = _UNSET,
         tool_timeout: float | None = _UNSET,
         parallel_tools: bool = _UNSET,
@@ -288,13 +292,24 @@ class App:
         in :mod:`t0_agents.glow.decorators`; this method is the typed
         thin shim that delegates to ``_make_decorator``.
 
-        Every keyword beyond ``name``/``function_name`` maps 1:1 onto the
-        corresponding :class:`~t0_agents.core.config.AgentConfig` field
-        (``max_turns``, ``tool_timeout``, ``parallel_tools``, ``dryrun``,
+        Every keyword beyond ``name``/``function_name``/``tools`` maps
+        1:1 onto the corresponding
+        :class:`~t0_agents.core.config.AgentConfig` field (``model``,
+        ``variant``, ``params``, ``cache``, ``max_turns``,
+        ``tool_timeout``, ``parallel_tools``, ``dryrun``,
         ``tool_choice``, ``tags``, ``namespace``, ``memory``,
         ``memory_strategy``, ``middleware``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
         App-level defaults (agent-level wins — see :meth:`__init__`).
+
+        ``model=`` declares the agent with zero tensorzero.toml —
+        inference routes through the gateway's built-in passthrough and
+        the docstring rides along as the system prompt.
+        ``AgentConfig`` enforces the routing rules at build time:
+        ``model`` XOR ``function_name`` (neither → ``"agent"``),
+        ``variant`` only on the function path, and JSON-function output
+        modes (a structured return annotation) are rejected on the
+        ``model=`` path with a ready-to-paste TOML stanza.
 
         ``tools`` filters which of the App's composed tools this agent
         sees: a list of ``@app.tool`` callables, :class:`MCPServer`
@@ -311,6 +326,10 @@ class App:
         from t0_agents.glow.decorators import _make_decorator
 
         knobs: dict[str, Any] = {
+            "model": model,
+            "variant": variant,
+            "params": params,
+            "cache": cache,
             "max_turns": max_turns,
             "tool_timeout": tool_timeout,
             "parallel_tools": parallel_tools,
