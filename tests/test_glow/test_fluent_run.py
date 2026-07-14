@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
+from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.outputs.json import JsonOutput
@@ -52,6 +53,9 @@ class _FakeRun:
         self._value = value
         self._episode_id = episode_id
         self._inference_ids = inference_ids if inference_ids is not None else ["if_fake"]
+        # Escape-hatch call recorders (M2 delegation tests).
+        self.feedback_calls: list[tuple[str, Any, str, str | None]] = []
+        self.fork_calls: list[tuple[str, Any]] = []
 
     async def result(self) -> AgentResult[Any]:
         return AgentResult(
@@ -67,6 +71,27 @@ class _FakeRun:
         if False:  # pragma: no cover - generator-shape marker
             yield
 
+    # Escape-hatch surface consumed by FluentRun.cost/usage/feedback/fork.
+    def cost(self) -> float:
+        return 0.42
+
+    def usage(self) -> None:
+        return None
+
+    async def feedback(
+        self,
+        name: str,
+        value: Any,
+        *,
+        target: str = "episode",
+        inference_id: str | None = None,
+    ) -> None:
+        self.feedback_calls.append((name, value, target, inference_id))
+
+    async def fork(self, extra_message: str, *, agent: Any = None) -> Run[Any]:
+        self.fork_calls.append((extra_message, agent))
+        return cast(Run[Any], self)
+
 
 def _make_build(
     captured: list[OutputMode[Any]] | None = None,
@@ -79,6 +104,24 @@ def _make_build(
 
     def build(mode: OutputMode[Any]) -> Run[Any]:
         sink.append(mode)
+        return cast(Run[Any], fake)
+
+    return build
+
+
+def _make_capturing_build(
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]],
+    fake_run: _FakeRun | None = None,
+) -> Any:
+    """Build closure recording ``(mode, call_kwargs)`` per invocation.
+
+    Mirrors ``App._invoke``'s ``build(mode, **call_kwargs)`` shape so the
+    ``.with_()`` forwarding + composition can be asserted without a gateway.
+    """
+    fake = fake_run if fake_run is not None else _FakeRun()
+
+    def build(mode: OutputMode[Any], **call_kwargs: Any) -> Run[Any]:
+        calls.append((mode, call_kwargs))
         return cast(Run[Any], fake)
 
     return build
@@ -186,3 +229,133 @@ async def test_result_returns_full_agent_result() -> None:
     assert result.value == "boundary-text"
     assert result.episode_id == "ep_42"
     assert result.inference_ids == ["if_a", "if_b"]
+
+
+# ---------------------------------------------------------------------------
+# M2: .with_() per-call overrides
+# ---------------------------------------------------------------------------
+
+
+async def test_with_forwards_and_merges_call_kwargs() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+
+    await fr.with_(episode_id="e1", tags={"customer_id": "c1"}).with_(
+        prior_messages=[{"role": "user", "content": "prior"}], episode_id="e2"
+    )
+
+    assert len(calls) == 1
+    _mode, call_kwargs = calls[0]
+    # Later .with_() merges; the repeated key (episode_id) is last-wins.
+    assert call_kwargs == {
+        "episode_id": "e2",
+        "tags": {"customer_id": "c1"},
+        "prior_messages": [{"role": "user", "content": "prior"}],
+    }
+
+
+async def test_with_does_not_mutate_original() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+
+    fr.with_(episode_id="e1")  # returns a fresh instance; original untouched
+    await fr
+
+    assert calls[0][1] == {}
+
+
+async def test_with_then_json_keeps_call_kwargs_and_output() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+
+    await fr.with_(episode_id="e1").json(_ModelA)
+
+    mode, call_kwargs = calls[0]
+    assert isinstance(mode, StructuredOutput)
+    assert mode.model is _ModelA
+    assert call_kwargs == {"episode_id": "e1"}
+
+
+async def test_json_then_with_keeps_call_kwargs_and_output() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+
+    await fr.json(_ModelA).with_(episode_id="e1")
+
+    mode, call_kwargs = calls[0]
+    assert isinstance(mode, StructuredOutput)
+    assert mode.model is _ModelA
+    assert call_kwargs == {"episode_id": "e1"}
+
+
+async def test_with_preserves_value_transform() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(
+        _make_capturing_build(calls, _FakeRun(value="raw")),
+        ChatOutput(),
+        value_transform=lambda v: f"T({v})",
+    )
+
+    result = await fr.with_(episode_id="e1").result()
+
+    assert result.value == "T(raw)"
+    assert calls[0][1] == {"episode_id": "e1"}
+
+
+def test_with_rejects_unknown_kwarg() -> None:
+    fr: FluentRun[str] = FluentRun(_make_capturing_build([]), ChatOutput())
+
+    with pytest.raises(ConfigurationError, match="unknown per-call override"):
+        fr.with_(max_turns=5)
+
+
+# ---------------------------------------------------------------------------
+# M2: result() carries every AgentResult field via dataclasses.replace
+# ---------------------------------------------------------------------------
+
+
+async def test_result_replace_preserves_all_fields() -> None:
+    fake = _FakeRun(value="raw", episode_id="ep_9", inference_ids=["a", "b"])
+    fr: FluentRun[str] = FluentRun(
+        _make_build(fake_run=fake),
+        ChatOutput(),
+        value_transform=lambda v: v.upper(),
+    )
+
+    result = await fr.result()
+
+    assert result.value == "RAW"  # transformed
+    assert result.episode_id == "ep_9"  # every other field carried over
+    assert result.inference_ids == ["a", "b"]
+    assert result.turns == 1
+    assert result.response_source == "text"
+    assert result.guardrail_log == []
+    assert result.diagnostics is None
+
+
+# ---------------------------------------------------------------------------
+# M2: public escape hatch — cost/usage/feedback/fork delegate to the Run
+# ---------------------------------------------------------------------------
+
+
+def test_escape_hatch_before_run_raises() -> None:
+    fr: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+
+    with pytest.raises(ConfigurationError, match="only after the run has been consumed"):
+        fr.cost()
+
+
+async def test_escape_hatch_delegates_after_run() -> None:
+    fake = _FakeRun(value="v")
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+
+    await fr  # consume → underlying Run built
+
+    assert fr.cost() == 0.42
+    assert fr.usage() is None
+    forked = await fr.fork("continue")
+    await fr.feedback("thumbs_up", 1.0, target="inference")
+
+    assert forked is not None
+    assert fake.fork_calls == [("continue", None)]
+    assert fake.feedback_calls == [("thumbs_up", 1.0, "inference", None)]

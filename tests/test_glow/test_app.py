@@ -561,3 +561,150 @@ def test_non_message_param_with_plain_default_raises() -> None:
             extra: int = 7,
         ) -> str:
             """Extra positional with a plain default."""
+
+
+# ---------------------------------------------------------------------------
+# M2: AgentConfig knob passthrough + App-level defaults + .agent accessor
+# ---------------------------------------------------------------------------
+
+
+async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
+    """Every ``@app.agent`` knob lands on the constructed ``AgentConfig``."""
+
+    @app_with_fake_agent.agent(
+        "cs",
+        max_turns=40,
+        tool_timeout=60.0,
+        parallel_tools=True,
+        dryrun=True,
+        tags={"team": "cs"},
+        namespace="prod",
+        memory_strategy="prepended_message",
+    )
+    async def cs(q: str) -> str:  # type: ignore[empty-body]
+        """A CS agent."""
+
+    await cs("hi")  # trigger lazy build
+    cfg = cs.agent._config
+    assert cfg.max_turns == 40
+    assert cfg.tool_timeout == 60.0
+    assert cfg.parallel_tools is True
+    assert cfg.dryrun is True
+    assert cfg.tags == {"team": "cs"}
+    assert cfg.namespace == "prod"
+    assert cfg.memory_strategy == "prepended_message"
+
+
+async def test_omitted_knobs_keep_agentconfig_defaults(
+    app_with_fake_agent: App,
+) -> None:
+    """Knobs the caller omits keep their ``AgentConfig`` defaults."""
+
+    @app_with_fake_agent.agent("plain")
+    async def plain(q: str) -> str:  # type: ignore[empty-body]
+        """A plain agent."""
+
+    await plain("hi")
+    cfg = plain.agent._config
+    assert cfg.max_turns == 20  # AgentConfig default, not overridden
+    assert cfg.tool_timeout == 30.0
+    assert cfg.parallel_tools is False
+    assert cfg.tags is None
+    assert cfg.namespace is None
+
+
+async def test_app_level_defaults_and_agent_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """App-level defaults apply; agent-level overrides win; tags dict-merge."""
+    _FakeAgent.construct_count = 0
+    _FakeAgent.last_invoke_kwargs = {}
+    _FakeAgent.fake_value = "hello-from-fake"
+    monkeypatch.setattr("t0_agents.glow.app.Agent", _FakeAgent)
+    app = App(t0=_fake_t0(), tags={"env": "prod"}, namespace="ns_app")
+
+    @app.agent("inherits")
+    async def inherits(q: str) -> str:  # type: ignore[empty-body]
+        """Inherits App defaults."""
+
+    @app.agent("overrides", namespace="ns_agent", tags={"env": "dev", "team": "cs"})
+    async def overrides(q: str) -> str:  # type: ignore[empty-body]
+        """Overrides App defaults."""
+
+    await inherits("hi")
+    await overrides("hi")
+
+    inherits_cfg = inherits.agent._config
+    assert inherits_cfg.namespace == "ns_app"
+    assert inherits_cfg.tags == {"env": "prod"}
+
+    overrides_cfg = overrides.agent._config
+    assert overrides_cfg.namespace == "ns_agent"  # agent-level wins
+    # tags dict-merge; the agent-level key ("env") wins over the App default.
+    assert overrides_cfg.tags == {"env": "dev", "team": "cs"}
+
+
+async def test_per_call_with_reaches_invoke(app_with_fake_agent: App) -> None:
+    """``.with_(episode_id=, prior_messages=, tags=)`` reaches ``Agent.invoke``."""
+
+    @app_with_fake_agent.agent("tutor")
+    async def tutor(q: str) -> str:  # type: ignore[empty-body]
+        """An English tutor."""
+
+    await tutor("turn 2").with_(
+        episode_id="ep_multi",
+        prior_messages=[{"role": "user", "content": "turn 1"}],
+        tags={"customer_id": "c1"},
+    )
+
+    kw = _FakeAgent.last_invoke_kwargs
+    assert kw["episode_id"] == "ep_multi"
+    assert kw["prior_messages"] == [{"role": "user", "content": "turn 1"}]
+    assert kw["tags"] == {"customer_id": "c1"}
+
+
+async def test_system_arguments_suppresses_docstring_system(
+    app_with_fake_agent: App,
+) -> None:
+    """``system_arguments`` drops the implicit docstring ``system``."""
+
+    @app_with_fake_agent.agent("tutor")
+    async def tutor(q: str) -> str:  # type: ignore[empty-body]
+        """An English tutor."""
+
+    await tutor("hi").with_(system_arguments={"level": "beginner"})
+
+    kw = _FakeAgent.last_invoke_kwargs
+    assert kw["system_arguments"] == {"level": "beginner"}
+    assert "system" not in kw  # docstring suppressed (mutually exclusive)
+
+
+async def test_system_arguments_with_explicit_system_raises(
+    app_with_fake_agent: App,
+) -> None:
+    """Supplying both ``system_arguments`` and ``system`` raises."""
+
+    @app_with_fake_agent.agent("tutor")
+    async def tutor(q: str) -> str:  # type: ignore[empty-body]
+        """An English tutor."""
+
+    with pytest.raises(ConfigurationError, match="mutually exclusive"):
+        await tutor("hi").with_(system_arguments={"a": 1}, system="raw")
+
+
+async def test_agent_accessor_pre_build_raises_post_build_returns(
+    app_with_fake_agent: App,
+) -> None:
+    """``wrapper.agent`` raises before build, returns the Agent after."""
+
+    @app_with_fake_agent.agent("tutor")
+    async def tutor(q: str) -> str:  # type: ignore[empty-body]
+        """An English tutor."""
+
+    assert tutor._agent is None  # deprecated alias stays None pre-build
+    with pytest.raises(ConfigurationError, match="not built yet"):
+        _ = tutor.agent
+
+    await tutor("hi")  # trigger build
+    assert isinstance(tutor.agent, _FakeAgent)
+    assert tutor.agent is tutor._agent
