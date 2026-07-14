@@ -70,6 +70,39 @@ Value-style `Depends(get_db)` on `@app.agent` raises
 rejects ambiguous shapes loudly.  The fail-fast surfaces at
 `app.build()` time, not at the first inference.
 
+## Restricting tools per agent — `tools=`
+
+By default every agent on an `App` sees every `@app.tool`, every mounted
+`MCPServer`, and every `<sub_agent>_ask` tool.  Pass `tools=` to
+`@app.agent` to narrow that to an explicit allow-list:
+
+```python
+@app.agent("analyst", tools=[get_weather, Fred, "customers_get_*"])
+async def analyst(q: str) -> str:
+    """Sees only get_weather, every Fred-namespaced tool, and customers_get_*."""
+    return llm()
+
+@app.agent("chitchat", tools=[])          # explicitly toolless
+async def chitchat(q: str) -> str:
+    return llm()
+```
+
+Entries may be `@app.tool` callables (matched by name), `MCPServer`
+classes or instances (matched by their `namespace` prefix — a namespace is
+**required**, else `build()` raises), and glob strings.  Omitting `tools=`
+keeps the default (the agent sees everything — back-compatible); `tools=[]`
+is explicitly toolless.  A pattern matching no live tool warns at
+`app.build()`, naming the available tools — so a mistyped prefix surfaces
+as a build-time diagnostic rather than a silently missing tool.
+
+Sub-agent `<name>_ask` tools are never filtered: the allow-list applies to
+the real composed tools only, so delegation stays available.
+
+This is how a consumer keeps a dangerous tool off an agent even while its
+MCP server is mounted for others — vest-ai, for example, mounts its
+order-placement server but omits those tools from the assistant agent's
+`tools=`, so they can never be called.
+
 ## When to use which
 
 | Decorator     | Parameter shape                                       | What `Depends` does                              |
@@ -78,12 +111,16 @@ rejects ambiguous shapes loudly.  The fail-fast surfaces at
 | `@app.tool`   | `db: DB = Depends(other_tool_provider)`               | recursive provider resolution                    |
 | `@app.agent`  | `research: Agent = Depends(researcher)`               | installs `researcher` as a sub-agent             |
 | `@app.agent`  | `db: DB = Depends(get_db)` (value injection)          | **error** — raises `ConfigurationError`          |
+| `@app.agent`  | `tools=[fn, Server, "glob_*"]`                        | restricts the agent to an allow-list of tools    |
 
 ## Runnable demos
 
 - [`examples/glow/07_di_tools.py`](../../examples/glow/07_di_tools.py) —
   `@app.tool` + `Depends` schema-stripping + `app.dependency_overrides`
   exercised through a direct MCP `call_tool` round-trip.
+- [`examples/glow/09_agent_tools.py`](../../examples/glow/09_agent_tools.py)
+  — per-agent `tools=` filtering: two agents on one App with disjoint tool
+  subsets, verified via each agent's tool provider.
 - [`examples/glow/06_orchestrator.py`](../../examples/glow/06_orchestrator.py)
   — sub-agent injection via `Depends(<wrapper>)`.
 

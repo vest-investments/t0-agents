@@ -157,6 +157,7 @@ def _make_decorator(
     *,
     function_name: str,
     config_overrides: dict[str, Any] | None = None,
+    tools: list[Any] | None = None,
 ) -> Callable[[Callable[P, Awaitable[R]]], _AgentWrapper[P, R]]:
     """Build the decorator returned by ``App.agent(name)``.
 
@@ -239,6 +240,7 @@ def _make_decorator(
             sub_agent_specs=sub_agent_specs,
             guardrails=guardrails,
             config_overrides=dict(config_overrides or {}),
+            tools=list(tools) if tools is not None else None,
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)

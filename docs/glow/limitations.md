@@ -36,20 +36,6 @@ For long-running tools, plumb progress through your own logging
 + a separate observability sink; the agent loop sees only the
 final string.
 
-## No per-agent MCP subsets
-
-Every glow agent on a given `App` sees every mounted MCP server
-plus every `@app.tool` registration plus every `<sub_agent>_ask`
-sub-agent tool.  There is no built-in way to expose a *subset* of
-the composed tool list to a specific agent.
-
-Workaround: spin up multiple `App` instances when isolation
-matters.  Each `App` owns its own composed FastMCP and its own
-in-memory `Client`, so partition logic that wants strict
-visibility boundaries by creating a per-domain `App` and routing
-queries between them at the application layer.  A first-class
-solution (per-agent MCP visibility filters) is a v1.1 candidate.
-
 ## Pydantic is a hard dep of the `[glow]` extra
 
 `pip install 't0-agents[glow]'` pulls `pydantic>=2.0` unconditionally
