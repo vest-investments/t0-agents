@@ -441,17 +441,39 @@ class Run(Generic[T]):
         if self._state == "cancelled":
             raise RunCancelledError("Run was cancelled before completion")
 
-    async def stream_text(self) -> AsyncIterator[str]:
+    async def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
         """Yield only the assistant-text deltas as they arrive.
 
         Convenience wrapper around :meth:`events` that filters down to
         :class:`TextDeltaEvent` and yields the delta string.  Useful
         for UI surfaces that just want streaming text without the
         full event taxonomy.
+
+        Reasoning models (OpenAI o-series, ``gpt-oss`` via Harmony)
+        route the final answer through thought summaries and emit no
+        ``TextDeltaEvent`` at all.  With ``fallback=True`` (default) a
+        turn that streamed no non-blank delta yields the final
+        ``result.response`` once, after the stream drains — the
+        one-liner never renders an empty answer for a turn that
+        produced one.  ``fallback=False`` restores the raw filter.
+
+        Fatal errors raise out of the iterator; use :meth:`events`
+        with ``on_error="event"`` when you need a terminal event
+        instead.
         """
+        saw_text = False
+        result: AgentResult[Any] | None = None
         async for ev in self.events():
             if isinstance(ev, TextDeltaEvent):
+                if ev.delta.strip():
+                    saw_text = True
                 yield ev.delta
+            elif isinstance(ev, DoneEvent):
+                result = ev.result
+        if fallback and not saw_text and result is not None:
+            response = result.response
+            if response.strip():
+                yield response
 
     def __await__(self) -> Generator[Any, None, AgentResult[T]]:
         """Awaiting a Run is an alias for ``await run.result()``."""
