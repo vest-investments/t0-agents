@@ -26,6 +26,7 @@ import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final, assert_never
 
+from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
@@ -185,9 +186,40 @@ async def project(events: AsyncIterator[AgentEvent]) -> AsyncIterator[WireFrame]
                 assert_never(event)
 
 
+async def as_terminal_safe(
+    frames: AsyncIterator[WireFrame],
+) -> AsyncIterator[WireFrame]:
+    """Guarantee the stream ends in a frame, never an exception.
+
+    An exception raised while draining ``frames`` is converted into one
+    terminal :class:`ErrorFrame` — the same frozen shape
+    :func:`project` builds from a :class:`RunErrorEvent`, so a consumer
+    sees identical wire output whether the upstream ran with
+    ``on_error="event"`` or the default raising mode. The ``message``
+    policy mirrors ``Run.events(on_error="event")``: prefer the
+    exception's ``text`` attribute (TensorZero errors carry the
+    provider detail there), then ``str(exc)``, then the class name
+    (bare exceptions like ``TimeoutError()`` stringify empty).
+
+    ``asyncio.CancelledError`` derives from :class:`BaseException` and
+    propagates — cancellation is not a wire event.
+    """
+    try:
+        async for frame in frames:
+            yield frame
+    except Exception as exc:
+        detail: dict[str, Any] = {}
+        if isinstance(exc, MaxTurnsExceededError):
+            detail["max_turns"] = exc.max_turns
+        text = getattr(exc, "text", None)
+        message = (text if isinstance(text, str) else None) or str(exc) or type(exc).__name__
+        yield _error_frame(type(exc).__name__, message, detail)
+
+
 __all__ = [
     "MAX_ARG_BYTES",
     "MAX_RAW_BYTES",
     "MAX_RESULT_BYTES",
+    "as_terminal_safe",
     "project",
 ]

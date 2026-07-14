@@ -8,8 +8,12 @@ separately by the ported vest-ai golden in ``test_public_golden.py``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Iterable
 
+import pytest
+
+from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.core.types import AgentResult
 from t0_agents.stream.events import (
     AgentEvent,
@@ -26,6 +30,7 @@ from t0_agents.stream.events import (
     ToolResultEvent,
     TurnEndEvent,
 )
+from t0_agents.testing import ScriptedAgent
 from t0_agents.wire import (
     DoneFrame,
     ErrorFrame,
@@ -40,7 +45,7 @@ from t0_agents.wire import (
     TurnEndFrame,
     WireFrame,
 )
-from t0_agents.wire.stages import MAX_ARG_BYTES, project
+from t0_agents.wire.stages import MAX_ARG_BYTES, as_terminal_safe, project
 
 
 async def _stream(events: Iterable[AgentEvent]) -> AsyncIterator[AgentEvent]:
@@ -165,3 +170,89 @@ class TestProjectRunError:
         )
         [frame] = await _project([event])
         assert frame == ErrorFrame(message="bad", detail={"exc_class": "ValueError"})
+
+
+async def _raising_frames(
+    frames: Iterable[WireFrame], exc: BaseException
+) -> AsyncIterator[WireFrame]:
+    for frame in frames:
+        yield frame
+    raise exc
+
+
+class TestAsTerminalSafe:
+    async def test_a_clean_stream_passes_through_unchanged(self) -> None:
+        source = [TextDeltaFrame(block_id="b1", delta="hi"), TurnEndFrame(turn=1)]
+        out = [f async for f in as_terminal_safe(_stream_frames(source))]
+        assert out == source
+
+    async def test_max_turns_replays_frames_then_ends_with_the_frozen_error(self) -> None:
+        prior = TextDeltaFrame(block_id="b1", delta="partial")
+        out = [
+            f
+            async for f in as_terminal_safe(
+                _raising_frames([prior], MaxTurnsExceededError(20))
+            )
+        ]
+        assert out == [
+            prior,
+            ErrorFrame(
+                message="max_turns_exceeded",
+                detail={"max_turns": 20, "exc_class": "MaxTurnsExceededError"},
+            ),
+        ]
+
+    async def test_a_bare_exception_falls_back_to_the_class_name(self) -> None:
+        out = [f async for f in as_terminal_safe(_raising_frames([], TimeoutError()))]
+        assert out == [
+            ErrorFrame(message="TimeoutError", detail={"exc_class": "TimeoutError"})
+        ]
+
+    async def test_the_text_attribute_wins_over_str(self) -> None:
+        class FakeGatewayError(Exception):
+            text = "provider said: rate limited"
+
+        out = [
+            f
+            async for f in as_terminal_safe(
+                _raising_frames([], FakeGatewayError("generic status"))
+            )
+        ]
+        assert out == [
+            ErrorFrame(
+                message="provider said: rate limited",
+                detail={"exc_class": "FakeGatewayError"},
+            )
+        ]
+
+    async def test_cancellation_propagates(self) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            async for _ in as_terminal_safe(
+                _raising_frames([], asyncio.CancelledError())
+            ):
+                pass
+
+    async def test_both_failure_paths_produce_identical_wire_output(self) -> None:
+        """A raised exception and its RunErrorEvent must be indistinguishable."""
+
+        def scripted() -> ScriptedAgent:
+            return ScriptedAgent(
+                events=[TextDeltaEvent(id="b1", delta="partial")],
+                raises=MaxTurnsExceededError(20),
+            )
+
+        raising_run = scripted().invoke("q")
+        via_raise = [
+            f
+            async for f in as_terminal_safe(project(raising_run.events()))
+        ]
+        event_run = scripted().invoke("q")
+        via_event = [
+            f async for f in project(event_run.events(on_error="event"))
+        ]
+        assert via_raise == via_event
+
+
+async def _stream_frames(frames: Iterable[WireFrame]) -> AsyncIterator[WireFrame]:
+    for frame in frames:
+        yield frame

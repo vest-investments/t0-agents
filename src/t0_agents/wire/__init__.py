@@ -42,6 +42,7 @@ from t0_agents.wire.stages import (
     MAX_ARG_BYTES,
     MAX_RAW_BYTES,
     MAX_RESULT_BYTES,
+    as_terminal_safe,
     project,
 )
 
@@ -66,6 +67,7 @@ __all__ = [
     "ToolResultFrame",
     "TurnEndFrame",
     "WireFrame",
+    "as_terminal_safe",
     "frame_from_dict",
     "frame_to_dict",
     "project",
