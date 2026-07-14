@@ -65,17 +65,22 @@ RunState = Literal["pending", "running", "succeeded", "failed", "cancelled"]
 def _as_run_error(exc: BaseException) -> RunErrorEvent:
     """Map a drive-time failure to its terminal :class:`RunErrorEvent`.
 
-    ``message`` falls back to the class name because bare exceptions
-    (``TimeoutError()``) stringify empty.  Known loop-guard exceptions
-    contribute structured ``detail`` so wire consumers don't have to
-    parse the human message.
+    ``message`` prefers the exception's ``text`` attribute when one is
+    set — ``TensorZeroError`` carries the provider's detailed error
+    fragments there while ``str(e)`` is often just a generic status
+    line — then falls back to ``str(exc)``, then to the class name
+    (bare exceptions like ``TimeoutError()`` stringify empty).  Known
+    loop-guard exceptions contribute structured ``detail`` so wire
+    consumers don't have to parse the human message.
     """
     detail: dict[str, Any] = {}
     if isinstance(exc, MaxTurnsExceededError):
         detail["max_turns"] = exc.max_turns
+    text = getattr(exc, "text", None)
+    message = (text if isinstance(text, str) else None) or str(exc) or exc.__class__.__name__
     return RunErrorEvent(
         error_type=exc.__class__.__name__,
-        message=str(exc) or exc.__class__.__name__,
+        message=message,
         detail=detail,
         exception=exc,
     )

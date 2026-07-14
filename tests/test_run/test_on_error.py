@@ -90,6 +90,30 @@ class TestOnErrorEvent:
         assert isinstance(terminal, RunErrorEvent)
         assert terminal.message == "TimeoutError"
 
+    async def test_message_prefers_the_exceptions_text_attribute(self) -> None:
+        # TensorZeroError carries the provider's detailed error fragments
+        # on ``.text`` while str(e) is often a generic status line.
+        class _GatewayError(Exception):
+            def __init__(self) -> None:
+                super().__init__("HTTP 502")
+                self.text = "provider rejected: model overloaded"
+
+        agent = ScriptedAgent(raises=_GatewayError())
+        events = await _drain(agent.invoke("q").events(on_error="event"))
+        terminal = events[-1]
+        assert isinstance(terminal, RunErrorEvent)
+        assert terminal.message == "provider rejected: model overloaded"
+
+    async def test_non_str_text_attribute_is_ignored(self) -> None:
+        class _OddError(Exception):
+            text = None
+
+        agent = ScriptedAgent(raises=_OddError("odd"))
+        events = await _drain(agent.invoke("q").events(on_error="event"))
+        terminal = events[-1]
+        assert isinstance(terminal, RunErrorEvent)
+        assert terminal.message == "odd"
+
     async def test_successful_run_emits_done_and_no_run_error(self) -> None:
         agent = ScriptedAgent(result="fine")
         events = await _drain(agent.invoke("q").events(on_error="event"))
