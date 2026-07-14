@@ -506,3 +506,33 @@ async def test_streaming_loop_reraises_recoverable_status_empty_text() -> None:
             "agent",
         ):
             pass
+
+
+async def test_streaming_loop_forwards_model_routing() -> None:
+    """model_name/params/cache_options reach the streamed inference call;
+    the empty function_name default coalesces to None."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("ok", block_id="t1")]),
+                final_chunk(),
+            ]
+        ],
+    )
+    runner = StreamingAgentLoop()
+    async for _ in runner.stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, FakeMCPClient(tools=[])),
+        "hi",
+        model_name="groq::llama-3.3-70b-versatile",
+        params={"chat_completion": {"temperature": 0.1}},
+        cache_options={"enabled": "on"},
+    ):
+        pass
+
+    call = fake_t0.calls[0]
+    assert call["stream"] is True
+    assert call["model_name"] == "groq::llama-3.3-70b-versatile"
+    assert call["function_name"] is None
+    assert call["params"] == {"chat_completion": {"temperature": 0.1}}
+    assert call["cache_options"] == {"enabled": "on"}

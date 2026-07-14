@@ -226,7 +226,7 @@ class InfoResponse(BaseModel):
     """
 
     name: str
-    function_name: str
+    function_name: str | None
     namespace: str | None = None
     tags: dict[str, str] | None = None
     has_memory: bool

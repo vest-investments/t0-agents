@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, Literal, TypeVar, cast, overload
@@ -372,6 +373,10 @@ class Agent:
             namespace=self._config.namespace,
             on_inference=ctx.on_inference,
             system=ctx.system,
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            params=self._config.params,
+            cache_options=self._config.cache,
             **extra_kwargs,
         )
 
@@ -425,6 +430,10 @@ class Agent:
             on_inference=ctx.on_inference,
             system=ctx.system,
             progress_sink=run._buffer.put,
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            params=self._config.params,
+            cache_options=self._config.cache,
             **extra_kwargs,
         ):
             if isinstance(event, DoneEvent):
@@ -519,7 +528,13 @@ class Agent:
             namespace=self._config.namespace,
             dryrun=self._config.dryrun,
             output_schema=None,
-            params=None,
+            # shape_inference mutates params in place (setdefault +
+            # key assignment) — seed a deep copy so the long-lived
+            # AgentConfig.params dict is never contaminated across runs.
+            params=copy.deepcopy(self._config.params),
+            model_name=self._config.model,
+            variant_name=self._config.variant,
+            cache_options=self._config.cache,
         )
 
         # --- 2. Apply the output mode's request shaping ---
@@ -534,6 +549,12 @@ class Agent:
             "namespace": req.namespace,
             "dryrun": req.dryrun,
         }
+        if req.model_name is not None:
+            inference_kwargs["model_name"] = req.model_name
+        if req.variant_name is not None:
+            inference_kwargs["variant_name"] = req.variant_name
+        if req.cache_options is not None:
+            inference_kwargs["cache_options"] = req.cache_options
         if req.output_schema is not None:
             inference_kwargs["output_schema"] = dict(req.output_schema)
         if req.params is not None:

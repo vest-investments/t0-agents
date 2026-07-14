@@ -455,3 +455,40 @@ class TestAgent:
         assert r1.response == "first"
         assert r2.response == "second"
         assert r1.episode_id != r2.episode_id
+
+
+# ---------------------------------------------------------------------------
+# TestAgentModelRouting — config model/variant/params/cache forwarding (M3)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentModelRouting:
+    async def test_model_config_forwards_to_inference(self) -> None:
+        """AgentConfig.model reaches t0.inference as model_name; the
+        function_name slot is None on the functionless path."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="hi")])])
+        agent = _make_agent(
+            t0=t0, function_name=None, model="groq::llama-3.3-70b-versatile"
+        )
+        await agent.invoke("hello")
+        call = t0.calls[0]
+        assert call["model_name"] == "groq::llama-3.3-70b-versatile"
+        assert call["function_name"] is None
+
+    async def test_params_and_cache_forward_from_config(self) -> None:
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(
+            t0=t0,
+            params={"chat_completion": {"temperature": 0.3}},
+            cache={"enabled": "read_only", "max_age_s": 60},
+        )
+        await agent.invoke("go")
+        call = t0.calls[0]
+        assert call["params"] == {"chat_completion": {"temperature": 0.3}}
+        assert call["cache_options"] == {"enabled": "read_only", "max_age_s": 60}
+
+    async def test_variant_forwards_on_function_path(self) -> None:
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        agent = _make_agent(t0=t0, variant="pinned_v2")
+        await agent.invoke("go")
+        assert t0.calls[0]["variant_name"] == "pinned_v2"

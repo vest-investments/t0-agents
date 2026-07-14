@@ -760,3 +760,63 @@ class TestRunAgent:
             "agent",
         )
         assert "system" not in t0.calls[0]["input"]
+
+
+# --- TestRunAgentModelRouting ------------------------------------------------
+
+
+class TestRunAgentModelRouting:
+    """model_name/variant_name/params/cache_options forwarding (M3)."""
+
+    async def test_model_name_forwards_and_function_name_coalesces(self) -> None:
+        """model_name reaches t0.inference; the empty function_name default
+        becomes None so the gateway sees exactly one routing target."""
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            model_name="groq::llama-3.3-70b-versatile",
+        )
+        call = t0.calls[0]
+        assert call["model_name"] == "groq::llama-3.3-70b-versatile"
+        assert call["function_name"] is None
+
+    async def test_params_and_cache_options_forward(self) -> None:
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+            params={"chat_completion": {"temperature": 0.2}},
+            cache_options={"enabled": "on", "max_age_s": 3600},
+        )
+        call = t0.calls[0]
+        assert call["params"] == {"chat_completion": {"temperature": 0.2}}
+        assert call["cache_options"] == {"enabled": "on", "max_age_s": 3600}
+
+    async def test_variant_name_forwards_on_function_path(self) -> None:
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+            variant_name="pinned_v2",
+        )
+        assert t0.calls[0]["variant_name"] == "pinned_v2"
+
+    async def test_model_routing_kwargs_default_none(self) -> None:
+        t0 = FakeT0([FakeChatResponse(content=[Text(text="ok")])])
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], FakeMCPClient()),
+            "go",
+            "agent",
+        )
+        call = t0.calls[0]
+        assert call["model_name"] is None
+        assert call["variant_name"] is None
+        assert call["params"] is None
+        assert call["cache_options"] is None

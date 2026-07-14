@@ -256,7 +256,7 @@ async def run_agent(
     t0: AsyncTensorZeroGateway,
     tool_provider: Client[Any] | None = None,
     user_message: str = "",
-    function_name: str = "",
+    function_name: str | None = "",
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
@@ -270,6 +270,10 @@ async def run_agent(
     system: str | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
     prior_messages: list[Message] | None = None,
+    model_name: str | None = None,
+    variant_name: str | None = None,
+    params: dict[str, Any] | None = None,
+    cache_options: dict[str, Any] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -294,6 +298,10 @@ async def run_agent(
             ``execute_tool_calls_parallel`` on every tool-dispatch turn.
         user_message: The user's query as a plain string.
         function_name: Name of the chat function defined in ``tensorzero.toml``.
+            Empty/``None`` is coalesced to ``None`` at the gateway call so a
+            ``model_name``-routed loop omits the field; exactly one of
+            ``function_name``/``model_name`` must be non-empty (the gateway
+            rejects both/neither).
         episode_id: Existing T0 episode id to continue, or ``None`` for a fresh
             episode (T0 will allocate one and we capture it).
         max_turns: Maximum number of inference turns before the loop aborts with
@@ -358,6 +366,19 @@ async def run_agent(
             default) or empty, the loop starts with a single
             ``Message(role="user", content=user_message)``, byte-
             identical to the pre-``prior_messages`` behaviour.
+        model_name: Route every inference through the gateway's built-in
+            chat passthrough (``tensorzero::default``) instead of a
+            declared function — either a ``{provider}::{model}``
+            shorthand or a ``[models.*]`` name.  Tools, episodes, and
+            tags all work unchanged on this path.
+        variant_name: Pin a specific variant of ``function_name``.  The
+            gateway rejects it alongside ``model_name``.
+        params: Per-call inference parameters in the TensorZero shape,
+            e.g. ``{"chat_completion": {"temperature": 0.2}}``,
+            forwarded to every ``t0.inference()`` call.
+        cache_options: TensorZero cache options
+            (``{"enabled": ..., "max_age_s": ...}``) forwarded to every
+            ``t0.inference()`` call.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -378,11 +399,12 @@ async def run_agent(
             "Pass either `system` (raw string for input.system) or "
             "`system_arguments` (dict for template variables), not both."
         )
-    if not user_message or not function_name:
+    if not user_message or not (function_name or model_name):
         raise ValueError(
-            "`run_agent` requires non-empty `user_message` and `function_name`. "
-            "Their `\"\"` defaults exist only as a Python-syntax workaround so "
-            "`tool_provider` can default to `None` at position 2."
+            "`run_agent` requires non-empty `user_message` and a routing "
+            "target: `function_name` or `model_name`. The `\"\"` defaults "
+            "exist only as a Python-syntax workaround so `tool_provider` "
+            "can default to `None` at position 2."
         )
 
     mcp_tools = await tool_provider.list_tools() if tool_provider is not None else []
@@ -393,8 +415,8 @@ async def run_agent(
     executor = execute_tool_calls_parallel if parallel_tools else execute_tool_calls
 
     logger.info(
-        "Agent loop started: function=%s, max_turns=%d, tools=%d",
-        function_name, max_turns, len(t0_tools),
+        "Agent loop started: target=%s, max_turns=%d, tools=%d",
+        function_name or model_name, max_turns, len(t0_tools),
     )
 
     for turn in range(max_turns):
@@ -408,7 +430,9 @@ async def run_agent(
             elif system_arguments is not None:
                 input_dict["system"] = system_arguments
             raw = await t0.inference(
-                function_name=function_name,
+                function_name=function_name or None,
+                model_name=model_name,
+                variant_name=variant_name,
                 episode_id=episode_id,
                 input=input_dict,
                 additional_tools=t0_tools,
@@ -416,6 +440,8 @@ async def run_agent(
                 tool_choice=tool_choice,
                 tags=tags,
                 namespace=namespace,
+                params=params,
+                cache_options=cache_options,
             )
         except TensorZeroError as e:
             if (
