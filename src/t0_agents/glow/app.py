@@ -91,6 +91,10 @@ class App:
     TensorZero gateway — those paths call into the App-owned FastMCP
     ``Client``, which is connected by :meth:`build` and disconnected by
     :meth:`shutdown`.
+
+    App-level ``tags`` / ``middleware`` / ``namespace`` set defaults for
+    every registered agent; per-agent ``@app.agent(...)`` knobs override
+    them (``tags`` dict-merge, agent-level keys winning).
     """
 
     def __init__(
@@ -98,8 +102,18 @@ class App:
         *,
         t0: AsyncTensorZeroGateway,
         servers: list[type[MCPServer]] | None = None,
+        tags: dict[str, str] | None = None,
+        middleware: list[Middleware] | None = None,
+        namespace: str | None = None,
     ) -> None:
         self._t0: AsyncTensorZeroGateway = t0
+        # App-level ``AgentConfig`` defaults, layered *under* per-agent
+        # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
+        # ``tags`` dict-merge with agent-level keys winning; ``namespace``
+        # and ``middleware`` are taken agent-level-first, else the default.
+        self._default_tags: dict[str, str] | None = tags
+        self._default_middleware: list[Middleware] | None = middleware
+        self._default_namespace: str | None = namespace
         self._agent_registry: dict[str, _AgentSpec] = {}
         # Public mapping consulted by ``DependencyResolver`` on every
         # ``Depends(...)`` resolution.  Lives here so users can install
@@ -248,6 +262,24 @@ class App:
             self._owned_client = Client(self._mcp_server)
         return self._mcp_server
 
+    def _resolve_config_overrides(self, spec: _AgentSpec) -> dict[str, Any]:
+        """Layer App-level defaults under the agent-level ``config_overrides``.
+
+        ``namespace`` and ``middleware`` take the agent-level value when the
+        agent supplied one, else the App default.  ``tags`` dict-merge so
+        ``App(tags={"env": "prod"})`` + ``@app.agent(tags={"team": "cs"})``
+        yields both, with agent-level keys winning on collision (mirrors the
+        core ``Agent._merge_tags`` precedence).
+        """
+        overrides: dict[str, Any] = dict(spec.config_overrides)
+        if "namespace" not in overrides and self._default_namespace is not None:
+            overrides["namespace"] = self._default_namespace
+        if "middleware" not in overrides and self._default_middleware is not None:
+            overrides["middleware"] = self._default_middleware
+        if self._default_tags is not None:
+            overrides["tags"] = {**self._default_tags, **(overrides.get("tags") or {})}
+        return overrides
+
     def _lookup_or_build(self, spec: _AgentSpec) -> Agent:
         """Return the underlying :class:`Agent`, constructing it if needed.
 
@@ -282,9 +314,10 @@ class App:
             config_kwargs["guardrails"] = spec.guardrails
         # Remaining ``AgentConfig`` knobs passed to ``@app.agent`` (never
         # ``name``/``function_name``/``output``/``sub_agents``/``guardrails``,
-        # which are managed above) flow through verbatim.  ``AgentConfig``
-        # validates them in ``__post_init__``.
-        config_kwargs.update(spec.config_overrides)
+        # which are managed above), layered over App-level defaults, flow
+        # through verbatim.  ``AgentConfig`` validates them in
+        # ``__post_init__``.
+        config_kwargs.update(self._resolve_config_overrides(spec))
         # tool_provider is the App-owned client when at least one tool
         # or MCP server is configured; otherwise None lets Agent.__init__
         # auto-allocate a SubAgentToolProvider for the sub-agents-only
