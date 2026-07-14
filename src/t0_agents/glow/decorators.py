@@ -73,10 +73,11 @@ class _AgentWrapper(Generic[P, R]):
     On invocation, hands off to ``App._invoke`` which returns a
     :class:`FluentRun` typed at the original return annotation.
 
-    The ``._agent`` and ``._spec`` accessors are the escape hatches
-    documented in the plan ("``tutor._agent`` is exposed for users
-    who want to drop down to the base API").  ``._agent`` is ``None``
-    until the first invocation (or ``await app.build()``).
+    The public ``.agent`` accessor is the escape hatch for dropping down
+    to the base :class:`Agent` API; it raises a clear error before the
+    agent is built.  ``._agent`` (deprecated) and ``._spec`` remain for
+    back-compat — ``._agent`` returns ``None`` until the first invocation
+    (or ``await app.build()``).
     """
 
     def __init__(self, app: App, spec: _AgentSpec) -> None:
@@ -84,8 +85,31 @@ class _AgentWrapper(Generic[P, R]):
         self._spec_ref = spec
 
     @property
+    def agent(self) -> Agent:
+        """The compiled underlying :class:`Agent` — the public escape hatch.
+
+        Raises :class:`ConfigurationError` before the agent is built:
+        enter ``async with app.lifespan()`` / call ``await app.build()``,
+        or invoke the agent once, before reaching for ``.agent``.
+        """
+        built = self._spec_ref.agent
+        if built is None:
+            raise ConfigurationError(
+                f"@app.agent({self._spec_ref.name!r}).agent is not built yet.  "
+                f"Build the App first (`async with app.lifespan():` or "
+                f"`await app.build()`), or invoke the agent once, before "
+                f"accessing `.agent`."
+            )
+        return built
+
+    @property
     def _agent(self) -> Agent | None:
-        """The underlying :class:`Agent`, or ``None`` if not yet built."""
+        """Deprecated alias for :attr:`agent` returning ``None`` pre-build.
+
+        Retained for back-compat with early-glow escape-hatch code; new
+        code should prefer :attr:`agent`, which raises a clear error
+        before build rather than returning ``None``.
+        """
         return self._spec_ref.agent
 
     @property

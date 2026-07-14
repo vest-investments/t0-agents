@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable, Generator
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast, overload
 
 from pydantic import BaseModel
 
@@ -32,6 +32,10 @@ from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow.selectors import Selector
 from t0_agents.stream.events import AgentEvent
+
+if TYPE_CHECKING:
+    from t0_agents.core.agent import Agent
+    from t0_agents.core.types import RunUsage
 
 __all__ = ["FluentRun"]
 
@@ -278,6 +282,52 @@ class FluentRun(Generic[T]):
             return result.value
 
         return _unwrap().__await__()
+
+    # ------------------------------------------------------------------
+    # Escape hatch — delegate to the underlying ``Run``
+    # ------------------------------------------------------------------
+
+    def _require_run(self) -> Run[Any]:
+        """Return the built :class:`Run`, or raise if not yet consumed.
+
+        ``cost`` / ``usage`` / ``feedback`` / ``fork`` operate on the
+        underlying Run, which exists only once this FluentRun has been
+        consumed (``await`` it, iterate ``.events()``, or call
+        ``.result()``).  Reaching for them earlier is a programming
+        error — raise clearly rather than silently kick off a hidden run.
+        """
+        if self._run is None:
+            raise ConfigurationError(
+                "FluentRun: cost()/usage()/feedback()/fork() are available "
+                "only after the run has been consumed — `await` the run, "
+                "iterate `.events()`, or call `.result()` first."
+            )
+        return self._run
+
+    def cost(self) -> float:
+        """Aggregate cost (USD) of the underlying Run.  See :meth:`Run.cost`."""
+        return self._require_run().cost()
+
+    def usage(self) -> RunUsage | None:
+        """Aggregate token usage of the underlying Run.  See :meth:`Run.usage`."""
+        return self._require_run().usage()
+
+    async def feedback(
+        self,
+        name: str,
+        value: float | str | bool,
+        *,
+        target: Literal["episode", "inference"] = "episode",
+        inference_id: str | None = None,
+    ) -> None:
+        """Forward outcome feedback to TensorZero.  See :meth:`Run.feedback`."""
+        await self._require_run().feedback(
+            name, value, target=target, inference_id=inference_id
+        )
+
+    async def fork(self, extra_message: str, *, agent: Agent | None = None) -> Run[T]:
+        """Continue this Run with another user turn.  See :meth:`Run.fork`."""
+        return cast(Run[T], await self._require_run().fork(extra_message, agent=agent))
 
 
 async def _filter_with_selectors(
