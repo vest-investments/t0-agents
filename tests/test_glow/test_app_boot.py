@@ -1,0 +1,224 @@
+"""App boot forms — gateway sources, deferred env resolution, ownership.
+
+M7 (P4 boot collapse): ``App(gateway=...)``, ``App(embedded=...)``, and
+the bare ``App()`` deferred form resolve the TensorZero gateway lazily
+at build time; resolved gateways are App-owned (entered on the exit
+stack, closed by ``shutdown()``, re-resolved on the next ``build()``).
+A caller-supplied ``t0=`` is never entered or closed.  The SDK builders
+are faked by swapping the ``AsyncTensorZeroGateway`` symbol inside
+``t0_agents.glow.app`` — no network, no docker.
+"""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+import pytest
+from tensorzero import AsyncTensorZeroGateway
+
+from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.glow import App
+
+
+class _FakeGateway:
+    """Records async-CM entry/exit — stands in for the real gateway."""
+
+    def __init__(self) -> None:
+        self.entered = False
+        self.exited = False
+
+    async def __aenter__(self) -> _FakeGateway:
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self.exited = True
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boot tests must not inherit gateway env vars from the dev shell."""
+    monkeypatch.delenv("TENSORZERO_URL", raising=False)
+    monkeypatch.delenv("TENSORZERO_CONFIG", raising=False)
+
+
+@pytest.fixture()
+def fake_builders(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+    """Swap the gateway class seen by ``glow.app`` for recording fakes.
+
+    The real ``AsyncTensorZeroGateway`` is a native (pyo3) class whose
+    attributes cannot be monkeypatched — replacing the module-level
+    symbol that ``App._ensure_t0`` resolves through is the reliable
+    seam.  Each builder returns an awaitable of a fresh ``_FakeGateway``
+    (mirroring the SDK's ``async_setup=True`` union shape).
+    """
+    calls: dict[str, list[Any]] = {"http": [], "embedded": [], "gateways": []}
+
+    class _Builders:
+        @staticmethod
+        def build_http(**kwargs: Any) -> Any:
+            calls["http"].append(kwargs)
+            gw = _FakeGateway()
+            calls["gateways"].append(gw)
+
+            async def _make() -> _FakeGateway:
+                return gw
+
+            return _make()
+
+        @staticmethod
+        def build_embedded(**kwargs: Any) -> Any:
+            calls["embedded"].append(kwargs)
+            gw = _FakeGateway()
+            calls["gateways"].append(gw)
+
+            async def _make() -> _FakeGateway:
+                return gw
+
+            return _make()
+
+    monkeypatch.setattr("t0_agents.glow.app.AsyncTensorZeroGateway", _Builders)
+    return calls
+
+
+def _register_agent(app: App, name: str = "tutor") -> Any:
+    @app.agent(name)
+    async def tutor(query: str) -> str:  # type: ignore[empty-body]
+        """A tutor."""
+
+    return tutor
+
+
+# ---------------------------------------------------------------------------
+# Constructor validation
+# ---------------------------------------------------------------------------
+
+
+def test_constructor_rejects_multiple_gateway_sources() -> None:
+    sentinel = cast(AsyncTensorZeroGateway, object())
+    with pytest.raises(ConfigurationError, match="at most one"):
+        App(t0=sentinel, gateway="http://localhost:3000")
+    with pytest.raises(ConfigurationError, match="at most one"):
+        App(gateway="http://localhost:3000", embedded="config/tensorzero.toml")
+    with pytest.raises(ConfigurationError, match="at most one"):
+        App(t0=sentinel, embedded="config/tensorzero.toml")
+    with pytest.raises(ConfigurationError, match="at most one"):
+        App(
+            t0=sentinel,
+            gateway="http://localhost:3000",
+            embedded="config/tensorzero.toml",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Owned sources — gateway= / embedded=
+# ---------------------------------------------------------------------------
+
+
+async def test_gateway_url_form_builds_http_and_owns_it(
+    fake_builders: dict[str, list[Any]],
+) -> None:
+    app = App(gateway="http://gw.example:3000")
+
+    await app.build()
+    assert fake_builders["http"] == [{"gateway_url": "http://gw.example:3000"}]
+    assert fake_builders["embedded"] == []
+    gw = fake_builders["gateways"][0]
+    assert gw.entered and not gw.exited
+
+    await app.shutdown()
+    assert gw.exited
+
+    # Re-entry re-resolves: the App released ownership on shutdown.
+    await app.build()
+    assert len(fake_builders["http"]) == 2
+    await app.shutdown()
+
+
+async def test_embedded_form_builds_embedded(
+    fake_builders: dict[str, list[Any]],
+) -> None:
+    app = App(embedded="config/tensorzero.toml")
+
+    await app.build()
+    assert fake_builders["embedded"] == [{"config_file": "config/tensorzero.toml"}]
+    assert fake_builders["http"] == []
+    await app.shutdown()
+    assert fake_builders["gateways"][0].exited
+
+
+# ---------------------------------------------------------------------------
+# Deferred source — bare App() + environment
+# ---------------------------------------------------------------------------
+
+
+async def test_deferred_resolves_url_env_first(
+    fake_builders: dict[str, list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TENSORZERO_URL", "http://from-env:3000")
+    monkeypatch.setenv("TENSORZERO_CONFIG", "ignored.toml")
+    app = App()
+    _register_agent(app)
+
+    await app.build()
+    assert fake_builders["http"] == [{"gateway_url": "http://from-env:3000"}]
+    assert fake_builders["embedded"] == []
+    await app.shutdown()
+
+
+async def test_deferred_resolves_config_env_when_no_url(
+    fake_builders: dict[str, list[Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TENSORZERO_CONFIG", "config/dev.toml")
+    app = App()
+    _register_agent(app)
+
+    await app.build()
+    assert fake_builders["embedded"] == [{"config_file": "config/dev.toml"}]
+    await app.shutdown()
+
+
+async def test_deferred_without_env_and_needing_gateway_raises(
+    fake_builders: dict[str, list[Any]],
+) -> None:
+    app = App()
+    _register_agent(app)
+
+    with pytest.raises(ConfigurationError, match="no gateway"):
+        await app.build()
+    assert fake_builders["http"] == [] and fake_builders["embedded"] == []
+
+
+async def test_deferred_fully_overridden_app_never_resolves(
+    fake_builders: dict[str, list[Any]],
+) -> None:
+    """An App whose every agent is overridden needs no gateway and no env."""
+    from t0_agents.testing import ScriptedAgent
+
+    app = App()
+    _register_agent(app, "forecaster")
+    app.agent_overrides["forecaster"] = ScriptedAgent(result="22C")
+
+    await app.build()
+    assert fake_builders["http"] == [] and fake_builders["embedded"] == []
+    await app.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Explicit t0= — caller-owned, never touched
+# ---------------------------------------------------------------------------
+
+
+async def test_explicit_t0_never_entered_nor_closed(
+    fake_builders: dict[str, list[Any]],
+) -> None:
+    sentinel = cast(AsyncTensorZeroGateway, object())
+    app = App(t0=sentinel)
+    _register_agent(app)
+
+    await app.build()
+    await app.shutdown()
+    assert fake_builders["http"] == [] and fake_builders["embedded"] == []
+    assert app._t0 is sentinel

@@ -35,6 +35,7 @@ exposes itself on ``wrapper._agent`` for escape-hatch use.
 from __future__ import annotations
 
 import fnmatch
+import os
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -191,12 +192,44 @@ class App:
         self,
         *,
         t0: AsyncTensorZeroGateway | None = None,
+        gateway: str | None = None,
+        embedded: str | None = None,
         servers: list[type[MCPServer]] | None = None,
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
     ) -> None:
+        # Gateway sources — at most one of the three constructor forms:
+        #   t0=        an already-built AsyncTensorZeroGateway (caller owns it)
+        #   gateway=   an HTTP gateway URL     -> build_http, App-owned
+        #   embedded=  a tensorzero.toml path  -> build_embedded, App-owned
+        # None of the three defers resolution to the first build():
+        # TENSORZERO_URL -> TENSORZERO_CONFIG -> clear error (but only when
+        # some agent actually needs a gateway — fully-overridden Apps never
+        # resolve).  See :meth:`_ensure_t0`.
+        provided = [
+            name
+            for name, value in (("t0", t0), ("gateway", gateway), ("embedded", embedded))
+            if value is not None
+        ]
+        if len(provided) > 1:
+            raise ConfigurationError(
+                f"App(...): pass at most one of t0=, gateway=, embedded= — "
+                f"got {' and '.join(provided)}."
+            )
         self._t0: AsyncTensorZeroGateway | None = t0
+        self._gateway_source: tuple[Literal["http", "embedded"], str] | None = (
+            ("http", gateway)
+            if gateway is not None
+            else ("embedded", embedded)
+            if embedded is not None
+            else None
+        )
+        # True when the App resolved (and therefore owns) the gateway —
+        # owned gateways ride ``_exit_stack`` and are closed by
+        # :meth:`shutdown`; a caller-supplied ``t0=`` is never entered
+        # or closed by the App.
+        self._owns_t0: bool = False
         # App-level ``AgentConfig`` defaults, layered *under* per-agent
         # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
         # ``tags`` dict-merge with agent-level keys winning; ``namespace``
@@ -389,6 +422,74 @@ class App:
             self._owned_client = Client(self._mcp_server)
         return self._mcp_server
 
+    def _needs_gateway(self) -> bool:
+        """True when some registered agent will require a real gateway.
+
+        Mirrors :meth:`_lookup_or_build`'s short-circuits: an agent whose
+        name has an ``agent_overrides`` entry, or whose spec already
+        carries a built :class:`Agent`, never touches the gateway.  Used
+        by :meth:`build` so a deferred-source App (bare ``App()``) only
+        resolves — and only *errors* on unresolvable — when a gateway is
+        genuinely needed.
+        """
+        return any(
+            spec.agent is None and spec.name not in self.agent_overrides
+            for spec in self._agent_registry.values()
+        )
+
+    async def _ensure_t0(self) -> AsyncTensorZeroGateway:
+        """Return the gateway, resolving and taking ownership on first need.
+
+        Resolution order: an explicit ``t0=`` (never entered or closed by
+        the App) → the constructor source (``gateway=`` → ``build_http``,
+        ``embedded=`` → ``build_embedded``) → the environment
+        (``TENSORZERO_URL`` → ``TENSORZERO_CONFIG``) → a
+        :class:`ConfigurationError` naming every option.  Resolved
+        gateways are entered on the App's exit stack so
+        :meth:`shutdown` closes them; ``self._t0`` is reset afterwards so
+        a later :meth:`build` re-resolves cleanly.
+
+        The SDK's builders return ``Union[Awaitable[gateway], gateway]``
+        (keyed off ``async_setup``, default True) — the cast below is the
+        single place glow absorbs that union.
+        """
+        if self._t0 is not None:
+            return self._t0
+        source: tuple[Literal["http", "embedded"], str]
+        if self._gateway_source is not None:
+            source = self._gateway_source
+        else:
+            url = os.environ.get("TENSORZERO_URL")
+            config = os.environ.get("TENSORZERO_CONFIG")
+            if url:
+                source = ("http", url)
+            elif config:
+                source = ("embedded", config)
+            else:
+                raise ConfigurationError(
+                    "App has no gateway to build agents with: pass t0= (an "
+                    "AsyncTensorZeroGateway), gateway= (an HTTP gateway URL), "
+                    "or embedded= (a tensorzero.toml path) to App(...), or "
+                    "set TENSORZERO_URL / TENSORZERO_CONFIG in the "
+                    "environment."
+                )
+        kind, value = source
+        if kind == "http":
+            awaitable = cast(
+                "Awaitable[AsyncTensorZeroGateway]",
+                AsyncTensorZeroGateway.build_http(gateway_url=value),
+            )
+        else:
+            awaitable = cast(
+                "Awaitable[AsyncTensorZeroGateway]",
+                AsyncTensorZeroGateway.build_embedded(config_file=value),
+            )
+        gw = await awaitable
+        await self._exit_stack.enter_async_context(gw)
+        self._t0 = gw
+        self._owns_t0 = True
+        return gw
+
     def _resolve_config_overrides(self, spec: _AgentSpec) -> dict[str, Any]:
         """Layer App-level defaults under the agent-level ``config_overrides``.
 
@@ -438,9 +539,11 @@ class App:
         t0 = self._t0
         if t0 is None:
             raise ConfigurationError(
-                f"App(t0=None) cannot build agent {spec.name!r}: no gateway "
-                f"was provided.  Pass t0= to App(...), or register an override "
-                f"for every agent via app.agent_overrides."
+                f"App cannot build agent {spec.name!r}: no gateway is "
+                f"available.  Pass t0=, gateway=, or embedded= to App(...), "
+                f"set TENSORZERO_URL / TENSORZERO_CONFIG in the environment, "
+                f"or register an override for every agent via "
+                f"app.agent_overrides."
             )
         sub_agents: list[Agent] = [
             self._lookup_or_build(sub_spec) for sub_spec in spec.sub_agent_specs
@@ -575,6 +678,13 @@ class App:
         connection failures) surface before any user invocation kicks
         off network traffic.
         """
+        # Resolve the gateway first so it sits UNDER the client on the
+        # exit stack (LIFO close: client, then gateway).  A constructor
+        # source (gateway=/embedded=) always resolves; the deferred form
+        # (bare App()) resolves only when some agent will need it — a
+        # fully-overridden App keeps working with no gateway and no env.
+        if self._t0 is None and (self._gateway_source is not None or self._needs_gateway()):
+            await self._ensure_t0()
         if not self._client_entered:
             # Materialise the FastMCP pair only when there's at least
             # one MCP spec to mount.  ``@app.tool`` registrations already
@@ -625,19 +735,25 @@ class App:
             self._lookup_or_build(agent_spec)
 
     async def shutdown(self) -> None:
-        """Disconnect the owned Client.  Idempotent.
+        """Disconnect the owned Client and close any owned gateway.  Idempotent.
 
         Closes the internal :class:`AsyncExitStack`, which exits the
-        ``Client.__aexit__`` registered by :meth:`build`.  Safe to call
-        multiple times — the stack is replaced after each close so a
-        subsequent :meth:`build` re-enters cleanly.  Required after
-        any non-:meth:`lifespan` :meth:`build` to avoid leaking the
-        in-process FastMCP transport task across test boundaries.
+        ``Client.__aexit__`` registered by :meth:`build` and the owned
+        gateway entered by :meth:`_ensure_t0` (LIFO — client first, then
+        gateway).  A caller-supplied ``t0=`` is never closed.  Safe to
+        call multiple times — the stack is replaced after each close so
+        a subsequent :meth:`build` re-enters (and, for owned gateways,
+        re-resolves) cleanly.  Required after any non-:meth:`lifespan`
+        :meth:`build` to avoid leaking the in-process FastMCP transport
+        task across test boundaries.
         """
-        if self._client_entered:
+        if self._client_entered or self._owns_t0:
             await self._exit_stack.aclose()
             self._exit_stack = AsyncExitStack()
             self._client_entered = False
+            if self._owns_t0:
+                self._t0 = None
+                self._owns_t0 = False
 
     @asynccontextmanager
     async def lifespan(self) -> AsyncIterator[None]:
