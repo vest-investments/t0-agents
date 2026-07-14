@@ -72,6 +72,7 @@ class JsonOutput:
 
     expects_tool_loop: bool = False
     supports_streaming: bool = False
+    requires_json_function: bool = True
     name: str = "json"
 
     #: Fixed English base sentence used by :meth:`_build_retry_hint`.

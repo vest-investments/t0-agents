@@ -40,6 +40,7 @@ class StreamingOutput:
     base: OutputMode[Any] = field(default_factory=ChatOutput)
     expects_tool_loop: bool = field(init=False)
     supports_streaming: bool = field(default=True, init=False)
+    requires_json_function: bool = field(init=False)
     name: str = field(default="streaming", init=False)
 
     def __post_init__(self) -> None:
@@ -52,6 +53,9 @@ class StreamingOutput:
         # Inherit the base's tool-loop flag — chat streams through the
         # tool loop, future modes (e.g. streaming JSON) may not.
         self.expects_tool_loop = self.base.expects_tool_loop
+        self.requires_json_function = getattr(
+            self.base, "requires_json_function", False
+        )
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest:
         return self.base.shape_inference(req)

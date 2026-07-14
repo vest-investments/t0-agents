@@ -49,6 +49,7 @@ class ToolCallOutput:
 
     expects_tool_loop: bool = False
     supports_streaming: bool = False
+    requires_json_function: bool = False
     name: str = "tool_call"
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest:
