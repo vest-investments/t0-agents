@@ -58,3 +58,14 @@ class _AgentSpec:
     # by :meth:`~t0_agents.glow.app.App._lookup_or_build`, layered over any
     # App-level defaults so agent-level values win.
     config_overrides: dict[str, Any] = field(default_factory=dict)
+    # Per-agent ``tools=`` filter, verbatim from ``@app.agent(tools=[...])``.
+    # ``None`` = no filter (the agent sees every composed tool — back-compat);
+    # ``[]`` = explicitly toolless; a non-empty list holds ``@app.tool``
+    # callables, ``MCPServer`` classes/instances, and glob strings.
+    tools: list[Any] | None = None
+    # Concrete tool names ``tools`` resolved to, computed once in
+    # :meth:`~t0_agents.glow.app.App.build` (needs the connected client's live
+    # tool list).  Mirrors ``tools``: ``None`` = no filter, an empty set = a
+    # resolved toolless agent.  Consumed by
+    # :meth:`~t0_agents.glow.app.App._lookup_or_build` to wrap the provider.
+    resolved_tools: set[str] | None = None

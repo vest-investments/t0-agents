@@ -34,6 +34,8 @@ exposes itself on ``wrapper._agent`` for escape-hatch use.
 
 from __future__ import annotations
 
+import fnmatch
+import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
@@ -50,6 +52,7 @@ from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
+from t0_agents.tooling import FilteredToolProvider
 
 if TYPE_CHECKING:
     from tensorzero import ToolChoice
@@ -71,6 +74,87 @@ _UNSET: Any = object()
 # returned ``_AgentWrapper[P, R]`` — the FastAPI pattern.
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _describe_tool_entry(entry: Any) -> str:
+    """Short label for a ``tools=`` entry used in warnings and errors."""
+    if isinstance(entry, type):
+        return entry.__name__
+    if isinstance(entry, MCPServer):
+        return f"{type(entry).__name__} instance"
+    return getattr(entry, "__name__", repr(entry))
+
+
+def _mcp_server_namespace(agent_name: str, entry: Any) -> str | None:
+    """Namespace of an :class:`MCPServer` ``tools=`` entry, else ``None``.
+
+    Raises :class:`ConfigurationError` when the entry is an ``MCPServer`` with
+    no ``namespace=`` — its mounted tool names carry no prefix, so there is
+    nothing to filter on.
+    """
+    if isinstance(entry, MCPServer):
+        namespace = entry._to_spec().namespace
+    elif isinstance(entry, type) and issubclass(entry, MCPServer):
+        spec: MCPServerSpec | None = getattr(entry, "_mcp_spec", None)
+        if spec is None:  # the bare ``MCPServer`` base — not a real server
+            return None
+        namespace = spec.namespace
+    else:
+        return None
+    if namespace is None:
+        raise ConfigurationError(
+            f"@app.agent({agent_name!r}) tools= includes MCPServer "
+            f"{_describe_tool_entry(entry)} without namespace= — a namespace "
+            f"is required to filter its tools (its mounted tool names are "
+            f"prefixed with the namespace)."
+        )
+    return namespace
+
+
+def _match_tool_entry(
+    agent_name: str, entry: Any, live_names: set[str]
+) -> set[str]:
+    """Resolve one ``tools=`` entry to the live tool names it selects."""
+    namespace = _mcp_server_namespace(agent_name, entry)
+    if namespace is not None:
+        prefix = f"{namespace}_"
+        return {name for name in live_names if name.startswith(prefix)}
+    if isinstance(entry, str):
+        return {name for name in live_names if fnmatch.fnmatchcase(name, entry)}
+    if callable(entry):
+        name = getattr(entry, "__name__", None)
+        return {name} & live_names if name is not None else set()
+    raise ConfigurationError(
+        f"@app.agent({agent_name!r}) tools= entry {entry!r} is not a "
+        f"supported spec — pass an @app.tool callable, an MCPServer "
+        f"class/instance, or a glob string."
+    )
+
+
+def _resolve_tool_filter(
+    agent_name: str, tools: list[Any], live_names: set[str]
+) -> set[str]:
+    """Resolve a ``@app.agent(tools=[...])`` spec to a set of live tool names.
+
+    Each entry is matched against ``live_names``: an ``@app.tool`` callable by
+    its ``__name__``; an :class:`MCPServer` by its ``namespace`` prefix
+    (required); a glob string by :func:`fnmatch.fnmatchcase`.  An entry
+    matching nothing emits a :class:`UserWarning` naming the available tools
+    (the dead-pattern diagnostic).  An empty ``tools`` yields an empty set —
+    an intentionally toolless agent, with no warning.
+    """
+    allow: set[str] = set()
+    for entry in tools:
+        matched = _match_tool_entry(agent_name, entry, live_names)
+        if not matched:
+            warnings.warn(
+                f"@app.agent({agent_name!r}) tools= entry "
+                f"{_describe_tool_entry(entry)!r} matched no available tool; "
+                f"available: {sorted(live_names)!r}",
+                stacklevel=2,
+            )
+        allow |= matched
+    return allow
 
 
 class App:
@@ -192,6 +276,7 @@ class App:
             "auto", "system_template", "prepended_message", "messages"
         ] = _UNSET,
         middleware: list[Middleware] | None = _UNSET,
+        tools: list[Any] | None = None,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
         """Return the ``@app.agent("name")`` decorator factory.
 
@@ -210,6 +295,15 @@ class App:
         ``memory_strategy``, ``middleware``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
         App-level defaults (agent-level wins — see :meth:`__init__`).
+
+        ``tools`` filters which of the App's composed tools this agent
+        sees: a list of ``@app.tool`` callables, :class:`MCPServer`
+        classes/instances (matched by their ``namespace`` prefix), and
+        glob strings (e.g. ``"customers_get_*"``).  Omitted (``None``)
+        keeps the back-compat behaviour — the agent sees every tool;
+        ``tools=[]`` is explicitly toolless.  Patterns matching no live
+        tool warn at :meth:`build`.  Sub-agent ``<name>_ask`` tools are
+        never filtered.
         """
         # Imported lazily to break the import cycle between
         # ``glow.app`` and ``glow.decorators`` (the latter imports
@@ -231,7 +325,11 @@ class App:
         config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
 
         return _make_decorator(
-            self, name, function_name=function_name, config_overrides=config_overrides
+            self,
+            name,
+            function_name=function_name,
+            config_overrides=config_overrides,
+            tools=tools,
         )
 
     def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -356,6 +454,13 @@ class App:
             if self._owned_client is not None
             else None
         )
+        # Per-agent ``tools=`` filter (resolved against the live tool list in
+        # :meth:`build`).  Wrap the real-tool provider so only allow-listed
+        # names reach inference.  ``Agent.__init__`` then layers a
+        # ``SubAgentToolProvider`` on top, so sub-agent ``<name>_ask`` tools
+        # are appended *after* the filter and remain visible.
+        if spec.resolved_tools is not None and tool_provider is not None:
+            tool_provider = FilteredToolProvider(tool_provider, spec.resolved_tools)
         agent = Agent(
             AgentConfig(**config_kwargs),
             t0=t0,
@@ -449,6 +554,22 @@ class App:
             if self._owned_client is not None:
                 await self._exit_stack.enter_async_context(self._owned_client)
             self._client_entered = True
+        # Resolve each agent's ``tools=`` filter against the now-connected
+        # client's live tool list and warn on patterns matching nothing — a
+        # build-time diagnostic that turns prefix-guessing bugs into a visible
+        # warning.  A separate pass *before* the build loop so a parent
+        # agent's recursion into its sub-agent specs sees their resolved
+        # filters already set.
+        live_names: set[str] = set()
+        if self._owned_client is not None:
+            live_names = {
+                tool.name for tool in await self._owned_client.list_tools()
+            }
+        for agent_spec in self._agent_registry.values():
+            if agent_spec.tools is not None:
+                agent_spec.resolved_tools = _resolve_tool_filter(
+                    agent_spec.name, agent_spec.tools, live_names
+                )
         for agent_spec in self._agent_registry.values():
             self._lookup_or_build(agent_spec)
 
