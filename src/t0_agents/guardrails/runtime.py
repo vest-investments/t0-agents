@@ -35,6 +35,7 @@ from t0_agents.core.exceptions import T0AgentsFatalError
 from t0_agents.core.types import (
     Guardrail,
     GuardrailLogEntry,
+    ToolProgressHandler,
     ToolProvider,
 )
 from t0_agents.guardrails.base import GuardrailContext
@@ -78,6 +79,7 @@ class GuardedToolProvider:
         arguments: dict[str, Any],
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> Any:
         tool_call = _synthetic_tool_call(name, arguments)
 
@@ -120,7 +122,9 @@ class GuardedToolProvider:
             )
         )
 
-        result = await self._inner.call_tool(name, arguments, timeout=timeout)
+        result = await self._inner.call_tool(
+            name, arguments, timeout=timeout, progress_handler=progress_handler
+        )
         result_str = serialize_tool_result(result)
         await self._fire_after_tool(tool_call, result_str)
         return result

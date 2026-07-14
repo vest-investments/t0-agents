@@ -47,6 +47,7 @@ from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
     RECOVERABLE_INFERENCE_PATTERNS,
     RECOVERABLE_INFERENCE_STATUS_CODES,
+    ProgressCallback,
     execute_tool_calls,
     execute_tool_calls_parallel,
 )
@@ -56,6 +57,7 @@ from t0_agents.stream.events import (
     DoneEvent,
     ErrorEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
@@ -89,6 +91,7 @@ class StreamingAgentLoop:
         system: str | None = None,
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
         prior_messages: list[Message] | None = None,
+        progress_sink: Callable[[ToolProgressEvent], Awaitable[None]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Drive the streaming loop and yield every event.
 
@@ -121,6 +124,13 @@ class StreamingAgentLoop:
         if left at their ``""`` defaults — those defaults exist solely
         as a Python-syntax workaround that lets ``tool_provider`` default
         to ``None`` at position 2.
+
+        ``progress_sink`` receives a :class:`ToolProgressEvent` for every
+        server-side progress notification a tool emits while executing.
+        A sink (not a yield) because notifications arrive while the
+        generator is suspended awaiting the tool executor — there is no
+        yield point to ride.  ``Agent`` passes the Run's buffer ``put``
+        so progress interleaves into the ordinary event stream.
         """
         if system is not None and system_arguments is not None:
             raise ValueError(
@@ -144,6 +154,26 @@ class StreamingAgentLoop:
         executor = (
             execute_tool_calls_parallel if parallel_tools else execute_tool_calls
         )
+        progress_callback: ProgressCallback | None = None
+        if progress_sink is not None:
+            sink = progress_sink
+
+            async def _forward_progress(
+                tool_call_id: str,
+                progress: float,
+                total: float | None,
+                message: str | None,
+            ) -> None:
+                await sink(
+                    ToolProgressEvent(
+                        id=tool_call_id,
+                        progress=progress,
+                        total=total,
+                        message=message,
+                    )
+                )
+
+            progress_callback = _forward_progress
 
         logger.info(
             "Streaming agent loop started: function=%s, max_turns=%d, tools=%d",
@@ -273,7 +303,10 @@ class StreamingAgentLoop:
                     "if your agent is expected to dispatch tools."
                 )
             tool_results = await executor(
-                tool_provider, tool_call_blocks, tool_timeout
+                tool_provider,
+                tool_call_blocks,
+                tool_timeout,
+                progress_callback=progress_callback,
             )
             for tc_event, tr in zip(tool_calls_collected, tool_results, strict=True):
                 is_error = str(tr.result).startswith("ERROR:")

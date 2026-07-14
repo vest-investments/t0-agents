@@ -63,6 +63,24 @@ The TUI renderer that consumes the same events lives in
 
 ## Quickstart
 
+### Easiest — `stream_text()`, the text one-liner
+
+Most consumers want exactly one thing: the assistant's text, streamed.
+
+```python
+async for token in agent.invoke(query).stream_text():
+    print(token, end="", flush=True)
+```
+
+`Run.stream_text()` filters the event stream down to the text deltas —
+and it is **reasoning-model safe**: OpenAI o-series / `gpt-oss` route
+the final answer through thought summaries and emit *no* text deltas,
+so with `fallback=True` (the default) a turn that streamed no non-blank
+delta yields the final `result.response` once after the stream drains.
+Pass `fallback=False` for the raw delta filter.  Fatal errors raise out
+of the iterator — reach for `events(on_error="event")` when you need a
+terminal event instead.
+
 ### Easy — consume a mock stream (no Docker, no gateway)
 
 This snippet covers the shape of `Run.events()` without booting
@@ -198,21 +216,25 @@ nothing else.
 
 ### Event taxonomy
 
-Every `AgentEvent` is a frozen `@dataclass(slots=True)` carrying a
+Every `AgentEvent` is a `@dataclass(slots=True)` carrying a
 `type: Literal[...]` discriminator so consumers can `match` without
 `isinstance`.  The shapes fall into three groups:
 
 1. **Delta events** fire *as chunks arrive* —
-   `TextDeltaEvent`, `ToolCallDeltaEvent`, `ThoughtDeltaEvent`.
-   Consumers that render a live UI typically only listen to these.
+   `TextDeltaEvent`, `ToolCallDeltaEvent`, `ThoughtDeltaEvent`, and
+   `ToolProgressEvent` (server-side `ctx.report_progress(...)`
+   notifications relayed while a tool executes).  Consumers that
+   render a live UI typically only listen to these.
 2. **Consolidation events** fire once per block *after* its final
    delta — `TextEndEvent`, `ToolCallEvent` (with parsed `arguments`
    dict), `ThoughtEvent`.  Consumers that want the assembled state
    (e.g. a reducer that writes to a database) listen to these.
 3. **Control events** frame the run — `ToolResultEvent` (after each
    tool call finishes), `TurnEndEvent(turn=N)` (one per turn),
-   `DoneEvent(result=AgentResult(...))` (always last on success), and
-   `ErrorEvent` (non-fatal anomalies; see [Error handling](#error-handling)).
+   `DoneEvent(result=AgentResult(...))` (always last on success),
+   `ErrorEvent` (recoverable anomalies), and `RunErrorEvent` (the
+   terminal failure under `on_error="event"`; see
+   [Error handling](#error-handling)).
 
 ### Correlation key
 
@@ -277,27 +299,26 @@ list_tools()  →  t0.inference(stream=True)
 ### `Run.events`
 
 ```python
-async def stream(
+async def events(
     self,
-    user_message: str,
     *,
-    episode_id: str | None = None,
-    tags: dict[str, str] | None = None,
+    replay: bool = False,
+    on_error: Literal["raise", "event"] = "raise",
 ) -> AsyncIterator[AgentEvent]
 ```
 
-The streaming analogue of `Agent.invoke()`.  Shares memory hydration,
-guardrail scaffolding, and tool execution with the non-streaming path;
-the terminal event is always a `DoneEvent` wrapping an `AgentResult`
-(including `guardrail_log` when guardrails are configured).
+The streaming view of a `Run`.  Shares memory hydration, guardrail
+scaffolding, and tool execution with the non-streaming path; on
+success the terminal event is always a `DoneEvent` wrapping an
+`AgentResult` (including `guardrail_log` when guardrails are
+configured).
 
 | Argument | Purpose |
 |---|---|
-| `user_message` | The user's query as a plain string. |
-| `episode_id` | Existing TensorZero episode to continue; `None` starts a new one. |
-| `tags` | Per-call tags that shallow-merge on top of `AgentConfig.tags`.  Required when one `Agent` is shared across many WS frames and you want per-frame tags — see [Server-side: SSE or WebSocket?](#server-side-sse-or-websocket) |
+| `replay` | `True` re-yields from the earliest still-buffered event; `False` (default) subscribes at the live cursor. |
+| `on_error` | `"raise"` (default) re-raises drive-time failures out of the iterator.  `"event"` converts the failure into a single terminal `RunErrorEvent`, so **every stream ends with exactly one `DoneEvent \| RunErrorEvent`**.  Cancellation is never converted — `RunCancelledError` raises in both modes. |
 
-Raises:
+Raises (with the default `on_error="raise"`):
 
 - `MaxTurnsExceededError` — `config.max_turns` is exhausted without a
   tool-call-free turn.
@@ -306,6 +327,20 @@ Raises:
 - `TensorZeroError` — a non-recoverable gateway error.  (Recoverable
   errors surface inline as `ErrorEvent`; see
   [Error handling](#error-handling).)
+- `RunCancelledError` — the run was cancelled (both modes).
+
+### `Run.stream_text`
+
+```python
+async def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]
+```
+
+The text one-liner (see [Quickstart](#quickstart)): yields each
+`TextDeltaEvent.delta` as it arrives; with `fallback=True` a turn that
+streamed no non-blank delta yields `result.response` once after the
+drain — covering reasoning models (`response_source == "thought"`) and
+any other no-text turn that still produced an answer.  The library
+never invents copy for a genuinely empty turn.
 
 ### Event types
 
@@ -318,13 +353,47 @@ Raises:
 | `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool` |
 | `ThoughtDeltaEvent` | Each reasoning-model thought chunk | `id`, `delta` |
 | `ThoughtEvent` | Once per thought block after its final delta | `id`, `text` |
+| `ToolProgressEvent` | Each server-side `ctx.report_progress(...)` while a tool runs | `id` (matches the `ToolCallEvent`), `progress: float`, `total: float \| None`, `message: str \| None` |
 | `TurnEndEvent` | Once per turn, after all blocks are assembled | `turn: int` |
 | `DoneEvent` | Always last on success | `result: AgentResult` |
 | `ErrorEvent` | Recoverable anomaly (bad JSON, unknown chunk, retry) | `message: str`, `detail: dict[str, Any]` |
+| `RunErrorEvent` | Terminal failure, only under `on_error="event"` | `error_type: str`, `message: str`, `detail: dict[str, Any]`, `exception` (in-process only) |
 
-`AgentEvent` is the discriminated union of all ten variants.  Every
+`AgentEvent` is the discriminated union of all twelve variants.  Every
 dataclass is `slots=True`; JSON serialisation at the HTTP boundary is
 `dataclasses.asdict(event)`, which round-trips cleanly to the browser.
+
+### Codec — `event_to_dict` / `event_from_dict`
+
+For anything that ships events across a process boundary — a bus, a
+replay log, SSE relays — `t0_agents.stream.codec` provides the
+versioned dict codec:
+
+```python
+from t0_agents import event_from_dict, event_to_dict
+
+payload = event_to_dict(event)        # {"v": 1, "type": "...", ...fields}
+event = event_from_dict(payload)      # round-trips; ValueError on unknown type/version
+```
+
+Every field of every variant round-trips except
+`RunErrorEvent.exception` (in-process only; decodes as `None`) and
+non-primitive `AgentResult.value` payloads, which degrade to plain JSON
+data (a pydantic model encodes via `model_dump()`).  Unknown ``type``
+discriminators and codec-version mismatches raise `ValueError` — an
+outdated payload fails loudly instead of degrading silently.
+
+### Status synthesis — `synthesize_statuses`
+
+`t0_agents.stream.status` ports the production status-hint policy as
+pure functions: `synthesize_statuses(events, known_servers=...)`
+re-emits every event and interleaves opaque `Status` hints —
+`"Calling {tool}…"` per tool call (identity decomposed against the
+known server prefixes, longest first) and `"Thinking…"` per reasoning
+block (deduplicated within a block, suppressed after a tool call until
+a terminal event re-arms it).  Compose it at the endpoint/consumer
+boundary — never inside a worker or on a bus.  Glow exposes it as
+`FluentRun.statuses()`.
 
 ### `StreamingAgentLoop` — advanced
 
@@ -567,12 +636,16 @@ them in a `CallableSessionProvider` adapter.
 
 ## Error handling
 
-`AgentEvent` encodes two tiers of error:
+The streaming surface encodes three tiers of error:
 
 | Kind | Surface | Examples |
 |---|---|---|
 | Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
-| Fatal | Raised out of the async iterator | `MaxTurnsExceededError`, `GuardrailBlockedError`, non-recoverable `TensorZeroError`, or any `T0AgentsFatalError` subclass |
+| Fatal, default | Raised out of the async iterator (`on_error="raise"`) | `MaxTurnsExceededError`, `GuardrailBlockedError`, non-recoverable `TensorZeroError`, or any `T0AgentsFatalError` subclass |
+| Fatal, terminal-event | One terminal `RunErrorEvent` ends the stream (`on_error="event"`) | the same failures, converted: `error_type` carries the exception class name, `detail` carries structured extras (`{"max_turns": 20}`), `exception` carries the original for in-process consumers.  **Invariant: exactly one `DoneEvent \| RunErrorEvent` per stream.**  Cancellation always raises. |
+
+Glow flips the default to `on_error="event"` (a UI stream should never
+raise mid-iteration); core keeps `"raise"` for backward compatibility.
 
 The recoverable-retry contract is shared with `run_agent` — when the
 gateway returns a 4xx status whose body matches one of the

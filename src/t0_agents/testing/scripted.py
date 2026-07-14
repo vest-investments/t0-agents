@@ -78,10 +78,13 @@ class ScriptedRun(Run[Any]):
     async def _drive(self) -> None:
         try:
             await self._mode_chosen.wait()
-            if self._scripted_raises is not None:
-                raise self._scripted_raises
+            # Scripted events replay BEFORE ``raises=`` fires so a script
+            # models a mid-stream abort — the shape real fatal errors have
+            # (some events already delivered, then the drive loop dies).
             for event in self._scripted_events:
                 await self._buffer.put(event)
+            if self._scripted_raises is not None:
+                raise self._scripted_raises
             result = _coerce_result(self._scripted_result)
             self._capture_result(result)
             await self._buffer.put(DoneEvent(result=result))

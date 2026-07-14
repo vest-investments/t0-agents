@@ -511,6 +511,9 @@ class App:
             build,
             spec.output_mode,
             value_transform=spec.value_transform,
+            known_servers=tuple(
+                s.namespace for s in self._mcp_specs if s.namespace is not None
+            ),
         )
 
     async def build(self) -> None:

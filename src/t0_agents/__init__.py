@@ -61,9 +61,12 @@ from t0_agents.core.types import (
 from t0_agents.delegation import SubAgentToolProvider
 from t0_agents.mcp import run_agent
 from t0_agents.stream import (
+    CODEC_VERSION,
     AgentEvent,
     DoneEvent,
     ErrorEvent,
+    RunErrorEvent,
+    Status,
     StreamingAgentLoop,
     TextDeltaEvent,
     TextEndEvent,
@@ -71,13 +74,19 @@ from t0_agents.stream import (
     ThoughtEvent,
     ToolCallDeltaEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
     TurnStreamAssembler,
+    event_from_dict,
+    event_to_dict,
+    split_tool_identity,
+    synthesize_statuses,
 )
 from t0_agents.tooling import FilteredToolProvider
 
 __all__ = [
+    "CODEC_VERSION",
     "Agent",
     "AgentConfig",
     "AgentEvent",
@@ -111,10 +120,12 @@ __all__ = [
     "Run",
     "RunCancelledError",
     "RunContext",
+    "RunErrorEvent",
     "RunFailedError",
     "RunInput",
     "RunState",
     "RunUsage",
+    "Status",
     "StreamingAgentLoop",
     "StreamingOutput",
     "StructuredInferenceResult",
@@ -132,13 +143,18 @@ __all__ = [
     "ToolCallEvent",
     "ToolCallOutput",
     "ToolChoice",
+    "ToolProgressEvent",
     "ToolProvider",
     "ToolResultEvent",
     "TurnEndEvent",
     "TurnStreamAssembler",
     "__version__",
+    "event_from_dict",
+    "event_to_dict",
     "permissive_parse",
     "run_agent",
+    "split_tool_identity",
+    "synthesize_statuses",
 ]
 
 # Library best practice: prevent "No handler found" warnings.

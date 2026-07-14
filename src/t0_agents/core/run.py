@@ -29,13 +29,19 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from t0_agents.core._runtime import EventBuffer
 from t0_agents.core.exceptions import (
     ConfigurationError,
+    MaxTurnsExceededError,
     RunCancelledError,
     RunFailedError,
 )
 from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
 from t0_agents.core.types import AgentResult, RunUsage, Usage
-from t0_agents.stream.events import AgentEvent, DoneEvent, TextDeltaEvent
+from t0_agents.stream.events import (
+    AgentEvent,
+    DoneEvent,
+    RunErrorEvent,
+    TextDeltaEvent,
+)
 
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
@@ -54,6 +60,30 @@ RunState = Literal["pending", "running", "succeeded", "failed", "cancelled"]
   :class:`RunFailedError`.
 - ``"cancelled"`` — terminal: ``await run.result()`` raises :class:`RunCancelledError`.
 """
+
+
+def _as_run_error(exc: BaseException) -> RunErrorEvent:
+    """Map a drive-time failure to its terminal :class:`RunErrorEvent`.
+
+    ``message`` prefers the exception's ``text`` attribute when one is
+    set — ``TensorZeroError`` carries the provider's detailed error
+    fragments there while ``str(e)`` is often just a generic status
+    line — then falls back to ``str(exc)``, then to the class name
+    (bare exceptions like ``TimeoutError()`` stringify empty).  Known
+    loop-guard exceptions contribute structured ``detail`` so wire
+    consumers don't have to parse the human message.
+    """
+    detail: dict[str, Any] = {}
+    if isinstance(exc, MaxTurnsExceededError):
+        detail["max_turns"] = exc.max_turns
+    text = getattr(exc, "text", None)
+    message = (text if isinstance(text, str) else None) or str(exc) or exc.__class__.__name__
+    return RunErrorEvent(
+        error_type=exc.__class__.__name__,
+        message=message,
+        detail=detail,
+        exception=exc,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +391,7 @@ class Run(Generic[T]):
         self,
         *,
         replay: bool = False,
+        on_error: Literal["raise", "event"] = "raise",
     ) -> AsyncIterator[AgentEvent]:
         """Yield every :class:`AgentEvent` produced by this Run.
 
@@ -373,6 +404,14 @@ class Run(Generic[T]):
                 buffered event.  When ``False`` (default), yield from
                 the current live cursor — events emitted before the
                 subscription are skipped.
+            on_error: ``"raise"`` (default) re-raises drive-time
+                failures out of the iterator — same behaviour as
+                :meth:`result`.  ``"event"`` converts the failure into
+                a single terminal :class:`RunErrorEvent` instead, so
+                the stream upholds the invariant *every stream ends
+                with exactly one ``DoneEvent | RunErrorEvent``*.
+                Cancellation is never converted: it raises
+                :class:`RunCancelledError` in both modes.
         """
         if not self._output.supports_streaming:
             raise ConfigurationError(
@@ -386,30 +425,60 @@ class Run(Generic[T]):
         if self._task is None:
             self._start()
         start_cursor = 0 if replay else self._buffer.total_pushed
+        saw_done = False
         async for ev in self._buffer.iter_from(start_cursor=start_cursor):
+            if isinstance(ev, DoneEvent):
+                saw_done = True
             yield ev
         # Buffer is now closed.  Drive-time failures raise the
         # ORIGINAL exception (``GuardrailBlockedError``,
         # ``MaxTurnsExceededError``, ...) on the iterator — same
-        # behaviour as :meth:`result`.  Cancellation surfaces as
+        # behaviour as :meth:`result` — unless ``on_error="event"``
+        # asked for a terminal event.  Cancellation surfaces as
         # :class:`RunCancelledError` to give the iterator a uniform
         # terminal exception.
         if self._state == "failed" and self._exception is not None:
-            raise self._exception
+            if on_error == "raise":
+                raise self._exception
+            if not saw_done:
+                yield _as_run_error(self._exception)
+            return
         if self._state == "cancelled":
             raise RunCancelledError("Run was cancelled before completion")
 
-    async def stream_text(self) -> AsyncIterator[str]:
+    async def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
         """Yield only the assistant-text deltas as they arrive.
 
         Convenience wrapper around :meth:`events` that filters down to
         :class:`TextDeltaEvent` and yields the delta string.  Useful
         for UI surfaces that just want streaming text without the
         full event taxonomy.
+
+        Reasoning models (OpenAI o-series, ``gpt-oss`` via Harmony)
+        route the final answer through thought summaries and emit no
+        ``TextDeltaEvent`` at all.  With ``fallback=True`` (default) a
+        turn that streamed no non-blank delta yields the final
+        ``result.response`` once, after the stream drains — the
+        one-liner never renders an empty answer for a turn that
+        produced one.  ``fallback=False`` restores the raw filter.
+
+        Fatal errors raise out of the iterator; use :meth:`events`
+        with ``on_error="event"`` when you need a terminal event
+        instead.
         """
+        saw_text = False
+        result: AgentResult[Any] | None = None
         async for ev in self.events():
             if isinstance(ev, TextDeltaEvent):
+                if ev.delta.strip():
+                    saw_text = True
                 yield ev.delta
+            elif isinstance(ev, DoneEvent):
+                result = ev.result
+        if fallback and not saw_text and result is not None:
+            response = result.response
+            if response.strip():
+                yield response
 
     def __await__(self) -> Generator[Any, None, AgentResult[T]]:
         """Awaiting a Run is an alias for ``await run.result()``."""

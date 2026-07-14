@@ -23,8 +23,10 @@ value on the consumer side when it lands.
 
 See [Structured outputs — Why you cannot stream JSON
 functions](../structured-outputs.md#why-you-cannot-stream-json-functions)
-for the upstream rationale.  v1.1 may introduce a
-streaming-JSON-capable output mode; until then, no glow workaround.
+for the upstream rationale.  The gateway streams JSON functions as raw
+string deltas only (no `parsed` mid-stream), so a future
+streaming-JSON output mode would still parse client-side at the end;
+until one lands, no glow workaround.
 
 ## No `AsyncIterator` tools
 

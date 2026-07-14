@@ -1,8 +1,12 @@
-"""Glow streaming: live event selectors over an agent + tool loop.
+"""Glow streaming: the text one-liner, then live event selectors.
 
-Demonstrates :meth:`FluentRun.events`: filtered access to the
-underlying typed-event stream as the agent runs.  Three selectors
-are in flight at once:
+Part 1 — :meth:`FluentRun.stream_text`: the UI fast path.  Yields the
+assistant's text tokens as they arrive; reasoning models that route the
+answer through thought summaries (and stream no text deltas) still
+yield the final answer once, thanks to the built-in fallback.
+
+Part 2 — :meth:`FluentRun.events`: filtered access to the underlying
+typed-event stream.  Three selectors are in flight at once:
 
 - ``Thought`` — yields :class:`ThoughtEvent` (reasoning blocks the
   model emits when running on a thinking-capable variant).
@@ -10,10 +14,13 @@ are in flight at once:
   formatted string when the agent dispatches a tool call.  This is
   the ``.map()`` selector pattern: the underlying event is
   transformed before reaching the consumer.
-- ``Text`` — yields :class:`TextEndEvent` markers (one per
-  completed assistant text block).  The marker carries the block's
-  ``id`` only; for token-by-token streaming, use
-  ``Selector(TextDeltaEvent).map(lambda e: e.delta)`` instead.
+- ``Text.map(...)`` — ``Text`` selects :class:`TextDeltaEvent`, the
+  events that carry the actual tokens (the block-end marker is
+  reachable as ``TextEnd``).
+
+Glow streams never raise mid-iteration: a fatal failure arrives as a
+single terminal :class:`RunErrorEvent` instead (``on_error="event"`` is
+the glow default).
 
 The agent's loop reaches the tool through the App-owned in-memory
 FastMCP server; the ``@app.tool`` decorator registers ``get_weather``
@@ -36,7 +43,7 @@ from typing import cast
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import App, Text, Thought, ToolCall, llm
-from t0_agents.stream.events import TextEndEvent, ThoughtEvent
+from t0_agents.stream.events import ThoughtEvent
 
 # Approximate "current weather" the agent can consult.  Keeping the
 # data inline avoids a real HTTP call inside the example so the
@@ -70,19 +77,26 @@ async def main() -> None:
             return llm()
 
         async with app.lifespan():
-            run = forecaster("Quick — what's the weather in Tokyo?")
-            print("=== live event stream ===")
-            async for event in run.events(
+            print("=== stream_text: tokens as they arrive ===")
+            async for token in forecaster(
+                "Quick — what's the weather in Lisbon?"
+            ).stream_text():
+                print(token, end="", flush=True)
+            print()
+
+            print("\n=== live event stream ===")
+            async for event in forecaster(
+                "And in Tokyo?"
+            ).events(
                 Thought,
                 ToolCall.map(lambda tc: f"> calling {tc.name}"),
-                Text,
+                Text.map(lambda d: d.delta),
             ):
                 if isinstance(event, ThoughtEvent):
                     print(f"[thought] {event.text}")
-                elif isinstance(event, TextEndEvent):
-                    print(f"[text block {event.id} complete]")
-                else:  # ToolCall.map yielded a formatted string
-                    print(event)
+                else:  # both .map() selectors yielded strings
+                    print(event, end="", flush=True)
+            print()
 
     print("\nSUCCESS: streaming ran end-to-end.")
 

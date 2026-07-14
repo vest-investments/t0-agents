@@ -64,6 +64,7 @@ from t0_agents.core.types import (
     GuardrailLogEntry,
     MemoryProvider,
     RunUsage,
+    ToolProgressHandler,
     ToolProvider,
     Usage,
     decode_usage_meta,
@@ -529,8 +530,11 @@ class _UsageRollupToolProvider:
         arguments: dict[str, Any],
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> Any:
-        result = await self._inner.call_tool(name, arguments, timeout=timeout)
+        result = await self._inner.call_tool(
+            name, arguments, timeout=timeout, progress_handler=progress_handler
+        )
         child = decode_usage_meta(getattr(result, "meta", None))
         if child is not None:
             self._acc.input_tokens += child.input_tokens

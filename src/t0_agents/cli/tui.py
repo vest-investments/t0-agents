@@ -44,12 +44,14 @@ from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
     ErrorEvent,
+    RunErrorEvent,
     TextDeltaEvent,
     TextEndEvent,
     ThoughtDeltaEvent,
     ThoughtEvent,
     ToolCallDeltaEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
@@ -248,7 +250,13 @@ class TUIRenderer:
                 if eid not in self._tool_calls:
                     self._tool_order.append(eid)
                 existing["state"] = "error" if is_error else "ok"
+                existing.pop("progress", None)
                 self._tool_calls[eid] = existing
+            case ToolProgressEvent(id=eid, progress=progress, total=total, message=message):
+                call = self._tool_calls.get(eid)
+                if call is not None and call["state"] == "pending":
+                    pct = f"{progress / total:.0%}" if total else f"{progress:g}"
+                    call["progress"] = f"{pct} {message}" if message else pct
             case ToolCallDeltaEvent():
                 pass
             case ThoughtDeltaEvent(id=eid, delta=delta):
@@ -263,6 +271,8 @@ class TUIRenderer:
                     self._thoughts[eid] = text
             case ErrorEvent(message=message):
                 self._errors.append(message)
+            case RunErrorEvent(error_type=error_type, message=message):
+                self._errors.append(f"{error_type}: {message}")
             case TurnEndEvent():
                 pass
             case DoneEvent(result=result):
@@ -283,10 +293,13 @@ class TUIRenderer:
             args = call["args"]
             marker = {"pending": "🔧", "ok": "✓", "error": "❌"}[state]
             style = {"pending": "cyan", "ok": "green", "error": "red"}[state]
-            if args:
-                body.append(f"{marker} {name}({args})\n", style=style)
+            line = f"{marker} {name}({args})" if args else f"{marker} {name}"
+            progress = call.get("progress")
+            if progress:
+                body.append(line, style=style)
+                body.append(f"  [{progress}]\n", style="dim")
             else:
-                body.append(f"{marker} {name}\n", style=style)
+                body.append(f"{line}\n", style=style)
 
         for eid in self._thought_order:
             thought = self._thoughts[eid].rstrip("\n")

@@ -17,16 +17,37 @@ from t0_agents.core.structured import ParseStrategy
 
 
 @runtime_checkable
+class ToolProgressHandler(Protocol):
+    """Per-call progress relay: ``(progress, total, message)``.
+
+    Structurally identical to fastmcp's ``ProgressHandler`` /
+    ``mcp.shared.session.ProgressFnT`` — mirrored here (async ``__call__``
+    with the same keyword-passable parameter names) so ``core`` stays
+    fastmcp-import-free while ``fastmcp.Client`` still satisfies
+    :class:`ToolProvider` in both directions.  A provider that can observe
+    server-side progress notifications forwards each one to this handler;
+    providers that cannot simply ignore the kwarg.
+    """
+
+    async def __call__(
+        self, progress: float, total: float | None, message: str | None
+    ) -> None: ...
+
+
+@runtime_checkable
 class ToolProvider(Protocol):
     """Structural type for tool discovery and execution.
 
     Matches the slice of ``fastmcp.Client`` that the agent loop uses:
 
     - ``list_tools()`` — discover available tools at loop start.
-    - ``call_tool(name, arguments, *, timeout=...)`` — execute a single tool.
+    - ``call_tool(name, arguments, *, timeout=..., progress_handler=...)``
+      — execute a single tool, optionally relaying progress notifications.
 
     Any object implementing these two async methods satisfies the protocol,
-    enabling testing with fakes and future non-FastMCP providers.
+    enabling testing with fakes and future non-FastMCP providers.  Wrapper
+    providers must forward ``progress_handler`` to their inner provider or
+    progress dies at the wrapper boundary.
     """
 
     async def list_tools(self) -> list[Any]: ...
@@ -37,6 +58,7 @@ class ToolProvider(Protocol):
         arguments: dict[str, Any],
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> Any: ...
 
 

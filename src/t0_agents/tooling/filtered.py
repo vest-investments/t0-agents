@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from t0_agents.core.exceptions import T0AgentsError
-from t0_agents.core.types import ToolProvider
+from t0_agents.core.types import ToolProgressHandler, ToolProvider
 
 __all__ = ["FilteredToolProvider"]
 
@@ -49,10 +49,13 @@ class FilteredToolProvider:
         arguments: dict[str, Any],
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> Any:
         if name not in self._allow:
             raise T0AgentsError(
                 f"Tool {name!r} is not permitted for this agent "
                 f"(allowed: {sorted(self._allow)!r})"
             )
-        return await self._inner.call_tool(name, arguments, timeout=timeout)
+        return await self._inner.call_tool(
+            name, arguments, timeout=timeout, progress_handler=progress_handler
+        )

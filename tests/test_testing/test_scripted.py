@@ -88,16 +88,20 @@ class TestScriptedAgentRaises:
         with pytest.raises(RuntimeError, match="kaput"):
             await _drain(run)
 
-    async def test_a_raising_run_emits_no_events(self) -> None:
+    async def test_a_raising_run_replays_its_events_first(self) -> None:
+        # ``raises=`` models a mid-stream abort: scripted events are
+        # delivered, then the failure surfaces — the shape real fatal
+        # errors have.
+        scripted = TextDeltaEvent(id="t1", delta="partial")
         run = ScriptedAgent(
             raises=ValueError("x"),
-            events=[TextDeltaEvent(id="t1", delta="never")],
+            events=[scripted],
         ).invoke("q")
         collected: list[AgentEvent] = []
         with pytest.raises(ValueError):
             async for event in run.events():
                 collected.append(event)
-        assert collected == []
+        assert collected == [scripted]
 
 
 class TestGatewayFree:

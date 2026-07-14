@@ -28,9 +28,12 @@ from t0_agents.glow import (
     Done,
     Error,
     FluentRun,
+    RunError,
     Text,
+    TextEnd,
     Thought,
     ToolCall,
+    ToolProgress,
     ToolResult,
     TurnEnd,
 )
@@ -39,9 +42,12 @@ from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
     ErrorEvent,
+    RunErrorEvent,
+    TextDeltaEvent,
     TextEndEvent,
     ThoughtEvent,
     ToolCallEvent,
+    ToolProgressEvent,
     ToolResultEvent,
     TurnEndEvent,
 )
@@ -65,7 +71,11 @@ class _StreamFakeRun:
     def __init__(self, events: list[AgentEvent]) -> None:
         self._events = list(events)
 
-    async def events(self) -> AsyncIterator[AgentEvent]:
+    async def events(
+        self, *, on_error: str = "raise"
+    ) -> AsyncIterator[AgentEvent]:
+        # ``on_error`` accepted for signature parity with ``Run.events``;
+        # the fake never fails, so both modes behave identically.
         for event in self._events:
             yield event
 
@@ -84,6 +94,7 @@ def _make_fluent_run(events: list[AgentEvent]) -> FluentRun[Any]:
 
 
 # Sample events used across multiple tests.
+_TEXT_DELTA = TextDeltaEvent(id="t1", delta="Hel")
 _TEXT_END = TextEndEvent(id="t1")
 _TOOL_CALL = ToolCallEvent(id="c1", name="add", arguments={"a": 1, "b": 2})
 _TOOL_RESULT = ToolResultEvent(id="c1", name="add", result="3")
@@ -94,6 +105,8 @@ _DONE = DoneEvent(
     result=AgentResult(value="done", episode_id=None, inference_ids=[]),
 )
 _ERROR = ErrorEvent(message="boom")
+_RUN_ERROR = RunErrorEvent(error_type="ValueError", message="boom")
+_TOOL_PROGRESS = ToolProgressEvent(id="c1", progress=1.0, total=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +126,16 @@ async def test_tool_call_selector_picks_tool_call_events_only() -> None:
     assert out == [_TOOL_CALL]
 
 
-async def test_text_selector_picks_text_end_events_only() -> None:
-    fr = _make_fluent_run([_TEXT_END, _THOUGHT_FOO, _TOOL_CALL])
+async def test_text_selector_picks_text_delta_events_only() -> None:
+    # v2 retarget: ``Text`` selects the delta events that carry text.
+    fr = _make_fluent_run([_TEXT_DELTA, _TEXT_END, _THOUGHT_FOO, _TOOL_CALL])
     out = [e async for e in fr.events(Text)]
+    assert out == [_TEXT_DELTA]
+
+
+async def test_text_end_selector_keeps_the_old_binding() -> None:
+    fr = _make_fluent_run([_TEXT_DELTA, _TEXT_END, _THOUGHT_FOO])
+    out = [e async for e in fr.events(TextEnd)]
     assert out == [_TEXT_END]
 
 
@@ -173,6 +193,12 @@ async def test_remaining_selectors_match_their_event_types() -> None:
     fr = _make_fluent_run([_TEXT_END, _TOOL_RESULT, _TURN_END, _DONE, _ERROR])
     assert [e async for e in fr.events(Done)] == [_DONE]
 
+    fr = _make_fluent_run([_TEXT_END, _RUN_ERROR, _TOOL_PROGRESS, _DONE])
+    assert [e async for e in fr.events(RunError)] == [_RUN_ERROR]
+
+    fr = _make_fluent_run([_TEXT_END, _RUN_ERROR, _TOOL_PROGRESS, _DONE])
+    assert [e async for e in fr.events(ToolProgress)] == [_TOOL_PROGRESS]
+
     fr = _make_fluent_run([_TEXT_END, _TOOL_RESULT, _TURN_END, _DONE, _ERROR])
     assert [e async for e in fr.events(Error)] == [_ERROR]
 
@@ -197,4 +223,4 @@ def test_fluent_run_events_rejects_bare_event_class_with_clear_typeerror() -> No
     """
     fr = _make_fluent_run([_THOUGHT_FOO])
     with pytest.raises(TypeError, match="expected Selector instances"):
-        fr.events(ThoughtEvent)  # type: ignore[arg-type]
+        fr.events(ThoughtEvent)  # type: ignore[call-overload]

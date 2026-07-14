@@ -35,7 +35,11 @@ from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
 from t0_agents.core.exceptions import SubAgentError, T0AgentsFatalError
-from t0_agents.core.types import ToolProvider, encode_usage_meta
+from t0_agents.core.types import (
+    ToolProgressHandler,
+    ToolProvider,
+    encode_usage_meta,
+)
 from t0_agents.delegation.orchestrator import (
     PARENT_EPISODE_ID_TAG,
     get_parent_episode_id,
@@ -123,6 +127,7 @@ class SubAgentToolProvider:
         arguments: dict[str, Any] | None = None,
         *,
         timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
     ) -> CallToolResult:
         """Dispatch ``name`` to a sub-agent or fall through to ``inner``.
 
@@ -133,6 +138,10 @@ class SubAgentToolProvider:
         type; every other exception is wrapped in :class:`SubAgentError`
         so the orchestrator LLM sees a clean tool error and can retry or
         re-delegate.
+
+        ``progress_handler`` is forwarded on the fall-through path only:
+        a sub-agent runs its own agent loop in a separate context and has
+        no per-call progress channel to relay.
         """
         sub_agent = self._by_tool_name.get(name or "")
         if sub_agent is None:
@@ -140,7 +149,10 @@ class SubAgentToolProvider:
                 return cast(
                     CallToolResult,
                     await self._inner.call_tool(
-                        name, arguments or {}, timeout=timeout,
+                        name,
+                        arguments or {},
+                        timeout=timeout,
+                        progress_handler=progress_handler,
                     ),
                 )
             return _error_result(
