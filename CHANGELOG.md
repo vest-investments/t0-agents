@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **First-class conversations — `agent.conversation()` / `send()` (glow).**
+  A multi-turn handle over one TensorZero episode: `conv =
+  agent.conversation()` (or `agent.conversation(id=eid, hydrate=True)` to
+  resume), then `await conv.send("…")` — which returns the same `FluentRun[R]`
+  a call does, so `.stream_text()` / `.json()` / `.with_()` stay intact.
+  `conv.id` **equals the `episode_id`** (a UUIDv7 — the pinned P5 contract);
+  `conv.transcript` is the in-process boundary-pair record (each turn's final
+  reply, per `Run.transcript`'s limitation).  Sends are memory-strategy-aware:
+  `memory_strategy="messages"` passes only `episode_id` and lets the provider
+  weave history via `load_history` (also passing `prior_messages` would
+  suppress it), while any other agent gets the in-process transcript seeded as
+  `prior_messages` so multi-turn works everywhere.  `user=` / `tags=` set the
+  send tags **and** the hydrate/list read filter from one dict; a send left
+  unconsumed blocks the next.  `FluentRun` gained an additive `on_result` hook
+  (fires once on success across every consumption path) and a `consumed`
+  property.
+- **Dev-grade conversation listing — `app.conversations(agent, tags=…)` +
+  `TensorZeroMemory.list_conversations()`.**  Groups a bounded window of recent
+  inferences by `episode_id` client-side (there is no server-side aggregation
+  in 2026.4.0), returning newest-first `ConversationSummary` rows; the docstring
+  is explicit about the O(window) horizon and that `turn_count` is exact only
+  under `memory_strategy="messages"`.  For production scale, implement the new
+  `ConversationIndex` protocol (`t0_agents.core.conversation`) and pass it as
+  `app.conversations(index=…)` — the seam a real inbox plugs into with no
+  library change.
 - **`RunErrorEvent` + `Run.events(on_error=)` — the terminal-event
   invariant.**  `Run.events(on_error="event")` converts a fatal
   drive-time failure into a single terminal `RunErrorEvent`
