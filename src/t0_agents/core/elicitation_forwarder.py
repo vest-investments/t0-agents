@@ -77,8 +77,8 @@ def _response_type_from_schema(
     ``__name__`` (``"ScalarElicitationType"``) is unstable by design;
     the JSON-schema ``type`` the ``schema`` field already carries is the
     stable contract, so read it and map it to the Python name.  Falls
-    back to the schema ``title`` (structured models), then the generated
-    class ``__name__``.
+    back to the schema ``title`` (structured models), then the type's
+    ``__name__`` (or ``str()`` for an exotic alias with no ``__name__``).
     """
     if response_type is None:
         return None
@@ -92,7 +92,7 @@ def _response_type_from_schema(
         title = schema.get("title")
         if isinstance(title, str):
             return title
-    return response_type.__name__
+    return getattr(response_type, "__name__", None) or str(response_type)
 
 
 @dataclass(slots=True)

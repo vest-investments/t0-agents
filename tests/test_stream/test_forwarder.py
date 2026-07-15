@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any
 
 import pytest
@@ -42,7 +43,9 @@ async def test_handler_pushes_envelope_and_awaits_resolve() -> None:
     try:
         result = await forwarder.handler("pick a number", None, _FakeParams(), None)
     finally:
-        await resolver
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
 
     assert result.action == "accept"
     assert result.content == {"value": 42}
@@ -85,7 +88,9 @@ async def test_handler_normalizes_response_type_from_schema() -> None:
             "pick a number", ScalarElicitationType, _FakeParams(), None
         )
     finally:
-        await resolver
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
 
     # _FakeParams' schema wraps an integer → "int", not "ScalarElicitationType".
     assert received[0]["response_type"] == "int"
