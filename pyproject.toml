@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.2.3",
-    "tensorzero>=2026.4.0",
+    "tensorzero>=2026.6.0",
 ]
 
 [project.optional-dependencies]
