@@ -1178,3 +1178,104 @@ class TestHelperBranches:
         first_content = history[0]["content"]
         assert isinstance(first_content, list)
         assert isinstance(first_content[0], Text)
+
+
+# ---------------------------------------------------------------------------
+# list_conversations — dev-grade client-side group-by-episode
+# ---------------------------------------------------------------------------
+
+
+class TestListConversations:
+    async def test_groups_by_episode_newest_first(self) -> None:
+        chats = [
+            _stored_chat(
+                episode_id="ep_b",
+                user_messages=[
+                    _user_text_msg("B-first"),
+                    _assistant_text_msg("a1"),
+                    _user_text_msg("B-last"),
+                ],
+                timestamp="2026-05-02T10:00:00Z",
+            ),
+            _stored_chat(
+                episode_id="ep_a",
+                user_messages=[_user_text_msg("A-only")],
+                timestamp="2026-05-01T10:00:00Z",
+            ),
+        ]
+        t0 = FakeT0(
+            [], list_inferences_responses=[FakeListInferencesResponse(inferences=chats)]
+        )
+        summaries = await _make_memory(t0, function_name="chat").list_conversations()
+
+        assert [s.conversation_id for s in summaries] == ["ep_b", "ep_a"]
+        newest, oldest = summaries
+        # Cumulative input → title is the first user turn, preview the latest.
+        assert newest.title == "B-first"
+        assert newest.preview == "B-last"
+        assert newest.turn_count == 2
+        assert oldest.title == oldest.preview == "A-only"
+        assert oldest.turn_count == 1
+        assert isinstance(newest.updated_at, int)
+        assert newest.updated_at > oldest.updated_at
+
+    async def test_dedupes_multiple_inferences_of_one_episode(self) -> None:
+        # A tool loop produces >1 inference per episode; the newest one (with the
+        # most cumulative input) drives the single summary.
+        chats = [
+            _stored_chat(
+                episode_id="ep",
+                user_messages=[
+                    _user_text_msg("q1"),
+                    _assistant_text_msg("a1"),
+                    _user_text_msg("q2"),
+                ],
+                timestamp="2026-05-01T10:05:00Z",
+            ),
+            _stored_chat(
+                episode_id="ep",
+                user_messages=[_user_text_msg("q1")],
+                timestamp="2026-05-01T10:00:00Z",
+            ),
+        ]
+        t0 = FakeT0(
+            [], list_inferences_responses=[FakeListInferencesResponse(inferences=chats)]
+        )
+        summaries = await _make_memory(t0).list_conversations()
+
+        assert len(summaries) == 1
+        assert summaries[0].conversation_id == "ep"
+        assert summaries[0].preview == "q2"
+        assert summaries[0].turn_count == 2
+
+    async def test_limit_caps_returned_conversations(self) -> None:
+        chats = [
+            _stored_chat(
+                episode_id=f"ep{i}",
+                user_messages=[_user_text_msg(f"q{i}")],
+                timestamp=f"2026-05-0{i}T10:00:00Z",
+            )
+            for i in (1, 2, 3)
+        ]
+        t0 = FakeT0(
+            [], list_inferences_responses=[FakeListInferencesResponse(inferences=chats)]
+        )
+        summaries = await _make_memory(t0).list_conversations(limit=2)
+
+        assert [s.conversation_id for s in summaries] == ["ep3", "ep2"]
+
+    async def test_tags_scope_the_request_filter_and_window(self) -> None:
+        t0 = FakeT0(
+            [], list_inferences_responses=[FakeListInferencesResponse(inferences=[])]
+        )
+        await _make_memory(t0, function_name="chat").list_conversations(
+            tags={"customer_id": "c1"}, window=50
+        )
+
+        req = t0.list_inferences_calls[0]["request"]
+        assert req.function_name == "chat"
+        assert req.limit == 50
+        # A single tag builds a bare InferenceFilterTag (no And wrapper).
+        assert isinstance(req.filters, InferenceFilterTag)
+        assert req.filters.key == "customer_id"
+        assert req.filters.value == "c1"

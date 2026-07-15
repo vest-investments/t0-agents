@@ -39,7 +39,7 @@ import fnmatch
 import logging
 import os
 import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
@@ -55,6 +55,7 @@ from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
+from t0_agents.memory.tensorzero import TensorZeroMemory
 from t0_agents.tooling import FilteredToolProvider
 
 if TYPE_CHECKING:
@@ -62,8 +63,9 @@ if TYPE_CHECKING:
 
     from tensorzero import ToolChoice
 
+    from t0_agents.core.conversation import ConversationIndex, ConversationSummary
     from t0_agents.core.middleware.base import Middleware
-    from t0_agents.core.types import MemoryProvider
+    from t0_agents.core.types import AgentResult, MemoryProvider
     from t0_agents.glow.decorators import _AgentWrapper
 
 __all__ = ["App"]
@@ -630,6 +632,71 @@ class App:
         spec.agent = agent
         return agent
 
+    def _agent_invoke(
+        self,
+        agent: Agent,
+        message: str,
+        mode: Any,
+        call_kwargs: dict[str, Any],
+        *,
+        system_prompt: str | None,
+        spec_name: str,
+    ) -> Any:
+        """Resolve the templating triangle, then fire ``Agent.invoke``.
+
+        The shared body of every glow build closure: ``system_arguments``
+        (server-side templates), a raw ``system`` prompt, and ``prompt_vars``
+        (client-side ``str.format`` on the effective system string) are
+        mutually constrained in the TensorZero gateway, so exactly one path
+        through them is legal.  Extracted from :meth:`_invoke` so the plain
+        call path and the conversation send path (:meth:`_invoke_in_conversation`)
+        apply identical semantics.  ``call_kwargs`` is mutated (``prompt_vars``
+        and ``system`` are popped) — the caller passes the closure's own dict.
+        """
+        prompt_vars = call_kwargs.pop("prompt_vars", None)
+        if call_kwargs.get("system_arguments") is not None:
+            if call_kwargs.get("system") is not None:
+                raise ConfigurationError(
+                    "FluentRun.with_(): pass either system_arguments= "
+                    "(server-side template variables) or system= (a raw "
+                    "system prompt), not both — they are mutually "
+                    "exclusive in the TensorZero gateway."
+                )
+            if prompt_vars is not None:
+                raise ConfigurationError(
+                    "FluentRun.with_(): prompt_vars= (client-side "
+                    "str.format on the docstring/system prompt) and "
+                    "system_arguments= (TZ server-side templates) are "
+                    "mutually exclusive — pick one templating side."
+                )
+            return agent.invoke(message, output=mode, eager=False, **call_kwargs)
+        system = call_kwargs.pop("system", system_prompt)
+        if prompt_vars is not None:
+            if system is None:
+                raise ConfigurationError(
+                    f"FluentRun.with_(prompt_vars=...): agent "
+                    f"{spec_name!r} has no system prompt to format — "
+                    f"give the decorated function a docstring or pass "
+                    f"system= alongside."
+                )
+            try:
+                system = system.format(**prompt_vars)
+            except (IndexError, KeyError, ValueError) as exc:
+                raise ConfigurationError(
+                    f"FluentRun.with_(prompt_vars=...): the system "
+                    f"prompt of agent {spec_name!r} could not be "
+                    f"formatted: {exc!r}. Placeholders use str.format "
+                    f"syntax — every {{name}} needs a matching "
+                    f"prompt_vars key; literal braces need doubling."
+                ) from exc
+        return agent.invoke(
+            message,
+            output=mode,
+            eager=False,
+            system=system,
+            **call_kwargs,
+        )
+
     def _invoke(self, spec: _AgentSpec, message: str) -> FluentRun[Any]:
         """Build a :class:`FluentRun` over the underlying agent.
 
@@ -650,58 +717,13 @@ class App:
 
         def build(mode: Any, **call_kwargs: Any) -> Any:
             agent = self._lookup_or_build(spec)
-            # ``system_arguments`` (server-side template variables) and a
-            # raw ``system`` prompt are mutually exclusive in the
-            # TensorZero gateway.  Glow's implicit ``system`` is the
-            # docstring; when a caller supplies ``system_arguments`` via
-            # ``.with_()`` we drop the docstring so the gateway receives
-            # exactly one.  An explicit ``system=`` alongside
-            # ``system_arguments=`` is a caller error — raise noisily
-            # rather than silently pick one.  ``prompt_vars`` is the
-            # client-side counterpart: it formats the effective system
-            # string and never reaches ``Agent.invoke``.
-            prompt_vars = call_kwargs.pop("prompt_vars", None)
-            if call_kwargs.get("system_arguments") is not None:
-                if call_kwargs.get("system") is not None:
-                    raise ConfigurationError(
-                        "FluentRun.with_(): pass either system_arguments= "
-                        "(server-side template variables) or system= (a raw "
-                        "system prompt), not both — they are mutually "
-                        "exclusive in the TensorZero gateway."
-                    )
-                if prompt_vars is not None:
-                    raise ConfigurationError(
-                        "FluentRun.with_(): prompt_vars= (client-side "
-                        "str.format on the docstring/system prompt) and "
-                        "system_arguments= (TZ server-side templates) are "
-                        "mutually exclusive — pick one templating side."
-                    )
-                return agent.invoke(message, output=mode, eager=False, **call_kwargs)
-            system = call_kwargs.pop("system", system_prompt)
-            if prompt_vars is not None:
-                if system is None:
-                    raise ConfigurationError(
-                        f"FluentRun.with_(prompt_vars=...): agent "
-                        f"{spec.name!r} has no system prompt to format — "
-                        f"give the decorated function a docstring or pass "
-                        f"system= alongside."
-                    )
-                try:
-                    system = system.format(**prompt_vars)
-                except (IndexError, KeyError, ValueError) as exc:
-                    raise ConfigurationError(
-                        f"FluentRun.with_(prompt_vars=...): the system "
-                        f"prompt of agent {spec.name!r} could not be "
-                        f"formatted: {exc!r}. Placeholders use str.format "
-                        f"syntax — every {{name}} needs a matching "
-                        f"prompt_vars key; literal braces need doubling."
-                    ) from exc
-            return agent.invoke(
+            return self._agent_invoke(
+                agent,
                 message,
-                output=mode,
-                eager=False,
-                system=system,
-                **call_kwargs,
+                mode,
+                call_kwargs,
+                system_prompt=system_prompt,
+                spec_name=spec.name,
             )
 
         return FluentRun(
@@ -713,6 +735,92 @@ class App:
             ),
             prepare=prepare,
         )
+
+    def _invoke_in_conversation(
+        self,
+        spec: _AgentSpec,
+        message: str,
+        *,
+        episode_id: str,
+        tags: dict[str, str] | None,
+        prior_messages: Callable[[], Sequence[Mapping[str, Any]] | None] | None,
+        on_result: Callable[[AgentResult[Any]], None],
+        extra_prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> FluentRun[Any]:
+        """Build a :class:`FluentRun` for one turn of a :class:`Conversation`.
+
+        A sibling of :meth:`_invoke` that seeds the per-call invoke surface a
+        conversation owns — ``episode_id`` (pinned to ``conv.id``), ``tags``,
+        and an optional ``prior_messages`` snapshot resolved lazily at
+        consumption (so it reflects any hydration and prior recorded turns) —
+        then attaches the ``on_result`` recorder and folds an ``extra_prepare``
+        step (hydration) into the auto-build ``prepare`` hook.  Seeds ride
+        ``setdefault`` so an explicit ``.with_(episode_id=...)`` still wins, and
+        agent resolution stays deferred to first consumption (the M7 rule that
+        a config error surfaces at consumption, never at call).
+        """
+        system_prompt = spec.system_prompt
+
+        async def prepare() -> None:
+            await self._ensure_ready_for(spec)
+            if extra_prepare is not None:
+                await extra_prepare()
+
+        def build(mode: Any, **call_kwargs: Any) -> Any:
+            agent = self._lookup_or_build(spec)
+            call_kwargs.setdefault("episode_id", episode_id)
+            if tags:
+                call_kwargs.setdefault("tags", dict(tags))
+            if prior_messages is not None:
+                seeded = prior_messages()
+                if seeded:
+                    call_kwargs.setdefault("prior_messages", seeded)
+            return self._agent_invoke(
+                agent,
+                message,
+                mode,
+                call_kwargs,
+                system_prompt=system_prompt,
+                spec_name=spec.name,
+            )
+
+        return FluentRun(
+            build,
+            spec.output_mode,
+            value_transform=spec.value_transform,
+            known_servers=tuple(
+                s.namespace for s in self._mcp_specs if s.namespace is not None
+            ),
+            prepare=prepare,
+            on_result=on_result,
+        )
+
+    async def conversations(
+        self,
+        agent: _AgentWrapper[Any, Any],
+        *,
+        tags: Mapping[str, str] | None = None,
+        limit: int = 20,
+        index: ConversationIndex | None = None,
+    ) -> list[ConversationSummary]:
+        """List ``agent``'s recent conversations, newest first.
+
+        **Dev-grade by default**: builds a
+        :class:`~t0_agents.memory.tensorzero.TensorZeroMemory` over the App
+        gateway and groups a bounded window of recent inferences client-side —
+        see :meth:`TensorZeroMemory.list_conversations` for the exact horizon
+        and ``turn_count`` guarantees.  Pass ``index=`` — any
+        :class:`~t0_agents.core.conversation.ConversationIndex` — to delegate
+        to a production inbox instead; that is the seam a real store plugs into
+        with no further glow change.  ``tags`` scopes the listing (e.g.
+        ``tags={"customer_id": cid}``), aligning read filters with the write
+        tags a :class:`~t0_agents.glow.conversation.Conversation` stamps.
+        """
+        if index is not None:
+            return list(await index.list_conversations(tags=tags, limit=limit))
+        t0 = await self._ensure_t0()
+        memory = TensorZeroMemory(t0, function_name=agent._spec.function_name)
+        return list(await memory.list_conversations(tags=tags, limit=limit))
 
     async def build(self) -> None:
         """Eagerly construct every registered agent and connect the Client.

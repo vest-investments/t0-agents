@@ -33,7 +33,7 @@ from t0_agents.core.outputs.structured import StructuredOutput
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow.selectors import Selector
-from t0_agents.stream.events import AgentEvent
+from t0_agents.stream.events import AgentEvent, DoneEvent
 from t0_agents.stream.status import Status, synthesize_statuses
 
 if TYPE_CHECKING:
@@ -102,6 +102,7 @@ class FluentRun(Generic[T]):
         value_transform: Callable[[Any], T] | None = None,
         known_servers: tuple[str, ...] = (),
         prepare: Callable[[], Awaitable[None]] | None = None,
+        on_result: Callable[[AgentResult[Any]], None] | None = None,
     ) -> None:
         self._build: Callable[..., Run[Any]] = build
         # Awaited once before the build closure fires (see _ensure_run).
@@ -130,6 +131,15 @@ class FluentRun(Generic[T]):
         # payload.  Per-call overrides (.text / .json / .as_) deliberately
         # reset the transform — the user has opted out of the default shape.
         self._value_transform: Callable[[Any], T] | None = value_transform
+        # Fired exactly once with the raw terminal ``AgentResult`` when the run
+        # completes successfully, via whichever consumption path drains it
+        # (result()/await, stream_text(), events()).  glow's Conversation
+        # installs it to append the boundary turn to ``conv.transcript`` and
+        # release the sequential-send guard; a failed / cancelled run never
+        # fires it (the failure surfaces to the consumer instead).  Propagated
+        # across .with_()/.text()/.json()/.as_() like ``prepare``.
+        self._on_result: Callable[[AgentResult[Any]], None] | None = on_result
+        self._fired: bool = False
 
     # ------------------------------------------------------------------
     # Fluent overrides — every override returns a fresh ``FluentRun``
@@ -199,6 +209,7 @@ class FluentRun(Generic[T]):
             value_transform=self._value_transform,
             known_servers=self._known_servers,
             prepare=self._prepare,
+            on_result=self._on_result,
         )
         new._has_override = self._has_override
         new._call_kwargs = {**self._call_kwargs, **call_kwargs}
@@ -216,6 +227,8 @@ class FluentRun(Generic[T]):
         ``value_transform`` is deliberately dropped (a per-call output
         override opts out of the default shape), but any ``.with_()``
         call kwargs are propagated so ``.with_(...).json(M)`` keeps them.
+        The ``on_result`` hook rides along too (like ``prepare``) so a
+        ``conv.send(x).json(M)`` chain still records the turn.
         """
         if self._has_override:
             logger.debug(
@@ -228,6 +241,7 @@ class FluentRun(Generic[T]):
             new_output,
             known_servers=self._known_servers,
             prepare=self._prepare,
+            on_result=self._on_result,
         )
         new._has_override = True
         new._call_kwargs = dict(self._call_kwargs)
@@ -253,6 +267,35 @@ class FluentRun(Generic[T]):
                 await self._prepare()
             self._run = self._build(self._chosen_output, **self._call_kwargs)
         return self._run
+
+    def _fire(self, result: AgentResult[Any]) -> None:
+        """Invoke the ``on_result`` hook exactly once, if one is installed.
+
+        Called from every *successful* terminal consumption path —
+        :meth:`result`, the tail of :meth:`stream_text`, and on the
+        :class:`~t0_agents.stream.events.DoneEvent` seen by :meth:`events` — so
+        a streamed send records identically to an awaited one.  The ``_fired``
+        latch makes it fire-once regardless of how many paths (or how many
+        repeat calls) drain the same cached Run.  ``result`` is the raw core
+        :class:`AgentResult` (before any glow ``value_transform``); a failed or
+        cancelled run never reaches here, so the hook only ever sees successes.
+        """
+        if self._on_result is None or self._fired:
+            return
+        self._fired = True
+        self._on_result(result)
+
+    @property
+    def consumed(self) -> bool:
+        """Whether consumption has begun — the underlying Run has been built.
+
+        ``True`` once ``await`` / :meth:`result` / the first iteration of
+        :meth:`events` / :meth:`stream_text` has fired the build closure (via
+        :meth:`_ensure_run`).  glow's
+        :class:`~t0_agents.glow.conversation.Conversation` reads it to enforce
+        sequential sends — a send left unconsumed blocks the next one.
+        """
+        return self._run is not None
 
     @overload
     def events(
@@ -346,11 +389,33 @@ class FluentRun(Generic[T]):
 
         async def _stream() -> AsyncIterator[Any]:
             run = await self._ensure_run()
-            source: AsyncIterator[Any] = run.events(on_error=on_error)
+            captured: AgentResult[Any] | None = None
+
+            async def _tap() -> AsyncIterator[AgentEvent]:
+                # Capture the terminal AgentResult off the DoneEvent so the
+                # on_result hook fires from the streamed path too — read here,
+                # before any selector can filter DoneEvent out.  A failed
+                # stream yields RunErrorEvent (no DoneEvent), leaving
+                # ``captured`` None, so the hook does not fire on failure.
+                nonlocal captured
+                async for ev in run.events(on_error=on_error):
+                    if isinstance(ev, DoneEvent):
+                        captured = ev.result
+                    yield ev
+
+            source: AsyncIterator[Any] = _tap()
             if selectors:
                 source = _filter_with_selectors(source, selectors)
-            async for item in source:
-                yield item
+            try:
+                async for item in source:
+                    yield item
+            finally:
+                # Fire even if the consumer breaks early (GeneratorExit skips
+                # the code after the loop): once the terminal DoneEvent was
+                # tapped the turn completed and must record — the vest-ai
+                # record-in-finally pattern.  ``_fire`` is latched (fire-once).
+                if captured is not None:
+                    self._fire(captured)
 
         return _stream()
 
@@ -371,6 +436,10 @@ class FluentRun(Generic[T]):
             run = await self._ensure_run()
             async for chunk in run.stream_text(fallback=fallback):
                 yield chunk
+            # Reached only when no fatal error raised out of the iterator
+            # (stream_text raises on failure) ⇒ the run succeeded ⇒ the
+            # captured result is available for the on_result hook.
+            self._fire(await run.result())
 
         return _stream()
 
@@ -407,6 +476,7 @@ class FluentRun(Generic[T]):
         """
         run = await self._ensure_run()
         raw = await run.result()
+        self._fire(raw)
         if self._value_transform is None:
             return cast(AgentResult[T], raw)
         # ``replace`` (vs a field-by-field copy) carries over every

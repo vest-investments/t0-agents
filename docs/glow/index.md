@@ -58,7 +58,11 @@ companions live under [`examples/glow/`](../../examples/glow/).
    Includes `app.lifespan()` / `build()` / `shutdown()` and the
    drop-down recipes for middleware, custom `OutputMode`, hand-rolled
    event handling, and the `cancel()` / `fork()` / `replay()` surface.
-6. **[Known limitations](limitations.md)** — what's deferred to
+6. **[Conversations](conversations.md)** — saying a second thing:
+   `agent.conversation()` / `send()`, the pinned `conv.id ==
+   episode_id`, `conv.transcript`, memory-strategy-aware history,
+   `hydrate=` resume, and `app.conversations(...)` listing.
+7. **[Known limitations](limitations.md)** — what's deferred to
    v1.1: streaming JSON, per-agent MCP subsets, AsyncIterator tools,
    sync API.
 

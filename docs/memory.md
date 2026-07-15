@@ -485,6 +485,21 @@ and `Unknown` blocks are dropped with a single warning per call.
 `save` is a no-op: TZ wrote the row at inference time. `search`
 returns `[]` unless opted in via `experimental_search=True`.
 
+`list_conversations(*, tags=None, limit=20, window=…)` is a **dev-grade**
+conversation index: it groups a bounded window of recent inferences by
+`episode_id` client-side (there is no server-side per-episode aggregation in
+TensorZero 2026.4.0) and returns newest-first `ConversationSummary` rows
+(`conversation_id`, `title`, `preview`, `turn_count`, `updated_at`). It is
+honest about the cost — O(window), conversations older than the window are not
+listed, and `turn_count` is exact only under `memory_strategy="messages"` (where
+the gateway accumulates the whole episode into the latest input). It satisfies
+the `ConversationIndex` protocol (`t0_agents.core.conversation`), so it is the
+default behind glow's `app.conversations(agent, tags=…)`; for production scale,
+implement that protocol over your own store and pass it as
+`app.conversations(index=…)`. glow's [`conversations`](glow/conversations.md)
+page covers the multi-turn `agent.conversation()` / `send()` handle built on
+`load_history` and this listing.
+
 ### `AgentConfig` fields
 
 ```python
