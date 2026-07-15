@@ -44,6 +44,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from fastmcp import Client, FastMCP
+from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.server import create_proxy
 from tensorzero import AsyncTensorZeroGateway
 
@@ -167,6 +168,27 @@ def _resolve_tool_filter(
     return allow
 
 
+def _remote_target(spec: MCPServerSpec) -> str | StreamableHttpTransport | SSETransport:
+    """Resolve a ``url`` spec to what :func:`create_proxy` should wrap.
+
+    A bare URL lets ``create_proxy`` infer the transport (the default, and
+    the no-auth path).  ``headers``/``auth`` cannot ride an inferred
+    transport, so when either is set build the explicit transport named by
+    ``spec.transport`` (``"http"`` / ``"sse"``) carrying them.
+    """
+    url = cast(str, spec.url)  # xor-validated: non-None whenever server is None
+    if spec.headers is None and spec.auth is None:
+        return url
+    if spec.transport == "sse":
+        return SSETransport(url, headers=spec.headers, auth=spec.auth)
+    if spec.transport == "http":
+        return StreamableHttpTransport(url, headers=spec.headers, auth=spec.auth)
+    raise ConfigurationError(
+        f"MCPServer(url={url!r}): headers=/auth= require transport 'http' "
+        f"or 'sse', got {spec.transport!r}."
+    )
+
+
 class App:
     """Glow application — registry + lifecycle for ``@app.agent`` decorators.
 
@@ -210,7 +232,7 @@ class App:
         t0: AsyncTensorZeroGateway | None = None,
         gateway: str | None = None,
         embedded: str | None = None,
-        servers: list[type[MCPServer]] | None = None,
+        servers: list[type[MCPServer] | MCPServer] | None = None,
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
@@ -313,13 +335,19 @@ class App:
         # to the same class) — ``FastMCP.mount`` is idempotent on
         # identical mounts and namespacing keeps tool names collision-free.
         self._mcp_specs: list[MCPServerSpec] = []
-        for server_cls in servers or []:
-            if not (isinstance(server_cls, type) and issubclass(server_cls, MCPServer)):
+        for entry in servers or []:
+            if isinstance(entry, MCPServer):
+                # An instance carries per-mount config (e.g. url + headers/
+                # auth) without a module-level subclass — the shape the
+                # authed-remote-mount use case needs.
+                self._mcp_specs.append(entry._to_spec())
+            elif isinstance(entry, type) and issubclass(entry, MCPServer):
+                self._mcp_specs.append(entry._mcp_spec)
+            else:
                 raise ConfigurationError(
-                    f"App(servers=...): every entry must be a subclass of "
-                    f"MCPServer; got {server_cls!r}."
+                    f"App(servers=...): every entry must be an MCPServer "
+                    f"subclass or instance; got {entry!r}."
                 )
-            self._mcp_specs.append(server_cls._mcp_spec)
 
     # ------------------------------------------------------------------
     # Decorator surface — delegates to ``glow.decorators._make_decorator``
@@ -893,10 +921,10 @@ class App:
                         backend = mcp_spec.server
                     else:
                         # ``mcp_spec.url`` is guaranteed non-None when
-                        # ``mcp_spec.server`` is None — MCPServer's
-                        # ``__init__`` / ``__init_subclass__`` enforces
-                        # the xor.
-                        backend = create_proxy(mcp_spec.url)  # type: ignore[arg-type]
+                        # ``mcp_spec.server`` is None (xor-enforced).
+                        # ``_remote_target`` returns a bare URL, or an
+                        # explicit transport carrying headers=/auth=.
+                        backend = create_proxy(_remote_target(mcp_spec))
                     server.mount(backend, namespace=mcp_spec.namespace)
             # Enter the owned Client only if it exists — sub-agents-only
             # apps that never registered a tool or an MCPServer spec
