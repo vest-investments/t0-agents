@@ -26,10 +26,7 @@ Prerequisites:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import Any, cast
-
-from tensorzero import AsyncTensorZeroGateway
+from typing import Any
 
 from t0_agents.glow import App, llm
 
@@ -41,62 +38,56 @@ async def _visible_tools(wrapper: Any) -> set[str]:
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    app = App(gateway="http://localhost:3000")
 
-    async with await gateway as t0:
-        app = App(t0=t0)
+    @app.tool
+    async def get_weather(city: str) -> str:
+        """Current weather for a city."""
+        return f"sunny in {city}"
 
-        @app.tool
-        async def get_weather(city: str) -> str:
-            """Current weather for a city."""
-            return f"sunny in {city}"
+    @app.tool
+    async def get_quote(symbol: str) -> str:
+        """Latest price for a ticker."""
+        return f"{symbol}: 100.00"
 
-        @app.tool
-        async def get_quote(symbol: str) -> str:
-            """Latest price for a ticker."""
-            return f"{symbol}: 100.00"
+    @app.tool
+    async def place_order(symbol: str, qty: int) -> str:
+        """DANGER: places a real order."""
+        return f"ordered {qty} {symbol}"
 
-        @app.tool
-        async def place_order(symbol: str, qty: int) -> str:
-            """DANGER: places a real order."""
-            return f"ordered {qty} {symbol}"
+    # Explicit callables — sees exactly these two; never place_order.
+    @app.agent("analyst", tools=[get_weather, get_quote])
+    async def analyst(q: str) -> str:
+        """A read-only market analyst."""
+        return llm()
 
-        # Explicit callables — sees exactly these two; never place_order.
-        @app.agent("analyst", tools=[get_weather, get_quote])
-        async def analyst(q: str) -> str:
-            """A read-only market analyst."""
-            return llm()
+    # Glob — every get_* tool, still no place_order.
+    @app.agent("trader", tools=["get_*"])
+    async def trader(q: str) -> str:
+        """A trader that can read but (here) not place orders."""
+        return llm()
 
-        # Glob — every get_* tool, still no place_order.
-        @app.agent("trader", tools=["get_*"])
-        async def trader(q: str) -> str:
-            """A trader that can read but (here) not place orders."""
-            return llm()
+    # No tools= — the back-compatible "sees everything" agent.
+    @app.agent("generalist")
+    async def generalist(q: str) -> str:
+        """Sees every composed tool."""
+        return llm()
 
-        # No tools= — the back-compatible "sees everything" agent.
-        @app.agent("generalist")
-        async def generalist(q: str) -> str:
-            """Sees every composed tool."""
-            return llm()
+    async with app:
+        analyst_tools = await _visible_tools(analyst)
+        trader_tools = await _visible_tools(trader)
+        generalist_tools = await _visible_tools(generalist)
 
-        async with app.lifespan():
-            analyst_tools = await _visible_tools(analyst)
-            trader_tools = await _visible_tools(trader)
-            generalist_tools = await _visible_tools(generalist)
+        print(f"analyst    sees: {sorted(analyst_tools)}")
+        print(f"trader     sees: {sorted(trader_tools)}")
+        print(f"generalist sees: {sorted(generalist_tools)}")
 
-            print(f"analyst    sees: {sorted(analyst_tools)}")
-            print(f"trader     sees: {sorted(trader_tools)}")
-            print(f"generalist sees: {sorted(generalist_tools)}")
-
-            assert analyst_tools == {"get_weather", "get_quote"}
-            assert trader_tools == {"get_weather", "get_quote"}
-            assert generalist_tools == {"get_weather", "get_quote", "place_order"}
-            assert "place_order" not in analyst_tools, (
-                "order-placement tool leaked to the analyst agent"
-            )
+        assert analyst_tools == {"get_weather", "get_quote"}
+        assert trader_tools == {"get_weather", "get_quote"}
+        assert generalist_tools == {"get_weather", "get_quote", "place_order"}
+        assert "place_order" not in analyst_tools, (
+            "order-placement tool leaked to the analyst agent"
+        )
 
     print("\nSUCCESS: per-agent tools= filtering ran end-to-end.")
 

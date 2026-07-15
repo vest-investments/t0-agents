@@ -34,7 +34,10 @@ exposes itself on ``wrapper._agent`` for escape-hatch use.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
+import logging
+import os
 import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -55,6 +58,8 @@ from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
 from t0_agents.tooling import FilteredToolProvider
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from tensorzero import ToolChoice
 
     from t0_agents.core.middleware.base import Middleware
@@ -62,6 +67,8 @@ if TYPE_CHECKING:
     from t0_agents.glow.decorators import _AgentWrapper
 
 __all__ = ["App"]
+
+logger = logging.getLogger(__name__)
 
 # Sentinel telling ``@app.agent`` "caller omitted this knob" apart from an
 # explicit ``None`` — which is a meaningful value for e.g. ``tool_choice`` /
@@ -191,12 +198,44 @@ class App:
         self,
         *,
         t0: AsyncTensorZeroGateway | None = None,
+        gateway: str | None = None,
+        embedded: str | None = None,
         servers: list[type[MCPServer]] | None = None,
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
     ) -> None:
+        # Gateway sources — at most one of the three constructor forms:
+        #   t0=        an already-built AsyncTensorZeroGateway (caller owns it)
+        #   gateway=   an HTTP gateway URL     -> build_http, App-owned
+        #   embedded=  a tensorzero.toml path  -> build_embedded, App-owned
+        # None of the three defers resolution to the first build():
+        # TENSORZERO_URL -> TENSORZERO_CONFIG -> clear error (but only when
+        # some agent actually needs a gateway — fully-overridden Apps never
+        # resolve).  See :meth:`_ensure_t0`.
+        provided = [
+            name
+            for name, value in (("t0", t0), ("gateway", gateway), ("embedded", embedded))
+            if value is not None
+        ]
+        if len(provided) > 1:
+            raise ConfigurationError(
+                f"App(...): pass at most one of t0=, gateway=, embedded= — "
+                f"got {' and '.join(provided)}."
+            )
         self._t0: AsyncTensorZeroGateway | None = t0
+        self._gateway_source: tuple[Literal["http", "embedded"], str] | None = (
+            ("http", gateway)
+            if gateway is not None
+            else ("embedded", embedded)
+            if embedded is not None
+            else None
+        )
+        # True when the App resolved (and therefore owns) the gateway —
+        # owned gateways ride ``_exit_stack`` and are closed by
+        # :meth:`shutdown`; a caller-supplied ``t0=`` is never entered
+        # or closed by the App.
+        self._owns_t0: bool = False
         # App-level ``AgentConfig`` defaults, layered *under* per-agent
         # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
         # ``tags`` dict-merge with agent-level keys winning; ``namespace``
@@ -227,6 +266,17 @@ class App:
         self._owned_client: Client[Any] | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_entered: bool = False
+        # Auto-build latch: True after a successful :meth:`build`, reset
+        # by :meth:`shutdown`.  Consumption goes through
+        # :meth:`_ensure_ready_for`, which triggers one full build (with
+        # an INFO log) when the App was never explicitly booted.
+        self._started: bool = False
+        # Serializes the boot sequence (gateway resolution, MCP mounts,
+        # client entry) against concurrent first consumptions — e.g.
+        # ``asyncio.gather`` over several agents of an unstarted App.
+        # ``asyncio.Lock()`` is loop-agnostic at construction on
+        # Python ≥ 3.10, so module-level Apps are safe.
+        self._boot_lock: asyncio.Lock = asyncio.Lock()
 
         # The :class:`DependencyResolver` instance lives here so it can
         # consult ``self.dependency_overrides`` directly during
@@ -281,6 +331,7 @@ class App:
         ] = _UNSET,
         middleware: list[Middleware] | None = _UNSET,
         tools: list[Any] | None = None,
+        replace: bool = False,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
         """Return the ``@app.agent("name")`` decorator factory.
 
@@ -319,6 +370,10 @@ class App:
         ``tools=[]`` is explicitly toolless.  Patterns matching no live
         tool warn at :meth:`build`.  Sub-agent ``<name>_ask`` tools are
         never filtered.
+
+        ``replace=True`` re-registers over an existing name instead of
+        raising the duplicate-name error — the REPL/notebook
+        re-decoration affordance (pairs with :meth:`remove_agent`).
         """
         # Imported lazily to break the import cycle between
         # ``glow.app`` and ``glow.decorators`` (the latter imports
@@ -349,6 +404,7 @@ class App:
             function_name=function_name,
             config_overrides=config_overrides,
             tools=tools,
+            replace=replace,
         )
 
     def tool(self, fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -372,6 +428,22 @@ class App:
 
         return _make_tool_decorator(self)(fn)
 
+    def remove_agent(self, name: str) -> None:
+        """Drop the agent registered under ``name`` — the REPL affordance.
+
+        Frees the name for a fresh ``@app.agent(name)`` registration
+        (pairs with ``@app.agent(name, replace=True)``).  Wrapper
+        objects from the removed registration keep working — they hold
+        their own spec; only the registry entry is detached.  Raises
+        :class:`ConfigurationError` when the name is not registered.
+        """
+        if name not in self._agent_registry:
+            raise ConfigurationError(
+                f"App.remove_agent({name!r}): no agent is registered under "
+                f"this name.  Registered: {sorted(self._agent_registry)!r}."
+            )
+        del self._agent_registry[name]
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -388,6 +460,74 @@ class App:
             self._mcp_server = FastMCP("glow-app")
             self._owned_client = Client(self._mcp_server)
         return self._mcp_server
+
+    def _needs_gateway(self) -> bool:
+        """True when some registered agent will require a real gateway.
+
+        Mirrors :meth:`_lookup_or_build`'s short-circuits: an agent whose
+        name has an ``agent_overrides`` entry, or whose spec already
+        carries a built :class:`Agent`, never touches the gateway.  Used
+        by :meth:`build` so a deferred-source App (bare ``App()``) only
+        resolves — and only *errors* on unresolvable — when a gateway is
+        genuinely needed.
+        """
+        return any(
+            spec.agent is None and spec.name not in self.agent_overrides
+            for spec in self._agent_registry.values()
+        )
+
+    async def _ensure_t0(self) -> AsyncTensorZeroGateway:
+        """Return the gateway, resolving and taking ownership on first need.
+
+        Resolution order: an explicit ``t0=`` (never entered or closed by
+        the App) → the constructor source (``gateway=`` → ``build_http``,
+        ``embedded=`` → ``build_embedded``) → the environment
+        (``TENSORZERO_URL`` → ``TENSORZERO_CONFIG``) → a
+        :class:`ConfigurationError` naming every option.  Resolved
+        gateways are entered on the App's exit stack so
+        :meth:`shutdown` closes them; ``self._t0`` is reset afterwards so
+        a later :meth:`build` re-resolves cleanly.
+
+        The SDK's builders return ``Union[Awaitable[gateway], gateway]``
+        (keyed off ``async_setup``, default True) — the cast below is the
+        single place glow absorbs that union.
+        """
+        if self._t0 is not None:
+            return self._t0
+        source: tuple[Literal["http", "embedded"], str]
+        if self._gateway_source is not None:
+            source = self._gateway_source
+        else:
+            url = os.environ.get("TENSORZERO_URL")
+            config = os.environ.get("TENSORZERO_CONFIG")
+            if url:
+                source = ("http", url)
+            elif config:
+                source = ("embedded", config)
+            else:
+                raise ConfigurationError(
+                    "App has no gateway to build agents with: pass t0= (an "
+                    "AsyncTensorZeroGateway), gateway= (an HTTP gateway URL), "
+                    "or embedded= (a tensorzero.toml path) to App(...), or "
+                    "set TENSORZERO_URL / TENSORZERO_CONFIG in the "
+                    "environment."
+                )
+        kind, value = source
+        if kind == "http":
+            awaitable = cast(
+                "Awaitable[AsyncTensorZeroGateway]",
+                AsyncTensorZeroGateway.build_http(gateway_url=value),
+            )
+        else:
+            awaitable = cast(
+                "Awaitable[AsyncTensorZeroGateway]",
+                AsyncTensorZeroGateway.build_embedded(config_file=value),
+            )
+        gw = await awaitable
+        await self._exit_stack.enter_async_context(gw)
+        self._t0 = gw
+        self._owns_t0 = True
+        return gw
 
     def _resolve_config_overrides(self, spec: _AgentSpec) -> dict[str, Any]:
         """Layer App-level defaults under the agent-level ``config_overrides``.
@@ -438,9 +578,11 @@ class App:
         t0 = self._t0
         if t0 is None:
             raise ConfigurationError(
-                f"App(t0=None) cannot build agent {spec.name!r}: no gateway "
-                f"was provided.  Pass t0= to App(...), or register an override "
-                f"for every agent via app.agent_overrides."
+                f"App cannot build agent {spec.name!r}: no gateway is "
+                f"available.  Pass t0=, gateway=, or embedded= to App(...), "
+                f"set TENSORZERO_URL / TENSORZERO_CONFIG in the environment, "
+                f"or register an override for every agent via "
+                f"app.agent_overrides."
             )
         sub_agents: list[Agent] = [
             self._lookup_or_build(sub_spec) for sub_spec in spec.sub_agent_specs
@@ -491,16 +633,23 @@ class App:
     def _invoke(self, spec: _AgentSpec, message: str) -> FluentRun[Any]:
         """Build a :class:`FluentRun` over the underlying agent.
 
-        The build closure is captured here so :class:`FluentRun` can
-        defer the :meth:`Agent.invoke` call until either ``__await__``,
-        ``.result()``, or ``.events(...)`` fires.  Per-call overrides
-        (.text / .json / .as_) swap the :class:`OutputMode` *before*
-        the closure is consumed.
+        Everything is deferred to first consumption: the ``prepare``
+        hook (glow's auto-build, :meth:`_ensure_ready_for`) readies the
+        App, then the build closure resolves the underlying
+        :class:`Agent` and fires :meth:`Agent.invoke`.  Calling the
+        wrapper is therefore free of side effects — a deferred-source
+        ``App()`` can hand out handles before any gateway exists, and
+        nothing (agent, tool filter) is cached before the App is built.
+        Per-call overrides (.text / .json / .as_) swap the
+        :class:`OutputMode` *before* the closure is consumed.
         """
-        agent = self._lookup_or_build(spec)
         system_prompt = spec.system_prompt
 
+        async def prepare() -> None:
+            await self._ensure_ready_for(spec)
+
         def build(mode: Any, **call_kwargs: Any) -> Any:
+            agent = self._lookup_or_build(spec)
             # ``system_arguments`` (server-side template variables) and a
             # raw ``system`` prompt are mutually exclusive in the
             # TensorZero gateway.  Glow's implicit ``system`` is the
@@ -562,6 +711,7 @@ class App:
             known_servers=tuple(
                 s.namespace for s in self._mcp_specs if s.namespace is not None
             ),
+            prepare=prepare,
         )
 
     async def build(self) -> None:
@@ -573,7 +723,32 @@ class App:
         ``main()`` or inside :meth:`lifespan` so configuration errors
         (forward-ref resolution, invalid ``function_name``, MCP
         connection failures) surface before any user invocation kicks
-        off network traffic.
+        off network traffic.  (Auto-build via consumption boots the
+        same infrastructure but constructs agents lazily per spec —
+        see :meth:`_ensure_ready_for`.)
+        """
+        async with self._boot_lock:
+            # Resolve the gateway first so it sits UNDER the client on the
+            # exit stack (LIFO close: client, then gateway).  A constructor
+            # source (gateway=/embedded=) always resolves; the deferred form
+            # (bare App()) resolves only when some agent will need it — a
+            # fully-overridden App keeps working with no gateway and no env.
+            if self._t0 is None and (
+                self._gateway_source is not None or self._needs_gateway()
+            ):
+                await self._ensure_t0()
+            await self._start()
+            for agent_spec in self._agent_registry.values():
+                self._lookup_or_build(agent_spec)
+
+    async def _start(self) -> None:
+        """Boot the App infrastructure — everything except agent construction.
+
+        Mounts MCP specs, enters the owned Client, and resolves every
+        registered ``tools=`` filter against the live tool list.  Sets
+        the ``_started`` latch.  Shared by the eager :meth:`build` and
+        the consumption-time auto-build, which constructs only the
+        agents actually consumed.
         """
         if not self._client_entered:
             # Materialise the FastMCP pair only when there's at least
@@ -621,23 +796,104 @@ class App:
                 agent_spec.resolved_tools = _resolve_tool_filter(
                     agent_spec.name, agent_spec.tools, live_names
                 )
-        for agent_spec in self._agent_registry.values():
-            self._lookup_or_build(agent_spec)
+        self._started = True
 
     async def shutdown(self) -> None:
-        """Disconnect the owned Client.  Idempotent.
+        """Disconnect the owned Client and close any owned gateway.  Idempotent.
 
         Closes the internal :class:`AsyncExitStack`, which exits the
-        ``Client.__aexit__`` registered by :meth:`build`.  Safe to call
-        multiple times — the stack is replaced after each close so a
-        subsequent :meth:`build` re-enters cleanly.  Required after
-        any non-:meth:`lifespan` :meth:`build` to avoid leaking the
-        in-process FastMCP transport task across test boundaries.
+        ``Client.__aexit__`` registered by :meth:`build` and the owned
+        gateway entered by :meth:`_ensure_t0` (LIFO — client first, then
+        gateway).  A caller-supplied ``t0=`` is never closed.  Safe to
+        call multiple times — the stack is replaced after each close so
+        a subsequent :meth:`build` re-enters (and, for owned gateways,
+        re-resolves) cleanly.  Required after any non-:meth:`lifespan`
+        :meth:`build` to avoid leaking the in-process FastMCP transport
+        task across test boundaries.
         """
-        if self._client_entered:
+        if self._client_entered or self._owns_t0:
             await self._exit_stack.aclose()
             self._exit_stack = AsyncExitStack()
             self._client_entered = False
+            if self._owns_t0:
+                self._t0 = None
+                self._owns_t0 = False
+        self._started = False
+
+    def _spec_needs_construction(self, spec: _AgentSpec) -> bool:
+        """True when consuming ``spec`` will construct a real Agent."""
+        return spec.agent is None and spec.name not in self.agent_overrides
+
+    async def _ensure_ready_for(self, spec: _AgentSpec) -> None:
+        """Ready the App for consuming ``spec`` — glow's auto-build.
+
+        The first consumption boots the App infrastructure
+        (INFO-logged): gateway resolution *when this spec needs
+        construction*, MCP mounts, client connection, and ``tools=``
+        filter resolution — so nothing is ever cached half-booted (the
+        old silently-toolless / disconnected-client traps).  Unlike the
+        explicit boot bracket (``async with app:`` / :meth:`build`),
+        auto-build constructs agents lazily per consumed spec: an App
+        whose consumed agents are all overridden keeps running with no
+        gateway at all, and a misconfigured agent only fails its own
+        consumption.  On an already-started App, a spec registered
+        later (REPL ``replace=True``) gets its gateway and ``tools=``
+        filter resolved late, before it builds.
+        """
+        # Hot-path fast exit: once started, only a spec with an
+        # unresolved ``tools=`` filter has boot work left.  ``_started``
+        # flips only under the boot lock, so this pre-check is safe.
+        if self._started and not (
+            spec.tools is not None and spec.resolved_tools is None
+        ):
+            return
+        async with self._boot_lock:
+            if not self._started:
+                logger.info(
+                    "glow App auto-building on first consumption (%d agent(s) "
+                    "registered); use `async with app:` for explicit lifecycle "
+                    "control.",
+                    len(self._agent_registry),
+                )
+            if self._t0 is None and (
+                (not self._started and self._gateway_source is not None)
+                or self._spec_needs_construction(spec)
+            ):
+                await self._ensure_t0()
+            if not self._started:
+                await self._start()
+                return
+            if (
+                spec.tools is not None
+                and spec.resolved_tools is None
+                and self._owned_client is not None
+                and self._client_entered
+            ):
+                live_names = {
+                    tool.name for tool in await self._owned_client.list_tools()
+                }
+                spec.resolved_tools = _resolve_tool_filter(
+                    spec.name, spec.tools, live_names
+                )
+
+    async def __aenter__(self) -> App:
+        """``async with app:`` — build on entry, shut down on exit.
+
+        The boot bracket for scripts and services; byte-equivalent to
+        ``async with app.lifespan():`` with one less call.  Auto-build
+        (:meth:`_ensure_ready_for`) makes even this optional for
+        notebooks and REPLs — the bracket buys deterministic teardown.
+        """
+        await self.build()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.shutdown()
 
     @asynccontextmanager
     async def lifespan(self) -> AsyncIterator[None]:
@@ -646,9 +902,9 @@ class App:
         Pattern lifted from FastAPI: ``async with app.lifespan(): ...``
         enters the owned Client, eagerly constructs each registered
         agent, yields control to the caller, then unconditionally
-        disconnects on exit (even if the body raises).  This is the
-        recommended way to use :class:`App` because it makes the
-        Client lifecycle bullet-proof.
+        disconnects on exit (even if the body raises).  ``async with
+        app:`` is the equivalent shorthand; both make the Client (and
+        any App-owned gateway) lifecycle bullet-proof.
         """
         await self.build()
         try:

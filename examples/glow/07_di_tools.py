@@ -25,11 +25,8 @@ Prerequisites:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from typing import Any, cast
-
-from tensorzero import AsyncTensorZeroGateway
+from typing import Any
 
 from t0_agents.glow import App, Depends
 
@@ -42,59 +39,53 @@ class InMemoryDB:
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    app = App(gateway="http://localhost:3000")
 
-    async with await gateway as t0:
-        app = App(t0=t0)
+    def get_db() -> InMemoryDB:
+        """Real production provider — returns a populated DB."""
+        return InMemoryDB(orders={"o1": "Order #1 — A book", "o2": "Order #2 — A pen"})
 
-        def get_db() -> InMemoryDB:
-            """Real production provider — returns a populated DB."""
-            return InMemoryDB(orders={"o1": "Order #1 — A book", "o2": "Order #2 — A pen"})
+    @app.tool
+    async def lookup_order(
+        order_id: str,
+        db: Any = Depends(get_db),
+    ) -> str:
+        """Look up an order by ID."""
+        return db.orders.get(order_id, f"<no order: {order_id}>")
 
-        @app.tool
-        async def lookup_order(
-            order_id: str,
-            db: Any = Depends(get_db),
-        ) -> str:
-            """Look up an order by ID."""
-            return db.orders.get(order_id, f"<no order: {order_id}>")
+    async with app:
+        # The MCP Client lets us probe the tool surface directly.
+        # In real deployments the LLM would call this tool inside
+        # the agent loop; here we exercise the round-trip in
+        # isolation to highlight the Depends injection / override
+        # mechanic.
+        tools = await app._owned_client.list_tools()
+        advertised_params = sorted(
+            tools[0].inputSchema.get("properties", {}).keys()
+        )
+        print(f"Advertised tool params: {advertised_params}")
+        assert advertised_params == ["order_id"], (
+            "`db` Depends param leaked into the JSON Schema."
+        )
 
-        async with app.lifespan():
-            # The MCP Client lets us probe the tool surface directly.
-            # In real deployments the LLM would call this tool inside
-            # the agent loop; here we exercise the round-trip in
-            # isolation to highlight the Depends injection / override
-            # mechanic.
-            tools = await app._owned_client.list_tools()
-            advertised_params = sorted(
-                tools[0].inputSchema.get("properties", {}).keys()
-            )
-            print(f"Advertised tool params: {advertised_params}")
-            assert advertised_params == ["order_id"], (
-                "`db` Depends param leaked into the JSON Schema."
-            )
+        # Real path.
+        result = await app._owned_client.call_tool(
+            "lookup_order", {"order_id": "o1"}
+        )
+        real_text = result.content[0].text
+        print(f"Real DB:  {real_text}")
+        assert real_text == "Order #1 — A book"
 
-            # Real path.
-            result = await app._owned_client.call_tool(
-                "lookup_order", {"order_id": "o1"}
-            )
-            real_text = result.content[0].text
-            print(f"Real DB:  {real_text}")
-            assert real_text == "Order #1 — A book"
-
-            # Install an override and re-call — the tool sees the mock.
-            app.dependency_overrides[get_db] = lambda: InMemoryDB(
-                orders={"o1": "[MOCKED in test override]"},
-            )
-            result = await app._owned_client.call_tool(
-                "lookup_order", {"order_id": "o1"}
-            )
-            mock_text = result.content[0].text
-            print(f"Mock DB:  {mock_text}")
-            assert mock_text == "[MOCKED in test override]"
+        # Install an override and re-call — the tool sees the mock.
+        app.dependency_overrides[get_db] = lambda: InMemoryDB(
+            orders={"o1": "[MOCKED in test override]"},
+        )
+        result = await app._owned_client.call_tool(
+            "lookup_order", {"order_id": "o1"}
+        )
+        mock_text = result.content[0].text
+        print(f"Mock DB:  {mock_text}")
+        assert mock_text == "[MOCKED in test override]"
 
     print("\nSUCCESS: di-tools ran end-to-end.")
 

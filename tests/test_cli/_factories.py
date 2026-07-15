@@ -17,6 +17,7 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.output import OutputMode
 from t0_agents.core.run import Run, RunInput
 from t0_agents.core.types import AgentResult, ToolProvider
+from t0_agents.glow import App as GlowApp
 from t0_agents.stream.events import AgentEvent, DoneEvent
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0
@@ -175,3 +176,53 @@ def emit_agent_result(response: str = "ok", episode_id: str | None = None) -> Ag
         inference_ids=[],
         turns=1,
     )
+
+
+# ---------------------------------------------------------------------------
+# Glow App specs (M7) — module-level Apps the loader must adapt.
+# Overrides make them gateway-free; the scripted agents read the same
+# SCRIPTED_* registries as `scripted_factory`, so the conftest reset
+# fixture covers them too.
+# ---------------------------------------------------------------------------
+
+
+def _scripted(name: str) -> _ScriptedAgent:
+    return _ScriptedAgent(
+        AgentConfig(name=name, function_name="agent", max_turns=3),
+        t0=cast(Any, FakeT0(responses=[])),
+        tool_provider=cast(ToolProvider, FakeMCPClient()),
+    )
+
+
+glow_app = GlowApp()
+"""Single-agent glow App — the loader's sole-agent default path."""
+
+
+@glow_app.agent("solo")
+async def _solo(query: str) -> str:  # type: ignore[empty-body]
+    """Scripted solo agent."""
+
+
+glow_app.agent_overrides["solo"] = _scripted("solo")
+
+
+glow_app_two = GlowApp()
+"""Two-agent glow App — exercises --agent selection and its errors."""
+
+
+@glow_app_two.agent("alpha")
+async def _alpha(query: str) -> str:  # type: ignore[empty-body]
+    """Alpha."""
+
+
+@glow_app_two.agent("beta")
+async def _beta(query: str) -> str:  # type: ignore[empty-body]
+    """Beta."""
+
+
+glow_app_two.agent_overrides["alpha"] = _scripted("alpha")
+glow_app_two.agent_overrides["beta"] = _scripted("beta")
+
+
+glow_app_empty = GlowApp()
+"""Glow App with no registered agents — the loader must reject it."""

@@ -45,55 +45,45 @@ in a larger graph.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import cast
-
-from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import AgentHandle, App, Depends, llm
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    app = App(gateway="http://localhost:3000")
 
-    async with await gateway as t0:
-        app = App(t0=t0)
+    @app.agent("researcher")
+    async def researcher(query: str) -> str:
+        """Summarize the requested topic in a single sentence."""
+        return llm()
 
-        @app.agent("researcher")
-        async def researcher(query: str) -> str:
-            """Summarize the requested topic in a single sentence."""
-            return llm()
+    @app.agent("writer")
+    async def writer(query: str) -> str:
+        """Format the provided summary as a single markdown bullet."""
+        return llm()
 
-        @app.agent("writer")
-        async def writer(query: str) -> str:
-            """Format the provided summary as a single markdown bullet."""
-            return llm()
+    @app.agent("orchestrator", function_name="orchestrator", max_turns=8)
+    async def orchestrator(
+        query: str,
+        research: AgentHandle[..., str] = Depends(researcher),
+        write: AgentHandle[..., str] = Depends(writer),
+    ) -> str:
+        """Coordinate research then formatting via the available _ask tools.
 
-        @app.agent("orchestrator", function_name="orchestrator", max_turns=8)
-        async def orchestrator(
-            query: str,
-            research: AgentHandle[..., str] = Depends(researcher),
-            write: AgentHandle[..., str] = Depends(writer),
-        ) -> str:
-            """Coordinate research then formatting via the available _ask tools.
+        Call researcher_ask first with the topic, then writer_ask
+        with the researcher's output, and return the writer's
+        output verbatim.
+        """
+        return llm()
 
-            Call researcher_ask first with the topic, then writer_ask
-            with the researcher's output, and return the writer's
-            output verbatim.
-            """
-            return llm()
+    async with app:
+        topic = (
+            "transformer architectures for retrieval-augmented generation"
+        )
+        response = await orchestrator(topic)
 
-        async with app.lifespan():
-            topic = (
-                "transformer architectures for retrieval-augmented generation"
-            )
-            response = await orchestrator(topic)
-
-        print("=== Orchestrator output ===")
-        print(response)
+    print("=== Orchestrator output ===")
+    print(response)
 
 
 if __name__ == "__main__":

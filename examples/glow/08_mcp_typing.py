@@ -29,11 +29,9 @@ you'd also need an auth header configured (out of scope here).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from typing import Any, cast
+from typing import Any
 
 from fastmcp import FastMCP
-from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.glow import App, MCPServer, llm
 
@@ -67,35 +65,29 @@ class MathMCP(MCPServer, server=_MATH_SERVER, namespace="math"):
 
 
 async def main() -> None:
-    gateway = cast(
-        Awaitable[AsyncTensorZeroGateway],
-        AsyncTensorZeroGateway.build_http(gateway_url="http://localhost:3000"),
-    )
+    # ``servers=[MathMCP]`` seeds the App's spec list at construction
+    # time.  The same effect can be obtained by mentioning ``MathMCP``
+    # as a typed parameter on any ``@app.agent`` function; both
+    # paths converge in ``app._mcp_specs``.
+    app = App(gateway="http://localhost:3000", servers=[MathMCP])
 
-    async with await gateway as t0:
-        # ``servers=[MathMCP]`` seeds the App's spec list at construction
-        # time.  The same effect can be obtained by mentioning ``MathMCP``
-        # as a typed parameter on any ``@app.agent`` function; both
-        # paths converge in ``app._mcp_specs``.
-        app = App(t0=t0, servers=[MathMCP])
+    @app.agent("calc")
+    async def calc(query: str) -> str:
+        """Math assistant.  Use the available `math_add` tool to
+        compute sums.  Reply with the integer result only."""
+        return llm()
 
-        @app.agent("calc")
-        async def calc(query: str) -> str:
-            """Math assistant.  Use the available `math_add` tool to
-            compute sums.  Reply with the integer result only."""
-            return llm()
+    async with app:
+        # Verify the mounted tool is visible to the composed Client.
+        tools = await app._owned_client.list_tools()
+        tool_names = sorted(t.name for t in tools)
+        print(f"Visible tools: {tool_names}")
+        assert "math_add" in tool_names, (
+            "math_add not mounted; check namespace handling"
+        )
 
-        async with app.lifespan():
-            # Verify the mounted tool is visible to the composed Client.
-            tools = await app._owned_client.list_tools()
-            tool_names = sorted(t.name for t in tools)
-            print(f"Visible tools: {tool_names}")
-            assert "math_add" in tool_names, (
-                "math_add not mounted; check namespace handling"
-            )
-
-            response = await calc("What is 2 + 2?  Use math_add.")
-            print(f"\nResponse: {response}")
+        response = await calc("What is 2 + 2?  Use math_add.")
+        print(f"\nResponse: {response}")
 
     print("\nSUCCESS: mcp-typing ran end-to-end.")
 

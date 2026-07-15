@@ -64,3 +64,46 @@ def test_loader_callable_non_agent_is_accepted() -> None:
         "tests.test_cli._factories:not_a_factory",
     )
     assert callable(factory)
+
+
+# ---------------------------------------------------------------------------
+# Glow App specs (M7)
+# ---------------------------------------------------------------------------
+
+_GLOW_SPEC = "tests.test_cli._factories:glow_app"
+_GLOW_TWO_SPEC = "tests.test_cli._factories:glow_app_two"
+_GLOW_EMPTY_SPEC = "tests.test_cli._factories:glow_app_empty"
+
+
+async def test_glow_app_spec_yields_the_sole_agent() -> None:
+    factory = load_agent_factory(_GLOW_SPEC)
+    async with factory() as agent:
+        assert agent.config.name == "solo"
+
+
+async def test_glow_app_selection_by_agent_name() -> None:
+    factory = load_agent_factory(_GLOW_TWO_SPEC, agent_name="beta")
+    async with factory() as agent:
+        assert agent.config.name == "beta"
+
+
+def test_glow_app_with_two_agents_requires_agent_flag() -> None:
+    with pytest.raises(typer.BadParameter, match="--agent"):
+        load_agent_factory(_GLOW_TWO_SPEC)
+
+
+def test_glow_app_unknown_agent_lists_available() -> None:
+    with pytest.raises(typer.BadParameter, match="alpha, beta"):
+        load_agent_factory(_GLOW_TWO_SPEC, agent_name="ghost")
+
+
+def test_glow_app_without_agents_is_rejected() -> None:
+    with pytest.raises(typer.BadParameter, match="no registered agents"):
+        load_agent_factory(_GLOW_EMPTY_SPEC)
+
+
+def test_agent_flag_on_a_classic_factory_is_rejected() -> None:
+    with pytest.raises(typer.BadParameter, match="glow App"):
+        load_agent_factory(
+            "tests.test_cli._factories:fake_factory", agent_name="solo"
+        )

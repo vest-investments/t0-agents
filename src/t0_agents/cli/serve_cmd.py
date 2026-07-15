@@ -17,7 +17,14 @@ def register(app: typer.Typer) -> None:
     def serve_cmd(
         agent_spec: str = typer.Argument(
             ...,
-            help="Factory spec in 'module:attr' form.",
+            help="Factory spec in 'module:attr' form, or a glow App "
+            "instance (e.g. 'mymodule:app').",
+        ),
+        agent: str | None = typer.Option(
+            None,
+            "--agent",
+            help="Agent to serve when the spec is a glow App with several "
+            "registered agents (defaults to the sole registered one).",
         ),
         host: str = typer.Option("0.0.0.0", help="Host to bind."),
         port: int = typer.Option(8080, help="Port to listen on."),
@@ -55,7 +62,7 @@ def register(app: typer.Typer) -> None:
         ``ctx.elicit`` — then SSE works and WS is only an unused
         endpoint.
         """
-        asyncio.run(_serve(agent_spec, host, port, streaming, deployment))
+        asyncio.run(_serve(agent_spec, host, port, streaming, deployment, agent))
 
 
 async def _serve(
@@ -64,12 +71,13 @@ async def _serve(
     port: int,
     streaming: bool,
     deployment: str | None,
+    agent_name: str | None = None,
 ) -> None:
     import uvicorn
 
     from t0_agents.serve import create_app
 
-    factory = load_agent_factory(spec)
+    factory = load_agent_factory(spec, agent_name=agent_name)
     console = Console()
     async with factory() as agent:
         await agent.warmup()

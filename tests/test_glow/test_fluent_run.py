@@ -1,9 +1,10 @@
 """Unit tests for :class:`t0_agents.glow.handle.FluentRun`.
 
-Seven cases (no TZ gateway): plain ``await``, ``.json()`` / ``.json(M)``
+Cases (no TZ gateway): plain ``await``, ``.json()`` / ``.json(M)``
 override, ``.json(A).json(B)`` last-wins + DEBUG log, ``.text().json(M)``
-swap, ``.events()`` builds eagerly + ``await`` reuses, and the
-``result()`` escape hatch.
+swap, ``.events()`` defers the build to first consumption + ``await``
+reuses, the ``prepare`` auto-build hook (M7 seam), and the ``result()``
+escape hatch.
 """
 
 from __future__ import annotations
@@ -204,14 +205,20 @@ async def test_text_then_json_swaps_freely() -> None:
     assert chosen.model is _ModelA
 
 
-async def test_events_builds_eagerly_and_await_reuses_run() -> None:
+async def test_events_defers_build_and_await_reuses_run() -> None:
+    """M7 boot collapse: the build fires on first *consumption*, not at
+    the ``.events()`` call — and every consumer shares the one Run."""
     captured: list[OutputMode[Any]] = []
     fake = _FakeRun(value="streamed")
     fr: FluentRun[str] = FluentRun(_make_build(captured, fake), ChatOutput())
 
-    # `.events()` is a sync method that fires the build closure NOW so
-    # the subsequent `await` joins the same cached buffer.
+    # `.events()` only wraps: no build until the stream is iterated.
     iterator = fr.events()
+    assert captured == []
+
+    # Draining the (empty) stream is the first consumption — it builds.
+    async for _ in iterator:  # pragma: no cover - empty stream
+        pass
     assert len(captured) == 1
 
     val = await fr
@@ -219,9 +226,60 @@ async def test_events_builds_eagerly_and_await_reuses_run() -> None:
     # The build closure must not have fired a second time.
     assert len(captured) == 1
 
-    # Drain the (empty) iterator so the async generator finalises.
-    async for _ in iterator:  # pragma: no cover - empty stream
-        pass
+
+async def test_prepare_hook_awaited_once_before_build() -> None:
+    """The M7 seam: ``prepare`` runs before the build closure, exactly once."""
+    order: list[str] = []
+    fake = _FakeRun(value="ready")
+
+    async def prepare() -> None:
+        order.append("prepare")
+
+    def build(mode: OutputMode[Any], **call_kwargs: Any) -> Run[Any]:
+        order.append("build")
+        return cast(Run[Any], fake)
+
+    fr: FluentRun[str] = FluentRun(build, ChatOutput(), prepare=prepare)
+
+    assert await fr == "ready"
+    assert order == ["prepare", "build"]
+
+    # Second consumption joins the cached Run — no second prepare/build.
+    await fr.result()
+    assert order == ["prepare", "build"]
+
+
+async def test_prepare_hook_propagates_through_with_and_output_overrides() -> None:
+    order: list[str] = []
+    fake = _FakeRun(value='{"value_a": "x"}')
+
+    async def prepare() -> None:
+        order.append("prepare")
+
+    def build(mode: OutputMode[Any], **call_kwargs: Any) -> Run[Any]:
+        order.append("build")
+        return cast(Run[Any], fake)
+
+    fr: FluentRun[str] = FluentRun(build, ChatOutput(), prepare=prepare)
+
+    # .with_() and .json(M) each spawn a NEW FluentRun — the hook must ride along.
+    chained = fr.with_(episode_id="ep_1").json(_ModelA)
+    await chained.result()
+    assert order == ["prepare", "build"]
+
+
+async def test_events_selector_validation_stays_eager_and_skips_prepare() -> None:
+    """A bad selector raises at the ``.events()`` call — before any boot."""
+    prepared: list[bool] = []
+
+    async def prepare() -> None:  # pragma: no cover - must not run
+        prepared.append(True)
+
+    fr: FluentRun[str] = FluentRun(_make_build(), ChatOutput(), prepare=prepare)
+
+    with pytest.raises(TypeError, match="expected Selector instances"):
+        fr.events(cast(Any, str))
+    assert prepared == []
 
 
 async def test_result_returns_full_agent_result() -> None:

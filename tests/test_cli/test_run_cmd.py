@@ -102,3 +102,41 @@ def test_run_keyboard_interrupt_at_prompt_exits_cleanly(
     result = runner.invoke(app, ["run", _SCRIPTED_SPEC])
     assert result.exit_code == 0, result.output
     assert "bye" in result.output
+
+
+# ---------------------------------------------------------------------------
+# One-shot message + glow App specs (M7)
+# ---------------------------------------------------------------------------
+
+_GLOW_SPEC = "tests.test_cli._factories:glow_app"
+
+
+def test_run_one_shot_message_renders_and_exits() -> None:
+    _factories.SCRIPTED_TURNS.append(
+        [
+            TextDeltaEvent(id="t-1", delta="one-shot reply"),
+            DoneEvent(result=_factories.emit_agent_result("one-shot reply", "ep-1")),
+        ],
+    )
+    runner = CliRunner()
+    # No stdin at all: the one-shot path must never prompt.
+    result = runner.invoke(app, ["run", _SCRIPTED_SPEC, "just this"])
+    assert result.exit_code == 0, result.output
+    assert "one-shot reply" in result.output
+    assert len(_factories.SCRIPTED_CALLS) == 1
+    assert _factories.SCRIPTED_CALLS[0]["user_message"] == "just this"
+
+
+def test_run_glow_app_spec_one_shot_with_agent_flag() -> None:
+    _factories.SCRIPTED_TURNS.append(
+        [
+            TextDeltaEvent(id="t-1", delta="from glow"),
+            DoneEvent(result=_factories.emit_agent_result("from glow")),
+        ],
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["run", _GLOW_SPEC, "hola", "--agent", "solo"])
+    assert result.exit_code == 0, result.output
+    assert "from glow" in result.output
+    assert len(_factories.SCRIPTED_CALLS) == 1
+    assert _factories.SCRIPTED_CALLS[0]["user_message"] == "hola"

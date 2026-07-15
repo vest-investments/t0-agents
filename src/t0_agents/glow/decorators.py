@@ -158,6 +158,7 @@ def _make_decorator(
     function_name: str | None,
     config_overrides: dict[str, Any] | None = None,
     tools: list[Any] | None = None,
+    replace: bool = False,
 ) -> Callable[[Callable[P, Awaitable[R]]], _AgentWrapper[P, R]]:
     """Build the decorator returned by ``App.agent(name)``.
 
@@ -168,12 +169,18 @@ def _make_decorator(
     in the return annotation surface here as :class:`ConfigurationError`
     (raised by :func:`output_mode_from_return_type`) before the wrapper
     can be called.
+
+    ``replace=True`` opts out of the duplicate-name check and overwrites
+    the registry entry — the REPL/notebook re-decoration affordance.
+    Wrappers from the prior registration keep working against their own
+    (now detached) spec.
     """
-    if name in app._agent_registry:
+    if not replace and name in app._agent_registry:
         raise ConfigurationError(
             f"Duplicate agent name {name!r} — the App registry already "
             f"contains an agent registered under this name.  Pick a unique "
-            f"name or remove the prior registration."
+            f"name, pass replace=True (the REPL re-decoration affordance), "
+            f"or remove the prior registration via app.remove_agent()."
         )
 
     def decorator(fn: Callable[P, Awaitable[R]]) -> _AgentWrapper[P, R]:

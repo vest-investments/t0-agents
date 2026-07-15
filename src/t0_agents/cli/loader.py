@@ -47,8 +47,8 @@ from __future__ import annotations
 import importlib
 import os
 import sys
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, TypeAlias, cast
 
 import typer
@@ -83,13 +83,19 @@ that satisfies the protocol works (including plain classes implementing
 """
 
 
-def load_agent_factory(spec: str) -> AgentFactory:
+def load_agent_factory(spec: str, *, agent_name: str | None = None) -> AgentFactory:
     """Resolve ``module:attr`` to an :data:`AgentFactory`.
 
     Args:
         spec: A ``module.path:attribute`` string.  The attribute must be
             a zero-argument callable whose ``()`` invocation returns an
-            async context manager yielding an :class:`Agent`.
+            async context manager yielding an :class:`Agent`, **or a
+            glow** :class:`~t0_agents.glow.app.App` instance — the CLI
+            adapts it into a factory that enters ``async with app:``
+            and yields the selected agent's underlying ``Agent``.
+        agent_name: For glow ``App`` specs with several registered
+            agents, the one to run.  Defaults to the sole registered
+            agent; passing it with a non-``App`` spec is an error.
 
     Returns:
         The resolved factory, ready to call as ``async with
@@ -99,7 +105,8 @@ def load_agent_factory(spec: str) -> AgentFactory:
         typer.BadParameter: If the spec is malformed, the module is not
             importable, the attribute is missing, the attribute is a
             bare :class:`Agent` instance (error message points at the
-            factory idiom), or the attribute is not callable.
+            factory idiom), the attribute is not callable, or the glow
+            agent selection is ambiguous/unknown.
     """
     if ":" not in spec:
         raise typer.BadParameter(
@@ -149,6 +156,21 @@ def load_agent_factory(spec: str) -> AgentFactory:
             "            yield Agent(config, t0=t0, tool_provider=client)",
         )
 
+    # Glow App instances are adapted, not rejected — checked before the
+    # callable test (App defines no __call__).  Imported lazily: glow
+    # rides the [glow] extra (pydantic), the loader must import clean
+    # without it until an App spec is actually used.
+    from t0_agents.glow.app import App as _GlowApp
+
+    if isinstance(obj, _GlowApp):
+        return _factory_from_glow_app(obj, spec, agent_name)
+
+    if agent_name is not None:
+        raise typer.BadParameter(
+            f"--agent only applies when the spec resolves to a glow App; "
+            f"{spec!r} resolves to {type(obj).__name__}."
+        )
+
     if not callable(obj):
         raise typer.BadParameter(
             f"{spec!r} resolves to {type(obj).__name__}, but the CLI "
@@ -157,3 +179,41 @@ def load_agent_factory(spec: str) -> AgentFactory:
         )
 
     return cast(AgentFactory, cast(Any, obj))
+
+
+def _factory_from_glow_app(
+    glow_app: Any, spec: str, agent_name: str | None
+) -> AgentFactory:
+    """Adapt a glow ``App`` into the CLI's Agent-factory contract.
+
+    Agent selection is validated eagerly (clear errors before any
+    boot).  The returned factory enters ``async with glow_app:`` —
+    gateway resolution, MCP mounts, client connection, ``tools=``
+    filters — yields the selected agent's built core :class:`Agent`,
+    and tears the App down on exit.
+    """
+    registered = sorted(glow_app._agent_registry)
+    if not registered:
+        raise typer.BadParameter(
+            f"{spec!r} is a glow App with no registered agents."
+        )
+    if agent_name is None:
+        if len(registered) > 1:
+            raise typer.BadParameter(
+                f"{spec!r} registers {len(registered)} agents "
+                f"({', '.join(registered)}); pick one with --agent."
+            )
+        agent_name = registered[0]
+    elif agent_name not in glow_app._agent_registry:
+        raise typer.BadParameter(
+            f"--agent {agent_name!r} is not registered on {spec!r}.  "
+            f"Available: {', '.join(registered)}."
+        )
+    selected = agent_name
+
+    @asynccontextmanager
+    async def factory() -> AsyncIterator[Agent]:
+        async with glow_app:
+            yield glow_app._lookup_or_build(glow_app._agent_registry[selected])
+
+    return factory
