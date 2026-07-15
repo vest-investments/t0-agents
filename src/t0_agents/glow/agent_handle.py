@@ -16,6 +16,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, NoReturn, ParamSpec, Protocol, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from t0_agents.glow.conversation import Conversation
     from t0_agents.glow.handle import FluentRun
 
 __all__ = ["AgentHandle", "llm"]
@@ -52,3 +55,19 @@ class AgentHandle(Protocol[P, R]):
     """
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> FluentRun[R]: ...
+
+    def conversation(
+        self,
+        *,
+        id: str | None = None,
+        hydrate: bool = False,
+        user: str | None = None,
+        tags: Mapping[str, str] | None = None,
+    ) -> Conversation[R]:
+        """Open a multi-turn :class:`Conversation` over one episode.
+
+        Lets a conversation-capable handle be typed without importing
+        the private wrapper; the concrete signature lives on the
+        ``@app.agent`` wrapper.
+        """
+        ...
