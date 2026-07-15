@@ -21,12 +21,20 @@ the same time:
 The model's context window is resolved by TensorZero and is not knowable
 in-process, so :meth:`remaining` and :meth:`fraction_used` take the window as a
 caller argument (matching :meth:`Run.context_remaining`).
+
+Alongside the accumulator, this module defines the two building blocks of a
+conversation *listing* view — :class:`ConversationSummary` (one row) and the
+:class:`ConversationIndex` protocol (the pluggable source of those rows).  They
+live here, next to the conversation-identity model, so both ``memory`` and
+``glow`` can import them without an import cycle.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from t0_agents.core.types import RunUsage, Usage
 
@@ -35,7 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ConversationUsage"]
+__all__ = ["ConversationIndex", "ConversationSummary", "ConversationUsage"]
 
 
 class ConversationUsage:
@@ -184,3 +192,55 @@ class ConversationUsage:
         if self._footprint is None:
             return None
         return self._footprint.input_tokens / window
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationSummary:
+    """One past conversation, at a glance, for a listing view.
+
+    The row a "your conversations" list renders.  ``conversation_id`` is the
+    TensorZero ``episode_id`` (a UUIDv7) — the same identity the conversation
+    is resumed by; ``title`` and ``preview`` are already truncated for display
+    by the producer.  ``updated_at`` is **epoch milliseconds** so it sorts and
+    serialises without a timezone.
+
+    Fields:
+        conversation_id: The conversation's ``episode_id`` (UUIDv7).
+        title: A short label — conventionally the first user message.
+        preview: A short excerpt — conventionally the latest user message.
+        turn_count: Best-effort number of user turns (a producer may only
+            observe a bounded window; see the producer's docstring for the
+            exact guarantee).
+        updated_at: Epoch milliseconds of the conversation's latest activity.
+    """
+
+    conversation_id: str
+    title: str
+    preview: str
+    turn_count: int
+    updated_at: int
+
+
+@runtime_checkable
+class ConversationIndex(Protocol):
+    """Pluggable source of :class:`ConversationSummary` rows for an agent.
+
+    The library ships a dev-grade implementation —
+    :meth:`~t0_agents.memory.tensorzero.TensorZeroMemory.list_conversations`,
+    a client-side group-by over a bounded window of the gateway log — and
+    ``App.conversations`` uses it by default.  A consumer that has outgrown the
+    O(window) scan (a real inbox backed by its own store) supplies an
+    alternative: any object with this one method satisfies the seam, and
+    ``App.conversations(index=...)`` uses it verbatim — no library change.
+
+    Scoping rides TensorZero **tags** (e.g. ``{"customer_id": cid}``), the same
+    universal filter the rest of the memory layer uses, so the contract bakes in
+    no consumer-specific key or pagination model.
+    """
+
+    async def list_conversations(
+        self,
+        *,
+        tags: Mapping[str, str] | None = None,
+        limit: int = 20,
+    ) -> Sequence[ConversationSummary]: ...
