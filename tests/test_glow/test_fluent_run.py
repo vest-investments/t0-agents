@@ -24,7 +24,7 @@ from t0_agents.core.outputs.structured import StructuredOutput
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow.handle import FluentRun
-from t0_agents.stream.events import AgentEvent
+from t0_agents.stream.events import AgentEvent, DoneEvent
 
 
 class _ModelA(BaseModel):
@@ -497,3 +497,99 @@ async def test_with_and_spawn_propagate_known_servers() -> None:
     )
     assert fr.with_(episode_id="e1")._known_servers == ("fred", "edgar")
     assert fr.json()._known_servers == ("fred", "edgar")
+
+
+# ---------------------------------------------------------------------------
+# M8: on_result hook + consumed
+# ---------------------------------------------------------------------------
+
+
+class _DoneRun:
+    """Fake Run whose ``events()`` ends with a terminal ``DoneEvent`` (success).
+
+    ``_FakeRun`` streams no ``DoneEvent``, so it exercises the failure-shaped
+    path (no fire); this one drives the streamed on_result path.
+    """
+
+    def __init__(self, *, value: str = "done-value") -> None:
+        self._agent_result: AgentResult[Any] = AgentResult(
+            value=value, episode_id="ep_done", inference_ids=["if"], turns=1
+        )
+
+    async def result(self) -> AgentResult[Any]:
+        return self._agent_result
+
+    async def events(self, *, on_error: str = "raise") -> AsyncIterator[AgentEvent]:
+        yield DoneEvent(result=self._agent_result)
+
+    async def stream_text(self, *, fallback: bool = True) -> AsyncIterator[str]:
+        yield "chunk"
+
+
+def _done_build(fake: _DoneRun) -> Any:
+    def build(mode: OutputMode[Any], **call_kwargs: Any) -> Run[Any]:
+        return cast(Run[Any], fake)
+
+    return build
+
+
+async def test_consumed_is_false_until_consumption() -> None:
+    fr: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    assert fr.consumed is False
+    await fr.result()
+    assert fr.consumed is True
+
+
+async def test_on_result_fires_on_result() -> None:
+    seen: list[AgentResult[Any]] = []
+    fr: FluentRun[str] = FluentRun(
+        _make_build(fake_run=_FakeRun(value="v")), ChatOutput(), on_result=seen.append
+    )
+    await fr.result()
+    assert [r.value for r in seen] == ["v"]
+
+
+async def test_on_result_fires_on_stream_text_tail() -> None:
+    seen: list[AgentResult[Any]] = []
+    fr: FluentRun[str] = FluentRun(
+        _make_build(fake_run=_FakeRun(value="v")), ChatOutput(), on_result=seen.append
+    )
+    chunks = [c async for c in fr.stream_text()]
+    assert chunks == ["chunk"]
+    assert len(seen) == 1
+
+
+async def test_on_result_fires_on_events_done() -> None:
+    seen: list[AgentResult[Any]] = []
+    fake = _DoneRun(value="dv")
+    fr: FluentRun[str] = FluentRun(
+        _done_build(fake), ChatOutput(), on_result=seen.append
+    )
+    events = [e async for e in fr.events()]
+    assert any(isinstance(e, DoneEvent) for e in events)
+    assert [r.value for r in seen] == ["dv"]
+
+
+async def test_on_result_fires_exactly_once_across_paths() -> None:
+    seen: list[AgentResult[Any]] = []
+    fr: FluentRun[str] = FluentRun(
+        _done_build(_DoneRun(value="v")), ChatOutput(), on_result=seen.append
+    )
+    async for _ in fr.events():
+        pass
+    await fr.result()  # joins the cached Run — latch prevents a second fire
+    assert len(seen) == 1
+
+
+async def test_on_result_rides_through_with_and_output_override() -> None:
+    seen: list[AgentResult[Any]] = []
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(
+        _make_capturing_build(calls, fake_run=_FakeRun(value="v")),
+        ChatOutput(),
+        on_result=seen.append,
+    )
+    # Both .with_() and the output override spawn fresh FluentRuns — the hook
+    # must survive, or a conv.send(x).with_(...).text() chain stops recording.
+    await fr.with_(episode_id="e1").text().result()
+    assert len(seen) == 1
