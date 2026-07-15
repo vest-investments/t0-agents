@@ -11,6 +11,7 @@ are faked by swapping the ``AsyncTensorZeroGateway`` symbol inside
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, ClassVar, cast
 
@@ -282,6 +283,38 @@ async def test_consumption_auto_builds_with_info_and_kills_both_traps(
     assert len(fake_agent_cls.instances) == 1
     assert not any("auto-building" in r.message for r in caplog.records)
     await app.shutdown()
+
+
+async def test_concurrent_first_consumptions_boot_once(
+    fake_builders: dict[str, list[Any]],
+    fake_agent_cls: type[_FakeAgent],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Racing first consumptions must serialize on the boot lock.
+
+    Without it, concurrent ``_ensure_ready_for`` calls interleave at
+    the await points and resolve the gateway (and enter the client)
+    more than once — the gemini-flagged race on PR #77.
+    """
+    app = App(gateway="http://gw.example:3000")
+
+    @app.agent("alpha")
+    async def alpha(query: str) -> str:  # type: ignore[empty-body]
+        """Alpha."""
+
+    @app.agent("beta")
+    async def beta(query: str) -> str:  # type: ignore[empty-body]
+        """Beta."""
+
+    with caplog.at_level(logging.INFO, logger="t0_agents.glow.app"):
+        results = await asyncio.gather(alpha("x"), beta("y"))
+
+    assert results == ["ok", "ok"]
+    # Exactly one gateway resolved and one boot logged — not one per racer.
+    assert len(fake_builders["gateways"]) == 1
+    assert sum("auto-building" in r.message for r in caplog.records) == 1
+    await app.shutdown()
+    assert fake_builders["gateways"][0].exited
 
 
 async def test_async_with_app_is_the_lifespan_bracket(

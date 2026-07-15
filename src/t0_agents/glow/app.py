@@ -34,6 +34,7 @@ exposes itself on ``wrapper._agent`` for escape-hatch use.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import logging
 import os
@@ -270,6 +271,12 @@ class App:
         # :meth:`_ensure_ready_for`, which triggers one full build (with
         # an INFO log) when the App was never explicitly booted.
         self._started: bool = False
+        # Serializes the boot sequence (gateway resolution, MCP mounts,
+        # client entry) against concurrent first consumptions — e.g.
+        # ``asyncio.gather`` over several agents of an unstarted App.
+        # ``asyncio.Lock()`` is loop-agnostic at construction on
+        # Python ≥ 3.10, so module-level Apps are safe.
+        self._boot_lock: asyncio.Lock = asyncio.Lock()
 
         # The :class:`DependencyResolver` instance lives here so it can
         # consult ``self.dependency_overrides`` directly during
@@ -720,16 +727,19 @@ class App:
         same infrastructure but constructs agents lazily per spec —
         see :meth:`_ensure_ready_for`.)
         """
-        # Resolve the gateway first so it sits UNDER the client on the
-        # exit stack (LIFO close: client, then gateway).  A constructor
-        # source (gateway=/embedded=) always resolves; the deferred form
-        # (bare App()) resolves only when some agent will need it — a
-        # fully-overridden App keeps working with no gateway and no env.
-        if self._t0 is None and (self._gateway_source is not None or self._needs_gateway()):
-            await self._ensure_t0()
-        await self._start()
-        for agent_spec in self._agent_registry.values():
-            self._lookup_or_build(agent_spec)
+        async with self._boot_lock:
+            # Resolve the gateway first so it sits UNDER the client on the
+            # exit stack (LIFO close: client, then gateway).  A constructor
+            # source (gateway=/embedded=) always resolves; the deferred form
+            # (bare App()) resolves only when some agent will need it — a
+            # fully-overridden App keeps working with no gateway and no env.
+            if self._t0 is None and (
+                self._gateway_source is not None or self._needs_gateway()
+            ):
+                await self._ensure_t0()
+            await self._start()
+            for agent_spec in self._agent_registry.values():
+                self._lookup_or_build(agent_spec)
 
     async def _start(self) -> None:
         """Boot the App infrastructure — everything except agent construction.
@@ -830,33 +840,41 @@ class App:
         later (REPL ``replace=True``) gets its gateway and ``tools=``
         filter resolved late, before it builds.
         """
-        if not self._started:
-            logger.info(
-                "glow App auto-building on first consumption (%d agent(s) "
-                "registered); use `async with app:` for explicit lifecycle "
-                "control.",
-                len(self._agent_registry),
-            )
-        if self._t0 is None and (
-            (not self._started and self._gateway_source is not None)
-            or self._spec_needs_construction(spec)
+        # Hot-path fast exit: once started, only a spec with an
+        # unresolved ``tools=`` filter has boot work left.  ``_started``
+        # flips only under the boot lock, so this pre-check is safe.
+        if self._started and not (
+            spec.tools is not None and spec.resolved_tools is None
         ):
-            await self._ensure_t0()
-        if not self._started:
-            await self._start()
             return
-        if (
-            spec.tools is not None
-            and spec.resolved_tools is None
-            and self._owned_client is not None
-            and self._client_entered
-        ):
-            live_names = {
-                tool.name for tool in await self._owned_client.list_tools()
-            }
-            spec.resolved_tools = _resolve_tool_filter(
-                spec.name, spec.tools, live_names
-            )
+        async with self._boot_lock:
+            if not self._started:
+                logger.info(
+                    "glow App auto-building on first consumption (%d agent(s) "
+                    "registered); use `async with app:` for explicit lifecycle "
+                    "control.",
+                    len(self._agent_registry),
+                )
+            if self._t0 is None and (
+                (not self._started and self._gateway_source is not None)
+                or self._spec_needs_construction(spec)
+            ):
+                await self._ensure_t0()
+            if not self._started:
+                await self._start()
+                return
+            if (
+                spec.tools is not None
+                and spec.resolved_tools is None
+                and self._owned_client is not None
+                and self._client_entered
+            ):
+                live_names = {
+                    tool.name for tool in await self._owned_client.list_tools()
+                }
+                spec.resolved_tools = _resolve_tool_filter(
+                    spec.name, spec.tools, live_names
+                )
 
     async def __aenter__(self) -> App:
         """``async with app:`` — build on entry, shut down on exit.
