@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
@@ -285,7 +285,7 @@ WireFrame = (
 )
 
 
-_FRAME_KINDS: dict[str, Callable[..., WireFrame]] = {
+_FRAME_KINDS: dict[str, type[WireFrame]] = {
     "init": InitFrame,
     "text_delta": TextDeltaFrame,
     "text_end": TextEndFrame,
@@ -326,10 +326,15 @@ def frame_to_dict(frame: WireFrame) -> dict[str, Any]:
 def frame_from_dict(data: Mapping[str, Any]) -> WireFrame:
     """Decode a dict produced by :func:`frame_to_dict`.
 
+    Unknown *fields* are ignored: under additive-only evolution a newer
+    writer may add fields to an existing frame without a version bump,
+    and an older reader must tolerate them. Unknown *kinds* and version
+    mismatches still fail loudly — those mark payloads this reader
+    cannot represent at all.
+
     Raises:
         ValueError: on a missing/unknown ``kind`` discriminator or a
-            wire-version mismatch — an outdated payload must fail
-            loudly, never degrade silently.
+            wire-version mismatch.
     """
     version = data.get("v", WIRE_VERSION)
     if version != WIRE_VERSION:
@@ -342,10 +347,11 @@ def frame_from_dict(data: Mapping[str, Any]) -> WireFrame:
     frame_cls = _FRAME_KINDS.get(kind)
     if frame_cls is None:
         raise ValueError(f"unknown WireFrame kind: {kind!r}")
-    payload = {key: value for key, value in data.items() if key not in ("v", "kind")}
-    if frame_cls is DoneFrame:
+    allowed_fields = {field.name for field in dataclasses.fields(frame_cls)}
+    payload = {key: value for key, value in data.items() if key in allowed_fields}
+    if frame_cls is DoneFrame and "inference_ids" in payload:
         payload["inference_ids"] = tuple(payload["inference_ids"])
-    elif frame_cls is ErrorFrame:
+    elif frame_cls is ErrorFrame and "detail" in payload:
         payload["detail"] = copy.deepcopy(payload["detail"])
     return frame_cls(**payload)
 

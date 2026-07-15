@@ -33,7 +33,9 @@ union it guards.
   never change meaning. Consumers with exhaustive `match` statements
   add one arm and are otherwise untouched.
 - New *fields* on an existing frame get defaults, so old payloads still
-  decode.
+  decode — and `frame_from_dict` ignores unknown fields, so an older
+  reader tolerates payloads from a newer additive writer. Unknown
+  *kinds* still raise.
 - `WIRE_VERSION` is bumped **only** on a non-additive change, which is
   a breaking release of the contract. `frame_from_dict` rejects
   mismatched versions with `ValueError` — an outdated payload fails
@@ -126,7 +128,10 @@ async for name, data in public_allowlist(frames):
   `TextDeltaFrame` streamed this run, synthesises a
   `TextDeltaFrame` + `TextEndFrame` pair before it — from
   `response_text` when non-blank, else from `EMPTY_TURN_RETRY_TEXT`.
-  Block id: last inference id, else `FALLBACK_BLOCK_ID`.
+  Block id: last inference id, else `FALLBACK_BLOCK_ID`. The tracked
+  state re-arms at run boundaries (`DoneFrame`, *terminal*
+  `ErrorFrame` — recognised by `detail["exc_class"]` — and
+  `InitFrame`); a recoverable error passthrough never resets it.
 - **`public_allowlist(frames)`** — the privacy guard and the terminal
   stage: yields `PublicEvent(name, data)` pairs under exactly eight
   frozen names. Tool activity, reasoning, and turn markers are

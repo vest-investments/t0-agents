@@ -129,6 +129,24 @@ def test_missing_version_assumes_current() -> None:
     assert frame_from_dict(data) == TurnEndFrame(turn=1)
 
 
+def test_unknown_fields_are_ignored_for_forward_compat() -> None:
+    """An older reader must tolerate payloads from a newer additive
+    writer — extra fields decode away, they never TypeError."""
+    data = frame_to_dict(TurnEndFrame(turn=1))
+    data["field_from_the_future"] = "ignored"
+    assert frame_from_dict(data) == TurnEndFrame(turn=1)
+
+    done = frame_to_dict(
+        DoneFrame(
+            turns=1, response_source="text", response_text="hi", inference_ids=("i1",)
+        )
+    )
+    done["field_from_the_future"] = {"nested": True}
+    decoded = frame_from_dict(done)
+    assert isinstance(decoded, DoneFrame)
+    assert decoded.inference_ids == ("i1",)
+
+
 def test_missing_kind_raises() -> None:
     with pytest.raises(ValueError, match="no 'kind' discriminator"):
         frame_from_dict({"v": WIRE_VERSION, "turn": 1})
