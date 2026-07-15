@@ -61,6 +61,7 @@ from t0_agents.tooling import FilteredToolProvider
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from fastmcp.client.elicitation import ElicitationHandler
     from tensorzero import ToolChoice
 
     from t0_agents.core.conversation import ConversationIndex, ConversationSummary
@@ -194,6 +195,13 @@ class App:
     App-level ``tags`` / ``middleware`` / ``namespace`` set defaults for
     every registered agent; per-agent ``@app.agent(...)`` knobs override
     them (``tags`` dict-merge, agent-level keys winning).
+
+    ``elicitation_handler`` binds a human-in-the-loop resolver onto the
+    App-owned ``Client``, so a mounted tool's ``ctx.elicit(...)`` reaches a
+    real resolver instead of auto-declining.  A ``fastmcp.Client`` binds
+    exactly one handler, and the App owns exactly one Client — so this is one
+    resolver per App, which fits the per-tenant "one App per session/drive"
+    model; multi-tenant HITL uses one App (hence one handler) per tenant.
     """
 
     def __init__(
@@ -206,6 +214,7 @@ class App:
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
+        elicitation_handler: ElicitationHandler | None = None,
     ) -> None:
         # Gateway sources — at most one of the three constructor forms:
         #   t0=        an already-built AsyncTensorZeroGateway (caller owns it)
@@ -266,6 +275,11 @@ class App:
         # :class:`SubAgentToolProvider` for the delegation surface.
         self._mcp_server: FastMCP[Any] | None = None
         self._owned_client: Client[Any] | None = None
+        # Bound onto ``_owned_client`` at allocation (:meth:`_ensure_mcp_server`)
+        # so a mounted tool's ``ctx.elicit(...)`` round-trips to a real
+        # resolver instead of auto-declining.  ``None`` keeps the auto-decline
+        # default.  One handler per Client — see the class docstring.
+        self._elicitation_handler: ElicitationHandler | None = elicitation_handler
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_entered: bool = False
         # Auto-build latch: True after a successful :meth:`build`, reset
@@ -460,7 +474,9 @@ class App:
         """
         if self._mcp_server is None:
             self._mcp_server = FastMCP("glow-app")
-            self._owned_client = Client(self._mcp_server)
+            self._owned_client = Client(
+                self._mcp_server, elicitation_handler=self._elicitation_handler
+            )
         return self._mcp_server
 
     def _needs_gateway(self) -> bool:
