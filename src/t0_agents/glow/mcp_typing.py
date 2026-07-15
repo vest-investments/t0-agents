@@ -46,11 +46,14 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, get_args, get_origin, get_type_hints
 
 from fastmcp import FastMCP
 
 from t0_agents.core.exceptions import ConfigurationError
+
+if TYPE_CHECKING:
+    import httpx
 
 __all__ = ["MCPServer", "MCPServerSpec"]
 
@@ -62,19 +65,31 @@ class MCPServerSpec:
     Exactly one of :attr:`url` or :attr:`server` must be set.  ``url``
     drives the HTTP path (wrapped via ``create_proxy`` at mount time);
     ``server`` is the in-memory escape hatch for users with embedded
-    ``FastMCP`` instances.  ``namespace``
-    becomes the ``namespace=`` kwarg on :meth:`FastMCP.mount` — the tool
-    names exposed to the agent are prefixed with this namespace, which
-    keeps multi-server setups collision-free.  ``transport`` is recorded
-    for future use (current ``create_proxy`` infers transport from the
-    URL); it's kept on the spec so the surface is stable when richer
-    transport support lands.
+    ``FastMCP`` instances.  ``namespace`` becomes the ``namespace=`` kwarg
+    on :meth:`FastMCP.mount` — mounted tool names are prefixed with it,
+    keeping multi-server setups collision-free.
+
+    ``headers`` and ``auth`` (an :class:`httpx.Auth`) attach per-request
+    identity to a ``url`` mount; combining either with an in-memory
+    ``server`` is a validation error.  When either is set the mount rides
+    an explicit ``transport`` (``"http"`` or ``"sse"``) rather than the
+    URL-inferred one, so ``transport`` is load-bearing on the authed path
+    (it is otherwise inferred by ``create_proxy``).
+
+    ``prefix`` (default ``True``) applies ``namespace`` as the tool-name
+    prefix.  Set ``prefix=False`` to mount unprefixed — ``FastMCP.mount``
+    with ``namespace=None`` — so a single-server mount presents tool names
+    verbatim; ``namespace`` is then a logical label only.  Keep the default
+    for multi-server setups so their tool names stay collision-free.
     """
 
     url: str | None = None
     server: FastMCP[Any] | None = None
     transport: str = "http"
     namespace: str | None = None
+    headers: dict[str, str] | None = None
+    auth: httpx.Auth | None = None
+    prefix: bool = True
 
 
 class MCPServer:
@@ -111,12 +126,21 @@ class MCPServer:
         server: FastMCP[Any] | None = None,
         transport: str = "http",
         namespace: str | None = None,
+        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | None = None,
+        prefix: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init_subclass__(**kwargs)
-        _validate_url_xor_server(cls.__name__, url, server)
+        _validate_spec(cls.__name__, url, server, headers, auth)
         cls._mcp_spec = MCPServerSpec(
-            url=url, server=server, transport=transport, namespace=namespace,
+            url=url,
+            server=server,
+            transport=transport,
+            namespace=namespace,
+            headers=headers,
+            auth=auth,
+            prefix=prefix,
         )
 
     def __init__(
@@ -126,35 +150,49 @@ class MCPServer:
         server: FastMCP[Any] | None = None,
         transport: str = "http",
         namespace: str | None = None,
+        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | None = None,
+        prefix: bool = True,
     ) -> None:
-        _validate_url_xor_server("MCPServer", url, server)
+        _validate_spec("MCPServer", url, server, headers, auth)
         self.url = url
         self.server = server
         self.transport = transport
         self.namespace = namespace
+        self.headers = headers
+        self.auth = auth
+        self.prefix = prefix
 
     def _to_spec(self) -> MCPServerSpec:
         """Project the Annotated-instance fields to an :class:`MCPServerSpec`.
 
         Used by :func:`_extract_mcp_specs` when an ``MCPServer`` instance
-        appears in an ``Annotated`` metadata tuple.  Subclasses with a
-        class-level ``_mcp_spec`` use that directly; this helper is for
-        the per-parameter instance path.
+        appears in an ``Annotated`` metadata tuple, and by ``App(servers=)``
+        when an instance is passed directly.  Subclasses with a class-level
+        ``_mcp_spec`` use that directly; this helper is for the instance path.
         """
         return MCPServerSpec(
             url=self.url,
             server=self.server,
             transport=self.transport,
             namespace=self.namespace,
+            headers=self.headers,
+            auth=self.auth,
+            prefix=self.prefix,
         )
 
 
-def _validate_url_xor_server(
+def _validate_spec(
     name: str,
     url: str | None,
     server: FastMCP[Any] | None,
+    headers: dict[str, str] | None = None,
+    auth: httpx.Auth | None = None,
 ) -> None:
-    """Enforce exactly-one-of url/server on both ``__init_subclass__`` and ``__init__``."""
+    """Validate an ``MCPServer`` spec on both ``__init_subclass__`` and
+    ``__init__``: exactly one of ``url``/``server``, and ``headers``/``auth``
+    only on the remote ``url`` path (they have no meaning for an in-memory
+    ``server`` mount, which is not an HTTP transport)."""
     if url is None and server is None:
         raise ConfigurationError(
             f"{name}: at least one of `url` or `server` must be set on "
@@ -166,6 +204,11 @@ def _validate_url_xor_server(
             f"{name}: pass exactly one of `url` or `server` to an "
             f"MCPServer — both were provided.  Use `url` for remote "
             f"transports and `server` for in-memory FastMCP instances."
+        )
+    if server is not None and (headers is not None or auth is not None):
+        raise ConfigurationError(
+            f"{name}: headers=/auth= apply only to a remote `url` mount, "
+            f"not an in-memory `server` mount."
         )
 
 

@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0] — 2026-07-15
+
+Production-mount ergonomics for glow's App-owned MCP client — the three
+seams the v2.0.0 pilot needed, deliberately kept out of the clean 2.0.0
+tag and landed here.  All additive; core is untouched.
+
+### Added
+
+- **Human-in-the-loop — `App(elicitation_handler=…)`.**  Binds a FastMCP
+  `ElicitationHandler` (e.g. `ElicitationForwarder.handler`) onto the
+  App-owned composite `Client`, so a mounted tool's `ctx.elicit(...)`
+  reaches a real resolver instead of surfacing "Elicitation not
+  supported".  A `Client` binds exactly one handler and the App owns one
+  Client, so this is one resolver per App — construct one App per
+  session/tenant for isolated HITL.  With no handler the default is
+  unchanged (elicitation unsupported).
+- **Authenticated remote MCP mounts — `MCPServer(headers=…, auth=…)`.**  A
+  `url=` mount carries a static `headers` dict and an `auth`
+  (`httpx.Auth`, applied per request); when either is set the mount rides
+  an explicit `StreamableHttpTransport` / `SSETransport` (per `transport`)
+  so identity reaches the server.  This is the first-class replacement for
+  hand-building `create_proxy(MCPConfig(RemoteMCPServer(...)))` and
+  wrapping it in a local `MCPServer` subclass.  `headers=`/`auth=` on an
+  in-memory `server=` mount raises `ConfigurationError`.
+- **`MCPServer` instances in `App(servers=…)`.**  `servers=` accepts
+  `MCPServer` instances alongside subclasses, so a per-mount configuration
+  needs no module-level subclass.
+- **Per-mount prefix opt-out — `MCPServer(prefix=False)`.**  Mounts with
+  `FastMCP.mount(namespace=None)` so a single-server mount presents tool
+  names verbatim (the legacy-inventory case); `namespace` becomes a
+  logical label only.  Multi-server prefixing is unchanged.  Passing an
+  unprefixed server into `tools=` raises `ConfigurationError`, directing to
+  name/glob selection.
+
 ## [2.0.0] — 2026-07-15
 
 Glow v2 — the batteries-included, Pythonic surface for building

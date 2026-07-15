@@ -44,6 +44,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
 from fastmcp import Client, FastMCP
+from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.server import create_proxy
 from tensorzero import AsyncTensorZeroGateway
 
@@ -61,6 +62,7 @@ from t0_agents.tooling import FilteredToolProvider
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from fastmcp.client.elicitation import ElicitationHandler
     from tensorzero import ToolChoice
 
     from t0_agents.core.conversation import ConversationIndex, ConversationSummary
@@ -95,29 +97,37 @@ def _describe_tool_entry(entry: Any) -> str:
 
 
 def _mcp_server_namespace(agent_name: str, entry: Any) -> str | None:
-    """Namespace of an :class:`MCPServer` ``tools=`` entry, else ``None``.
+    """Prefix namespace of an :class:`MCPServer` ``tools=`` entry, else ``None``.
 
-    Raises :class:`ConfigurationError` when the entry is an ``MCPServer`` with
-    no ``namespace=`` — its mounted tool names carry no prefix, so there is
-    nothing to filter on.
+    Raises :class:`ConfigurationError` when the entry is a real ``MCPServer``
+    whose mounted tools carry no prefix to filter on — either a
+    ``prefix=False`` mount (unprefixed by choice) or a ``namespace=None``
+    mount.  Such tools are selected by explicit name / glob string in
+    ``tools=`` rather than by passing the server.
     """
     if isinstance(entry, MCPServer):
-        namespace = entry._to_spec().namespace
+        spec: MCPServerSpec | None = entry._to_spec()
     elif isinstance(entry, type) and issubclass(entry, MCPServer):
-        spec: MCPServerSpec | None = getattr(entry, "_mcp_spec", None)
-        if spec is None:  # the bare ``MCPServer`` base — not a real server
-            return None
-        namespace = spec.namespace
+        spec = getattr(entry, "_mcp_spec", None)
     else:
         return None
-    if namespace is None:
+    if spec is None:  # the bare ``MCPServer`` base — not a real server
+        return None
+    if not spec.prefix:
+        raise ConfigurationError(
+            f"@app.agent({agent_name!r}) tools= includes MCPServer "
+            f"{_describe_tool_entry(entry)} mounted with prefix=False — its "
+            f"tool names are unprefixed, so select them by explicit name or "
+            f"glob string in tools=, not by passing the server."
+        )
+    if spec.namespace is None:
         raise ConfigurationError(
             f"@app.agent({agent_name!r}) tools= includes MCPServer "
             f"{_describe_tool_entry(entry)} without namespace= — a namespace "
             f"is required to filter its tools (its mounted tool names are "
             f"prefixed with the namespace)."
         )
-    return namespace
+    return spec.namespace
 
 
 def _match_tool_entry(
@@ -166,6 +176,27 @@ def _resolve_tool_filter(
     return allow
 
 
+def _remote_target(spec: MCPServerSpec) -> str | StreamableHttpTransport | SSETransport:
+    """Resolve a ``url`` spec to what :func:`create_proxy` should wrap.
+
+    A bare URL lets ``create_proxy`` infer the transport (the default, and
+    the no-auth path).  ``headers``/``auth`` cannot ride an inferred
+    transport, so when either is set build the explicit transport named by
+    ``spec.transport`` (``"http"`` / ``"sse"``) carrying them.
+    """
+    url = cast(str, spec.url)  # xor-validated: non-None whenever server is None
+    if spec.headers is None and spec.auth is None:
+        return url
+    if spec.transport == "sse":
+        return SSETransport(url, headers=spec.headers, auth=spec.auth)
+    if spec.transport == "http":
+        return StreamableHttpTransport(url, headers=spec.headers, auth=spec.auth)
+    raise ConfigurationError(
+        f"MCPServer(url={url!r}): headers=/auth= require transport 'http' "
+        f"or 'sse', got {spec.transport!r}."
+    )
+
+
 class App:
     """Glow application — registry + lifecycle for ``@app.agent`` decorators.
 
@@ -194,6 +225,13 @@ class App:
     App-level ``tags`` / ``middleware`` / ``namespace`` set defaults for
     every registered agent; per-agent ``@app.agent(...)`` knobs override
     them (``tags`` dict-merge, agent-level keys winning).
+
+    ``elicitation_handler`` binds a human-in-the-loop resolver onto the
+    App-owned ``Client``, so a mounted tool's ``ctx.elicit(...)`` reaches a
+    real resolver instead of auto-declining.  A ``fastmcp.Client`` binds
+    exactly one handler, and the App owns exactly one Client — so this is one
+    resolver per App, which fits the per-tenant "one App per session/drive"
+    model; multi-tenant HITL uses one App (hence one handler) per tenant.
     """
 
     def __init__(
@@ -202,10 +240,11 @@ class App:
         t0: AsyncTensorZeroGateway | None = None,
         gateway: str | None = None,
         embedded: str | None = None,
-        servers: list[type[MCPServer]] | None = None,
+        servers: list[type[MCPServer] | MCPServer] | None = None,
         tags: dict[str, str] | None = None,
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
+        elicitation_handler: ElicitationHandler | None = None,
     ) -> None:
         # Gateway sources — at most one of the three constructor forms:
         #   t0=        an already-built AsyncTensorZeroGateway (caller owns it)
@@ -266,6 +305,11 @@ class App:
         # :class:`SubAgentToolProvider` for the delegation surface.
         self._mcp_server: FastMCP[Any] | None = None
         self._owned_client: Client[Any] | None = None
+        # Bound onto ``_owned_client`` at allocation (:meth:`_ensure_mcp_server`)
+        # so a mounted tool's ``ctx.elicit(...)`` round-trips to a real
+        # resolver instead of auto-declining.  ``None`` keeps the auto-decline
+        # default.  One handler per Client — see the class docstring.
+        self._elicitation_handler: ElicitationHandler | None = elicitation_handler
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_entered: bool = False
         # Auto-build latch: True after a successful :meth:`build`, reset
@@ -299,13 +343,28 @@ class App:
         # to the same class) — ``FastMCP.mount`` is idempotent on
         # identical mounts and namespacing keeps tool names collision-free.
         self._mcp_specs: list[MCPServerSpec] = []
-        for server_cls in servers or []:
-            if not (isinstance(server_cls, type) and issubclass(server_cls, MCPServer)):
+        for entry in servers or []:
+            if isinstance(entry, MCPServer):
+                # An instance carries per-mount config (e.g. url + headers/
+                # auth) without a module-level subclass — the shape the
+                # authed-remote-mount use case needs.
+                self._mcp_specs.append(entry._to_spec())
+            elif isinstance(entry, type) and issubclass(entry, MCPServer):
+                # ``_mcp_spec`` is set by ``__init_subclass__``; the bare
+                # ``MCPServer`` base has none — reject it with a clear error
+                # instead of an AttributeError.
+                spec: MCPServerSpec | None = getattr(entry, "_mcp_spec", None)
+                if spec is None:
+                    raise ConfigurationError(
+                        "App(servers=...): the bare MCPServer base is not a "
+                        "server; pass a subclass or an instance."
+                    )
+                self._mcp_specs.append(spec)
+            else:
                 raise ConfigurationError(
-                    f"App(servers=...): every entry must be a subclass of "
-                    f"MCPServer; got {server_cls!r}."
+                    f"App(servers=...): every entry must be an MCPServer "
+                    f"subclass or instance; got {entry!r}."
                 )
-            self._mcp_specs.append(server_cls._mcp_spec)
 
     # ------------------------------------------------------------------
     # Decorator surface — delegates to ``glow.decorators._make_decorator``
@@ -460,7 +519,9 @@ class App:
         """
         if self._mcp_server is None:
             self._mcp_server = FastMCP("glow-app")
-            self._owned_client = Client(self._mcp_server)
+            self._owned_client = Client(
+                self._mcp_server, elicitation_handler=self._elicitation_handler
+            )
         return self._mcp_server
 
     def _needs_gateway(self) -> bool:
@@ -877,11 +938,15 @@ class App:
                         backend = mcp_spec.server
                     else:
                         # ``mcp_spec.url`` is guaranteed non-None when
-                        # ``mcp_spec.server`` is None — MCPServer's
-                        # ``__init__`` / ``__init_subclass__`` enforces
-                        # the xor.
-                        backend = create_proxy(mcp_spec.url)  # type: ignore[arg-type]
-                    server.mount(backend, namespace=mcp_spec.namespace)
+                        # ``mcp_spec.server`` is None (xor-enforced).
+                        # ``_remote_target`` returns a bare URL, or an
+                        # explicit transport carrying headers=/auth=.
+                        backend = create_proxy(_remote_target(mcp_spec))
+                    # ``prefix=False`` opts out of the namespace prefix:
+                    # mount with ``namespace=None`` so tool names stay
+                    # unprefixed (fastmcp presents them verbatim).
+                    mount_namespace = mcp_spec.namespace if mcp_spec.prefix else None
+                    server.mount(backend, namespace=mount_namespace)
             # Enter the owned Client only if it exists — sub-agents-only
             # apps that never registered a tool or an MCPServer spec
             # leave it ``None`` and skip the FastMCP transport entirely.

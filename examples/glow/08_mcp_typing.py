@@ -20,10 +20,11 @@ Prerequisites:
        docker compose -f examples/glow/docker-compose.yml --env-file .env up -d
     3. Run: uv run python examples/glow/08_mcp_typing.py
 
-Remote MCP servers (HTTP/SSE) work too — uncomment the
-``GithubMCP`` block below.  ``fastmcp.server.create_proxy(url)`` does
-the heavy lifting; for the public ``api.githubcopilot.com/mcp`` URL
-you'd also need an auth header configured (out of scope here).
+Remote MCP servers (HTTP/SSE) work too — uncomment the ``GithubMCP``
+block below.  A ``url=`` mount takes first-class ``headers=`` (static)
+and ``auth=`` (an ``httpx.Auth``, applied per request), so an
+authenticated endpoint like ``api.githubcopilot.com/mcp`` needs no manual
+``create_proxy`` bridge; ``prefix=False`` presents its tools unprefixed.
 """
 
 from __future__ import annotations
@@ -55,13 +56,18 @@ class MathMCP(MCPServer, server=_MATH_SERVER, namespace="math"):
     """Typed declaration that mounts the math server on the App."""
 
 
-# Uncomment to demonstrate the HTTP path (requires a reachable MCP
-# endpoint and any required auth):
+# Uncomment to demonstrate the authenticated HTTP path (requires a
+# reachable MCP endpoint + a real token).  ``headers=`` is static;
+# ``auth=`` takes any ``httpx.Auth`` for per-request tokens/signatures:
 # class GithubMCP(
 #     MCPServer,
 #     url="https://api.githubcopilot.com/mcp/",
 #     namespace="github",
+#     headers={"Authorization": "Bearer <token>"},
 # ): ...
+#
+# Add ``prefix=False`` to present its tools verbatim (no ``github_``
+# prefix) — the single-server / legacy-name case.
 
 
 async def main() -> None:

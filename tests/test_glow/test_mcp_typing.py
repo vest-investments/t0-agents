@@ -192,12 +192,19 @@ def test_app_accepts_servers_kwarg_and_seeds_mcp_specs() -> None:
     assert namespaces == ["foo", "bar"]
 
 
-def test_app_rejects_non_mcp_class_in_servers() -> None:
+def test_app_rejects_non_mcp_entry_in_servers() -> None:
     class NotAnMCP:
-        """Not an MCPServer subclass."""
+        """Neither an MCPServer subclass nor instance."""
 
-    with pytest.raises(ConfigurationError, match="subclass of MCPServer"):
+    with pytest.raises(ConfigurationError, match="MCPServer subclass or instance"):
         App(t0=_fake_t0(), servers=[cast(Any, NotAnMCP)])
+
+
+def test_app_rejects_bare_mcpserver_base_in_servers() -> None:
+    # The bare base has no ``_mcp_spec`` (set only by ``__init_subclass__``) —
+    # it must fail with a clear error, not an AttributeError.
+    with pytest.raises(ConfigurationError, match="bare MCPServer base is not a server"):
+        App(t0=_fake_t0(), servers=[MCPServer])
 
 
 def test_decorator_appends_mcp_specs_from_parameters() -> None:
