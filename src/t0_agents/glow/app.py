@@ -97,29 +97,37 @@ def _describe_tool_entry(entry: Any) -> str:
 
 
 def _mcp_server_namespace(agent_name: str, entry: Any) -> str | None:
-    """Namespace of an :class:`MCPServer` ``tools=`` entry, else ``None``.
+    """Prefix namespace of an :class:`MCPServer` ``tools=`` entry, else ``None``.
 
-    Raises :class:`ConfigurationError` when the entry is an ``MCPServer`` with
-    no ``namespace=`` — its mounted tool names carry no prefix, so there is
-    nothing to filter on.
+    Raises :class:`ConfigurationError` when the entry is a real ``MCPServer``
+    whose mounted tools carry no prefix to filter on — either a
+    ``prefix=False`` mount (unprefixed by choice) or a ``namespace=None``
+    mount.  Such tools are selected by explicit name / glob string in
+    ``tools=`` rather than by passing the server.
     """
     if isinstance(entry, MCPServer):
-        namespace = entry._to_spec().namespace
+        spec: MCPServerSpec | None = entry._to_spec()
     elif isinstance(entry, type) and issubclass(entry, MCPServer):
-        spec: MCPServerSpec | None = getattr(entry, "_mcp_spec", None)
-        if spec is None:  # the bare ``MCPServer`` base — not a real server
-            return None
-        namespace = spec.namespace
+        spec = getattr(entry, "_mcp_spec", None)
     else:
         return None
-    if namespace is None:
+    if spec is None:  # the bare ``MCPServer`` base — not a real server
+        return None
+    if not spec.prefix:
+        raise ConfigurationError(
+            f"@app.agent({agent_name!r}) tools= includes MCPServer "
+            f"{_describe_tool_entry(entry)} mounted with prefix=False — its "
+            f"tool names are unprefixed, so select them by explicit name or "
+            f"glob string in tools=, not by passing the server."
+        )
+    if spec.namespace is None:
         raise ConfigurationError(
             f"@app.agent({agent_name!r}) tools= includes MCPServer "
             f"{_describe_tool_entry(entry)} without namespace= — a namespace "
             f"is required to filter its tools (its mounted tool names are "
             f"prefixed with the namespace)."
         )
-    return namespace
+    return spec.namespace
 
 
 def _match_tool_entry(
@@ -925,7 +933,11 @@ class App:
                         # ``_remote_target`` returns a bare URL, or an
                         # explicit transport carrying headers=/auth=.
                         backend = create_proxy(_remote_target(mcp_spec))
-                    server.mount(backend, namespace=mcp_spec.namespace)
+                    # ``prefix=False`` opts out of the namespace prefix:
+                    # mount with ``namespace=None`` so tool names stay
+                    # unprefixed (fastmcp presents them verbatim).
+                    mount_namespace = mcp_spec.namespace if mcp_spec.prefix else None
+                    server.mount(backend, namespace=mount_namespace)
             # Enter the owned Client only if it exists — sub-agents-only
             # apps that never registered a tool or an MCPServer spec
             # leave it ``None`` and skip the FastMCP transport entirely.

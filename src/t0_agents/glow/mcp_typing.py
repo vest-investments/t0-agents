@@ -75,6 +75,12 @@ class MCPServerSpec:
     an explicit ``transport`` (``"http"`` or ``"sse"``) rather than the
     URL-inferred one, so ``transport`` is load-bearing on the authed path
     (it is otherwise inferred by ``create_proxy``).
+
+    ``prefix`` (default ``True``) applies ``namespace`` as the tool-name
+    prefix.  Set ``prefix=False`` to mount unprefixed — ``FastMCP.mount``
+    with ``namespace=None`` — so a single-server mount presents tool names
+    verbatim; ``namespace`` is then a logical label only.  Keep the default
+    for multi-server setups so their tool names stay collision-free.
     """
 
     url: str | None = None
@@ -83,6 +89,7 @@ class MCPServerSpec:
     namespace: str | None = None
     headers: dict[str, str] | None = None
     auth: httpx.Auth | None = None
+    prefix: bool = True
 
 
 class MCPServer:
@@ -121,6 +128,7 @@ class MCPServer:
         namespace: str | None = None,
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | None = None,
+        prefix: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init_subclass__(**kwargs)
@@ -132,6 +140,7 @@ class MCPServer:
             namespace=namespace,
             headers=headers,
             auth=auth,
+            prefix=prefix,
         )
 
     def __init__(
@@ -143,6 +152,7 @@ class MCPServer:
         namespace: str | None = None,
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | None = None,
+        prefix: bool = True,
     ) -> None:
         _validate_spec("MCPServer", url, server, headers, auth)
         self.url = url
@@ -151,6 +161,7 @@ class MCPServer:
         self.namespace = namespace
         self.headers = headers
         self.auth = auth
+        self.prefix = prefix
 
     def _to_spec(self) -> MCPServerSpec:
         """Project the Annotated-instance fields to an :class:`MCPServerSpec`.
@@ -167,6 +178,7 @@ class MCPServer:
             namespace=self.namespace,
             headers=self.headers,
             auth=self.auth,
+            prefix=self.prefix,
         )
 
 
