@@ -208,18 +208,19 @@ def _history_to_pairs(history: Sequence[Any]) -> list[dict[str, str]]:
     for message in history:
         text = _message_text(message)
         if text:
-            pairs.append({"role": str(getattr(message, "role", "")), "content": text})
+            pairs.append({"role": str(message["role"]), "content": text})
     return pairs
 
 
 def _message_text(message: Any) -> str:
-    """Join the text of a runtime TZ ``Message`` (duck-typed), or ``""``.
+    """Join the text of a runtime TZ ``Message``, or ``""``.
 
-    Reads ``Text.text`` / ``RawText.value`` blocks; other blocks (tool calls /
-    results) contribute nothing.  Duck-typed via ``getattr`` so glow needs no
-    hard import of the tensorzero content-block types.
+    A ``tensorzero.Message`` is mapping-accessed (``message["content"]``) while
+    its content blocks are attribute-accessed (``Text.text`` / ``RawText.value``)
+    — so message fields use subscript, blocks use ``getattr``.  Blocks that are
+    not text (tool calls / results) contribute nothing.
     """
-    content = getattr(message, "content", None)
+    content = message["content"]
     if isinstance(content, str):
         return content
     parts: list[str] = []
