@@ -309,10 +309,17 @@ async def with_text_fallback(
     id, or :data:`FALLBACK_BLOCK_ID` when there is none — matching the
     public ``done`` payload id.
 
-    ``saw_text`` re-arms after each :class:`DoneFrame` so every run on
-    a long-lived stream gets its own fallback decision.
-    Elicitation frames never touch ``saw_text`` — a prompt is not
-    assistant text and must not suppress the fallback.
+    ``saw_text`` re-arms at every run boundary so each run on a
+    long-lived stream gets its own fallback decision: after a
+    :class:`DoneFrame`, after a *terminal* :class:`ErrorFrame`, and on
+    an :class:`InitFrame` (a new session). A terminal error frame is
+    recognised by ``detail["exc_class"]`` — the discriminator both
+    terminal paths always set — while a recoverable
+    :class:`~t0_agents.stream.events.ErrorEvent` passthrough carries no
+    ``exc_class`` and must NOT re-arm: the run continues, and resetting
+    mid-run would make the fallback duplicate text that already
+    streamed. Elicitation frames never touch ``saw_text`` — a prompt is
+    not assistant text and must not suppress the fallback.
     """
     saw_text = False
     async for frame in frames:
@@ -329,9 +336,15 @@ async def with_text_fallback(
                     yield TextEndFrame(block_id=msg_id)
                 saw_text = False
                 yield frame
+            case InitFrame():
+                saw_text = False
+                yield frame
+            case ErrorFrame(detail=detail):
+                if "exc_class" in detail:
+                    saw_text = False
+                yield frame
             case (
-                InitFrame()
-                | TextEndFrame()
+                TextEndFrame()
                 | ToolCallDeltaFrame()
                 | ToolCallFrame()
                 | ToolResultFrame()
@@ -339,7 +352,6 @@ async def with_text_fallback(
                 | ThoughtDeltaFrame()
                 | ThoughtFrame()
                 | TurnEndFrame()
-                | ErrorFrame()
                 | StatusFrame()
                 | ElicitationRequestFrame()
                 | ElicitationResolvedFrame()

@@ -465,6 +465,47 @@ class TestWithTextFallback:
         )
         assert TextDeltaFrame(block_id="inf-3", delta="done after prompt") in out
 
+    async def test_a_terminal_error_rearms_for_the_next_run(self) -> None:
+        terminal = ErrorFrame(
+            message="boom", detail={"exc_class": "TimeoutError"}
+        )
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta="run one text"),
+                terminal,
+                ThoughtDeltaFrame(id="th1", delta="run two thinks"),
+                _done(text="run two answer", ids=("inf-2",), source="thought"),
+            ]
+        )
+        assert TextDeltaFrame(block_id="inf-2", delta="run two answer") in out
+
+    async def test_a_recoverable_error_does_not_reset_mid_run(self) -> None:
+        """A recoverable ErrorEvent passthrough (no exc_class) must not
+        re-arm saw_text: the run continues, and a reset would make the
+        fallback duplicate the text that already streamed."""
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta="the answer"),
+                ErrorFrame(message="transient", detail={}),
+                _done(text="the answer", ids=("inf-1",)),
+            ]
+        )
+        assert out == [
+            TextDeltaFrame(block_id="b1", delta="the answer"),
+            ErrorFrame(message="transient", detail={}),
+            _done(text="the answer", ids=("inf-1",)),
+        ]
+
+    async def test_an_init_frame_rearms_for_the_new_session(self) -> None:
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta="old session text"),
+                InitFrame(conversation_id="conv-2"),
+                _done(text="new session answer", ids=("inf-5",), source="thought"),
+            ]
+        )
+        assert TextDeltaFrame(block_id="inf-5", delta="new session answer") in out
+
 
 async def _public(frames: Iterable[WireFrame]) -> list[PublicEvent]:
     return [event async for event in public_allowlist(_stream_frames(frames))]
