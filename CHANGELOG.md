@@ -81,6 +81,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exclusive with `system_arguments` (TZ server-side templates), which
   in turn is rejected on `model=` agents up front — the passthrough
   has no system template.
+- **`t0_agents.wire` — the versioned wire contract.**  A frozen
+  15-frame `WireFrame` union (the event union plus consumer-facing
+  `Init` / `Status` / `Elicitation*` frames) with a versioned dict
+  codec (`frame_to_dict` / `frame_from_dict`, `WIRE_VERSION = 1`,
+  additive-only evolution) and pure composable projection stages:
+  `project()` (exhaustive event→frame mapping with byte-bounded tool
+  payloads), `as_terminal_safe()` (a raised exception becomes one
+  terminal `error` frame — same frozen shape as the `RunErrorEvent`
+  path, `max_turns_exceeded` token and `detail.exc_class`
+  discriminator included), `with_status()` (production status-hint
+  policy at frame level), `with_text_fallback()` (reasoning fallback +
+  never-blank belt), and `public_allowlist()` (the frozen 8-name
+  public projection and privacy guard — tool activity and reasoning
+  never reach a public client).  Explicitly not a broker: no transport
+  imports; consumers serialise the emitted dicts onto their own bus /
+  SSE / WebSocket.  The production byte-compat golden is ported at
+  dict level as a library test (`tests/test_wire/test_public_golden.py`)
+  and every stage `match` ends in `assert_never`, so upstream event
+  churn is absorbed in the same PR that introduces it.  See
+  `docs/wire.md`.
 
 ### Changed
 
