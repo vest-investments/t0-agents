@@ -350,7 +350,16 @@ class App:
                 # authed-remote-mount use case needs.
                 self._mcp_specs.append(entry._to_spec())
             elif isinstance(entry, type) and issubclass(entry, MCPServer):
-                self._mcp_specs.append(entry._mcp_spec)
+                # ``_mcp_spec`` is set by ``__init_subclass__``; the bare
+                # ``MCPServer`` base has none — reject it with a clear error
+                # instead of an AttributeError.
+                spec: MCPServerSpec | None = getattr(entry, "_mcp_spec", None)
+                if spec is None:
+                    raise ConfigurationError(
+                        "App(servers=...): the bare MCPServer base is not a "
+                        "server; pass a subclass or an instance."
+                    )
+                self._mcp_specs.append(spec)
             else:
                 raise ConfigurationError(
                     f"App(servers=...): every entry must be an MCPServer "

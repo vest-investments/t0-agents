@@ -200,6 +200,13 @@ def test_app_rejects_non_mcp_entry_in_servers() -> None:
         App(t0=_fake_t0(), servers=[cast(Any, NotAnMCP)])
 
 
+def test_app_rejects_bare_mcpserver_base_in_servers() -> None:
+    # The bare base has no ``_mcp_spec`` (set only by ``__init_subclass__``) —
+    # it must fail with a clear error, not an AttributeError.
+    with pytest.raises(ConfigurationError, match="bare MCPServer base is not a server"):
+        App(t0=_fake_t0(), servers=[MCPServer])
+
+
 def test_decorator_appends_mcp_specs_from_parameters() -> None:
     app = App(t0=_fake_t0())
 

@@ -13,6 +13,7 @@ server whose tool calls ``ctx.elicit``, mounted on the App, invoked via
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any, cast
 
 import pytest
@@ -101,14 +102,21 @@ async def test_app_forwarder_round_trip_accept() -> None:
         client = app._owned_client
         assert client is not None
         call = asyncio.create_task(client.call_tool("hitl_place", {}))
-        envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
-        assert envelope["type"] == "elicitation_request"
-        assert envelope["response_type"] == "bool"
-        assert envelope["schema"] is not None
-        await forwarder.resolve(
-            envelope["elicitation_id"], {"action": "accept", "content": {"value": True}}
-        )
-        result = await asyncio.wait_for(call, timeout=2.0)
+        try:
+            envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
+            assert envelope["type"] == "elicitation_request"
+            assert envelope["response_type"] == "bool"
+            assert envelope["schema"] is not None
+            await forwarder.resolve(
+                envelope["elicitation_id"], {"action": "accept", "content": {"value": True}}
+            )
+            result = await asyncio.wait_for(call, timeout=2.0)
+        finally:
+            # Don't leak the tool task if an assertion above fails.
+            if not call.done():
+                call.cancel()
+                with suppress(asyncio.CancelledError):
+                    await call
 
     assert result.data == "placed"
     assert forwarder.pending == {}
@@ -128,9 +136,16 @@ async def test_app_forwarder_round_trip_decline() -> None:
         client = app._owned_client
         assert client is not None
         call = asyncio.create_task(client.call_tool("hitl_place", {}))
-        envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
-        await forwarder.resolve(envelope["elicitation_id"], {"action": "decline"})
-        result = await asyncio.wait_for(call, timeout=2.0)
+        try:
+            envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
+            await forwarder.resolve(envelope["elicitation_id"], {"action": "decline"})
+            result = await asyncio.wait_for(call, timeout=2.0)
+        finally:
+            # Don't leak the tool task if an assertion above fails.
+            if not call.done():
+                call.cancel()
+                with suppress(asyncio.CancelledError):
+                    await call
 
     assert result.data == "skipped"
     assert forwarder.pending == {}
