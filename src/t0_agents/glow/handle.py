@@ -285,6 +285,18 @@ class FluentRun(Generic[T]):
         self._fired = True
         self._on_result(result)
 
+    @property
+    def consumed(self) -> bool:
+        """Whether consumption has begun — the underlying Run has been built.
+
+        ``True`` once ``await`` / :meth:`result` / the first iteration of
+        :meth:`events` / :meth:`stream_text` has fired the build closure (via
+        :meth:`_ensure_run`).  glow's
+        :class:`~t0_agents.glow.conversation.Conversation` reads it to enforce
+        sequential sends — a send left unconsumed blocks the next one.
+        """
+        return self._run is not None
+
     @overload
     def events(
         self, *, on_error: Literal["raise", "event"] = ...

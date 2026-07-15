@@ -30,7 +30,7 @@ than injected as a value.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import (
     Annotated,
     Any,
@@ -43,11 +43,14 @@ from typing import (
     get_type_hints,
 )
 
+from tensorzero.util import uuid7
+
 from t0_agents.core.agent import Agent
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow._typing import _is_list_of_pydantic
 from t0_agents.glow.app import App
+from t0_agents.glow.conversation import Conversation
 from t0_agents.glow.di import _Depends
 from t0_agents.glow.guardrails_typing import _extract_guardrails
 from t0_agents.glow.handle import FluentRun
@@ -149,6 +152,49 @@ class _AgentWrapper(Generic[P, R]):
                 f"message; got {type(message).__name__}."
             )
         return cast(FluentRun[R], self._app._invoke(self._spec_ref, message))
+
+    def conversation(
+        self,
+        *,
+        id: str | None = None,
+        hydrate: bool = False,
+        user: str | None = None,
+        tags: Mapping[str, str] | None = None,
+    ) -> Conversation[R]:
+        """Open a multi-turn conversation with this agent.
+
+        Returns a :class:`~t0_agents.glow.conversation.Conversation` whose
+        :meth:`~t0_agents.glow.conversation.Conversation.send` yields the same
+        ``FluentRun[R]`` a direct call does.  A fresh conversation mints its
+        episode id (a UUIDv7); ``id=`` resumes an existing episode (must be a
+        UUIDv7 returned by a prior run).  ``hydrate=True`` reconstructs the
+        transcript from that episode before the first send and therefore
+        requires ``id=``.  ``user=`` is sugar for ``tags={"user": ...}`` — it
+        scopes both the tags stamped on every send and the read filter used to
+        hydrate / list, keeping the two aligned; pass ``tags=`` for other keys.
+        """
+        if hydrate and id is None:
+            raise ConfigurationError(
+                "conversation(hydrate=True) needs id= — the episode to "
+                "resume.  A fresh conversation has no prior history to hydrate."
+            )
+        merged: dict[str, str] = dict(tags) if tags else {}
+        if user is not None:
+            merged["user"] = user
+        resolved = self._app._resolve_config_overrides(self._spec_ref)
+        memory_strategy = str(resolved.get("memory_strategy", "auto"))
+        episode_id = id if id is not None else str(uuid7())
+        return cast(
+            Conversation[R],
+            Conversation(
+                self._app,
+                self._spec_ref,
+                id=episode_id,
+                tags=merged,
+                memory_strategy=memory_strategy,
+                needs_hydration=hydrate,
+            ),
+        )
 
 
 def _make_decorator(
