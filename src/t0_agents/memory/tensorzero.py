@@ -60,9 +60,14 @@ from tensorzero.generated_types import (
     StoredInputMessageContentToolResult,
 )
 
+from t0_agents.core.conversation import ConversationSummary
 from t0_agents.memory.base import MemoryRecord
 
 logger = logging.getLogger(__name__)
+
+#: Display caps for :meth:`TensorZeroMemory.list_conversations` summaries.
+_TITLE_MAX_CHARS = 60
+_PREVIEW_MAX_CHARS = 200
 
 
 class TensorZeroMemory:
@@ -110,6 +115,12 @@ class TensorZeroMemory:
     """Mirrors :func:`t0_agents.memory.base.render_memory_summary`'s
     ``max_records``.  Fetching more is wasted I/O for the records-
     returning path."""
+
+    DEFAULT_LIST_WINDOW = 200
+    """Default number of recent inferences :meth:`list_conversations` scans in
+    its single ``list_inferences`` call before grouping by episode.  Bounds the
+    cost (there is no server-side episode aggregation) at the price of horizon:
+    conversations whose latest turn predates the window are not listed."""
 
     def __init__(
         self,
@@ -319,17 +330,100 @@ class TensorZeroMemory:
         return history
 
     # ------------------------------------------------------------------
+    # Conversation listing (ConversationIndex protocol)
+    # ------------------------------------------------------------------
+
+    async def list_conversations(
+        self,
+        *,
+        tags: dict[str, str] | None = None,
+        limit: int = 20,
+        window: int = DEFAULT_LIST_WINDOW,
+    ) -> list[ConversationSummary]:
+        """List recent conversations, newest first — a **dev-grade** index.
+
+        TensorZero 2026.4.0 exposes no server-side per-episode aggregation, so
+        this groups a **bounded window** of the most recent inferences by
+        ``episode_id`` entirely client-side.  It is honest about the resulting
+        limits:
+
+        - **O(window)** — one ``list_inferences(limit=window)`` call, not a scan
+          of the whole log.
+        - A conversation whose latest turn predates the window is **not listed**;
+          widen ``window`` (larger scan) to extend the horizon.
+        - ``title`` / ``preview`` / ``turn_count`` are read from each
+          conversation's **most recent** inference input.  Under the
+          recommended ``memory_strategy="messages"`` the gateway accumulates the
+          whole episode into that input, so ``title`` is the first user message
+          and ``turn_count`` is exact.  Without message-history accumulation the
+          input carries only the latest turn, so ``title`` collapses to the
+          latest message and ``turn_count`` is a lower bound (``1``).
+
+        Scoped by ``tags`` merged over the instance ``tag_filter`` — pass e.g.
+        ``tags={"customer_id": cid}`` to list one tenant's conversations.  For
+        production-scale listing, back the agent with a dedicated
+        :class:`~t0_agents.core.conversation.ConversationIndex` instead; this
+        method satisfies that protocol so it is a drop-in for development.
+        """
+        request = ListInferencesRequest(
+            function_name=self._function_name,
+            filters=self._build_filters(tags),
+            order_by=[
+                OrderBy(by="timestamp", direction="descending")  # type: ignore[list-item]
+            ],
+            limit=window,
+        )
+        response = await self._gateway.list_inferences(request=request)
+
+        # DESC by timestamp → the first inference seen for an episode is its
+        # latest turn, whose input carries the most context (the whole episode
+        # under memory_strategy="messages").
+        latest_by_episode: dict[str, StoredInferenceChat] = {}
+        for inf in response.inferences:
+            if isinstance(inf, StoredInferenceChat):
+                latest_by_episode.setdefault(str(inf.episode_id), inf)
+
+        summaries: list[ConversationSummary] = []
+        for episode_id, inf in latest_by_episode.items():
+            users = _user_texts(inf.input)
+            summaries.append(
+                ConversationSummary(
+                    conversation_id=episode_id,
+                    title=_truncate(users[0], _TITLE_MAX_CHARS) if users else "",
+                    preview=(
+                        _truncate(users[-1], _PREVIEW_MAX_CHARS) if users else ""
+                    ),
+                    turn_count=len(users),
+                    updated_at=int(
+                        _parse_timestamp(inf.timestamp).timestamp() * 1000
+                    ),
+                )
+            )
+
+        summaries.sort(key=lambda s: s.updated_at, reverse=True)
+        return summaries[:limit]
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_filters(self) -> InferenceFilter | None:
+    def _build_filters(
+        self, tags: dict[str, str] | None = None
+    ) -> InferenceFilter | None:
         """Combine ``tag_filter`` + ``extra_filters`` into a single filter.
 
         Returns ``None`` when neither is set (TZ then runs an
         unfiltered query).  Single-tag with no extras returns the bare
         :class:`InferenceFilterTag`; anything more is wrapped in an
         :class:`InferenceFilterAnd`.
+
+        When *tags* is passed it is merged over the instance ``tag_filter``
+        (call-time keys win) — :meth:`list_conversations` uses this to scope a
+        query without constructing a second memory instance.
         """
+        tag_source = (
+            self._tag_filter if tags is None else {**self._tag_filter, **tags}
+        )
         tag_filters: list[InferenceFilter] = [
             cast(
                 InferenceFilter,
@@ -339,7 +433,7 @@ class TensorZeroMemory:
                     comparison_operator="=",
                 ),
             )
-            for key, value in self._tag_filter.items()
+            for key, value in tag_source.items()
         ]
         children: list[InferenceFilter] = list(tag_filters)
         if self._extra_filters is not None:
@@ -386,6 +480,55 @@ def _extract_last_user_message(stored_input: Any) -> str:
             if joined:
                 return joined
     return ""
+
+
+def _user_texts(stored_input: Any) -> list[str]:
+    """All user-authored texts in a :class:`StoredInput`, oldest-first.
+
+    One entry per ``role=user`` message that carried real text (``text`` /
+    ``raw_text`` blocks joined with newlines); tool-result-only and
+    tool-call-only user messages — the intermediate steps of an agent loop —
+    are skipped.  The forward-ordered counterpart of
+    :func:`_extract_last_user_message`, used by
+    :meth:`TensorZeroMemory.list_conversations` to derive a title (first),
+    preview (last), and turn count (length) from one cumulative input.
+    """
+    out: list[str] = []
+    messages = getattr(stored_input, "messages", None) or []
+    for msg in messages:
+        if getattr(msg, "role", None) != "user":
+            continue
+        content = getattr(msg, "content", None)
+        if isinstance(content, str):
+            if content:
+                out.append(content)
+            continue
+        if isinstance(content, list):
+            texts: list[str] = []
+            for part in content:
+                if isinstance(part, StoredInputMessageContentText):
+                    if part.text:
+                        texts.append(part.text)
+                elif isinstance(part, StoredInputMessageContentRawText):
+                    if part.value:
+                        texts.append(part.value)
+            joined = "\n".join(texts)
+            if joined:
+                out.append(joined)
+    return out
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Trim ``text`` to ``limit`` characters for display, adding an ellipsis.
+
+    Strips surrounding whitespace first; when the result exceeds ``limit`` it
+    is cut to ``limit - 1`` characters (trailing whitespace removed) plus ``…``
+    so the rendered string never exceeds ``limit``.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
 
 
 def _extract_agent_text(output_blocks: Any) -> str:
