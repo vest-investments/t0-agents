@@ -99,6 +99,15 @@ def test_every_union_variant_is_covered() -> None:
     assert covered == union_members
 
 
+def test_tool_progress_frame_defaults_match_the_event() -> None:
+    """total/message default to None like ToolProgressEvent, so a
+    hand-built frame needs only id and progress — and still round-trips."""
+    frame = ToolProgressFrame(id="t2", progress=1.0)
+    assert frame.total is None
+    assert frame.message is None
+    assert frame_from_dict(frame_to_dict(frame)) == frame
+
+
 def test_inference_ids_decode_as_tuple() -> None:
     frame = DoneFrame(
         turns=1, response_source="text", response_text="hi", inference_ids=("inf-1",)
