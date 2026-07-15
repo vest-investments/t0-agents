@@ -406,10 +406,16 @@ class FluentRun(Generic[T]):
             source: AsyncIterator[Any] = _tap()
             if selectors:
                 source = _filter_with_selectors(source, selectors)
-            async for item in source:
-                yield item
-            if captured is not None:
-                self._fire(captured)
+            try:
+                async for item in source:
+                    yield item
+            finally:
+                # Fire even if the consumer breaks early (GeneratorExit skips
+                # the code after the loop): once the terminal DoneEvent was
+                # tapped the turn completed and must record — the vest-ai
+                # record-in-finally pattern.  ``_fire`` is latched (fire-once).
+                if captured is not None:
+                    self._fire(captured)
 
         return _stream()
 

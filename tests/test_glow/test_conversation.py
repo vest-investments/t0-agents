@@ -293,6 +293,32 @@ async def test_hydrate_reconstructs_transcript() -> None:
     ]
 
 
+async def test_hydrate_retries_after_transient_failure() -> None:
+    stored = _stored_chat("ep", [_user_text_msg("hi")], "hello")
+    # First list_inferences raises (transient); the retry returns data.
+    t0 = FakeT0(
+        [],
+        list_inferences_responses=[
+            RuntimeError("transient gateway blip"),
+            FakeListInferencesResponse(inferences=[stored]),
+        ],
+    )
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    conv = t.conversation(id="ep", hydrate=True)
+    with pytest.raises(RuntimeError, match="transient"):
+        await conv.hydrate()  # fails, but un-latches so a retry can re-fetch
+    await conv.hydrate()  # retry succeeds
+    assert conv.transcript == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # app.conversations
 # ---------------------------------------------------------------------------

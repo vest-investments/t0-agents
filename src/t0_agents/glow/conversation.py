@@ -186,15 +186,21 @@ class Conversation(Generic[R]):
         # Latch before the await so a concurrent first-send prepare cannot
         # double-fetch (sends are sequential, but the flag keeps hydrate once).
         self._hydrated = True
-        t0 = await self._app._ensure_t0()
-        memory = TensorZeroMemory(
-            t0,
-            function_name=self._spec.function_name,
-            tag_filter=self._tags or None,
-        )
-        history = await memory.load_history(self._id)
-        if history:
-            self._transcript = _history_to_pairs(history)
+        try:
+            t0 = await self._app._ensure_t0()
+            memory = TensorZeroMemory(
+                t0,
+                function_name=self._spec.function_name,
+                tag_filter=self._tags or None,
+            )
+            history = await memory.load_history(self._id)
+            if history:
+                self._transcript = _history_to_pairs(history)
+        except Exception:
+            # A transient load_history failure must stay retryable: un-latch so
+            # the next send()/hydrate() re-attempts, then re-raise (fail loud).
+            self._hydrated = False
+            raise
 
 
 def _history_to_pairs(history: Sequence[Any]) -> list[dict[str, str]]:

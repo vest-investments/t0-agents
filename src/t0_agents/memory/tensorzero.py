@@ -33,7 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 from tensorzero import (
@@ -336,7 +336,7 @@ class TensorZeroMemory:
     async def list_conversations(
         self,
         *,
-        tags: dict[str, str] | None = None,
+        tags: Mapping[str, str] | None = None,
         limit: int = 20,
         window: int = DEFAULT_LIST_WINDOW,
     ) -> list[ConversationSummary]:
@@ -408,7 +408,7 @@ class TensorZeroMemory:
     # ------------------------------------------------------------------
 
     def _build_filters(
-        self, tags: dict[str, str] | None = None
+        self, tags: Mapping[str, str] | None = None
     ) -> InferenceFilter | None:
         """Combine ``tag_filter`` + ``extra_filters`` into a single filter.
 

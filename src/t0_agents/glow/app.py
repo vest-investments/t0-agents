@@ -799,7 +799,7 @@ class App:
         self,
         agent: _AgentWrapper[Any, Any],
         *,
-        tags: dict[str, str] | None = None,
+        tags: Mapping[str, str] | None = None,
         limit: int = 20,
         index: ConversationIndex | None = None,
     ) -> list[ConversationSummary]:
