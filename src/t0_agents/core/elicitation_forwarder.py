@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
@@ -56,6 +56,43 @@ The serving layer JSON-encodes this envelope and sends it over the WS.
 """
 
 OnRequest = Callable[[RequestEnvelope], Awaitable[None]]
+
+
+_SCHEMA_TYPE_NAMES: dict[str, str] = {
+    "boolean": "bool",
+    "integer": "int",
+    "number": "float",
+    "string": "str",
+}
+
+
+def _response_type_from_schema(
+    schema: Any, response_type: type[Any] | None
+) -> str | None:
+    """Stable ``response_type`` label for the request envelope.
+
+    ``None`` for a binary (approval) elicitation.  For a scalar
+    elicitation FastMCP wraps the value as ``{"value": {"type":
+    <json-type>}}`` under an internally-generated class whose
+    ``__name__`` (``"ScalarElicitationType"``) is unstable by design;
+    the JSON-schema ``type`` the ``schema`` field already carries is the
+    stable contract, so read it and map it to the Python name.  Falls
+    back to the schema ``title`` (structured models), then the type's
+    ``__name__`` (or ``str()`` for an exotic alias with no ``__name__``).
+    """
+    if response_type is None:
+        return None
+    if isinstance(schema, Mapping):
+        props = schema.get("properties")
+        value = props.get("value") if isinstance(props, Mapping) else None
+        if isinstance(value, Mapping):
+            value_type = value.get("type")
+            if isinstance(value_type, str):
+                return _SCHEMA_TYPE_NAMES.get(value_type, value_type)
+        title = schema.get("title")
+        if isinstance(title, str):
+            return title
+    return getattr(response_type, "__name__", None) or str(response_type)
 
 
 @dataclass(slots=True)
@@ -143,14 +180,13 @@ class ElicitationForwarder:
         )
         self._pending[elicitation_id] = request
 
+        schema = getattr(params, "requestedSchema", None)
         envelope: RequestEnvelope = {
             "type": "elicitation_request",
             "elicitation_id": elicitation_id,
             "message": message,
-            "schema": getattr(params, "requestedSchema", None),
-            "response_type": (
-                response_type.__name__ if response_type is not None else None
-            ),
+            "schema": schema,
+            "response_type": _response_type_from_schema(schema, response_type),
         }
 
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from typing import Any
 
 import pytest
@@ -42,14 +43,57 @@ async def test_handler_pushes_envelope_and_awaits_resolve() -> None:
     try:
         result = await forwarder.handler("pick a number", None, _FakeParams(), None)
     finally:
-        await resolver
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
 
     assert result.action == "accept"
     assert result.content == {"value": 42}
     assert received[0]["type"] == "elicitation_request"
     assert received[0]["message"] == "pick a number"
+    assert received[0]["schema"] == {
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+    }
+    # response_type arg was None (binary approval) → stays None.
+    assert received[0]["response_type"] is None
     # Pending dict is drained after resolve.
     assert forwarder.pending == {}
+
+
+async def test_handler_normalizes_response_type_from_schema() -> None:
+    """A scalar ``response_type`` is derived from the requested schema, not
+    from FastMCP's unstable generated wrapper-class name."""
+    received: list[RequestEnvelope] = []
+
+    async def on_request(env: RequestEnvelope) -> None:
+        received.append(env)
+
+    forwarder = ElicitationForwarder(on_request=on_request)
+
+    class ScalarElicitationType:  # mirrors FastMCP's generated wrapper name
+        pass
+
+    async def resolve_soon() -> None:
+        while not received:
+            await asyncio.sleep(0)
+        await forwarder.resolve(
+            received[0]["elicitation_id"],
+            {"action": "accept", "content": {"value": 7}},
+        )
+
+    resolver = asyncio.create_task(resolve_soon())
+    try:
+        await forwarder.handler(
+            "pick a number", ScalarElicitationType, _FakeParams(), None
+        )
+    finally:
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
+
+    # _FakeParams' schema wraps an integer → "int", not "ScalarElicitationType".
+    assert received[0]["response_type"] == "int"
 
 
 async def test_handler_timeout_declines() -> None:

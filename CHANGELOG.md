@@ -4,7 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.0.0] — 2026-07-15
+
+Glow v2 — the batteries-included, Pythonic surface for building
+TensorZero agents.  Seven approved proposals (P1–P7) plus the versioned
+`t0_agents.wire` contract (E2) land together: knob passthrough and
+`.with_()`, functionless `model=` agents, per-agent `tools=` filtering, a
+streaming production pack with tool progress, boot collapse and a CLI,
+and first-class conversations.  The deliberate breaking changes are
+confined to glow — core stays back-compatible — and each carries an
+inline `Migration:` note.
 
 ### Added
 
@@ -24,6 +33,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   unconsumed blocks the next.  `FluentRun` gained an additive `on_result` hook
   (fires once on success across every consumption path) and a `consumed`
   property.
+- **`AgentHandle.conversation()`.**  The handle protocol now declares
+  `conversation(...)`, so a conversation-capable sub-agent handle types
+  without importing the private `_AgentWrapper`.
 - **Dev-grade conversation listing — `app.conversations(agent, tags=…)` +
   `TensorZeroMemory.list_conversations()`.**  Groups a bounded window of recent
   inferences by `episode_id` client-side (there is no server-side aggregation
@@ -199,6 +211,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Docs: the "No per-agent MCP subsets" limitation.**  Resolved by
   `@app.agent(tools=[...])`.
+
+### Fixed
+
+- **Elicitation forwarder `response_type` leaked an unstable class
+  name.**  The request envelope exposed FastMCP's generated
+  `"ScalarElicitationType"`; it is now derived from the requested schema
+  (`bool` / `int` / `float` / `str`), matching
+  `ElicitationRequestFrame.response_type`.
+- **`ToolProgressFrame` was stricter than its source event.**  `total` /
+  `message` now default to `None`, matching `ToolProgressEvent`, so a
+  hand-built frame needs only `id` and `progress`.
+- **Docs: the escape-hatch middleware recipe.**  It imported a
+  non-existent `t0_agents.middleware.TimingMiddleware` and drove the
+  private `._agent`; it now uses the real `CostTrackingMiddleware` and
+  documents middleware as a first-class glow knob (`App` / `@app.agent`
+  / `.with_(...)`).
+- **Docs: the getting-started `cost` claim.**  `.result()`'s
+  `AgentResult` carries no aggregated `cost`; the guide and the
+  `handle.py` docstrings now point at the run handle's `.cost()` /
+  `.usage()`.
+- **`examples/glow/06_orchestrator.py` crashed before build.**  It poked
+  `orchestrator._agent.config.max_turns` while `._agent` was still
+  `None`; it now passes `max_turns=` to `@app.agent(...)`.
+- **`examples/glow/03_streaming.py` printed block ids as text.**  It now
+  leads with `stream_text()` and shows the `Text` / `TextEnd`
+  distinction.
 
 ## [1.1.0] — 2026-06-22
 

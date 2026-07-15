@@ -12,8 +12,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, assert_type
 
-from t0_agents.glow import AgentHandle, App, Depends, FluentRun, Text, llm
-from t0_agents.stream.events import AgentEvent, TextEndEvent
+from t0_agents.glow import (
+    AgentHandle,
+    App,
+    Conversation,
+    Depends,
+    FluentRun,
+    Text,
+    TextEnd,
+    llm,
+)
+from t0_agents.stream.events import AgentEvent, TextDeltaEvent, TextEndEvent
 from t0_agents.testing import ScriptedAgent
 
 
@@ -62,10 +71,16 @@ if TYPE_CHECKING:
     # un-consumed async iterators, so these stay out of the runtime path.
     def _events_overloads_narrow_the_element_type(run: FluentRun[str]) -> None:
         assert_type(run.events(), AsyncIterator[AgentEvent])
-        assert_type(run.events(Text), AsyncIterator[TextEndEvent])
+        assert_type(run.events(Text), AsyncIterator[TextDeltaEvent])
+        assert_type(run.events(TextEnd), AsyncIterator[TextEndEvent])
         assert_type(run.events(Text.map(lambda te: te.id)), AsyncIterator[str])
 
     def _agent_handle_is_callable_and_returns_a_fluent_run(
         research: AgentHandle[..., str],
     ) -> None:
         assert_type(research("topic"), FluentRun[str])
+
+    def _agent_handle_can_open_a_conversation(
+        research: AgentHandle[..., str],
+    ) -> None:
+        assert_type(research.conversation(), Conversation[str])

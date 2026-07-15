@@ -142,8 +142,8 @@ class ToolProgressFrame:
     kind: ClassVar[str] = "tool_progress"
     id: str
     progress: float
-    total: float | None
-    message: str | None
+    total: float | None = None
+    message: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
