@@ -37,8 +37,9 @@ mounts, and `@app.tool` registrations remain visible.
 
 The `App` owns a long-lived in-memory FastMCP server + matching
 `Client` (`app._owned_client`).  Tools registered via `@app.tool` land
-on that server; class-based `MCPServer` declarations mount remote
-endpoints into the same composed view.  The Client enters its
+on that server; class- or instance-based `MCPServer` declarations mount
+remote endpoints (optionally with per-request `headers=` / `auth=`) into
+the same composed view.  The Client enters its
 in-process transport task inside `app.build()`; `app.shutdown()`
 closes it; `app.lifespan()` is the recommended entry point and does
 `build → yield → shutdown` in a `try/finally`:
