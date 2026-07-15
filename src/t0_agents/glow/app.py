@@ -39,7 +39,7 @@ import fnmatch
 import logging
 import os
 import warnings
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
@@ -55,6 +55,7 @@ from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
+from t0_agents.memory.tensorzero import TensorZeroMemory
 from t0_agents.tooling import FilteredToolProvider
 
 if TYPE_CHECKING:
@@ -62,8 +63,9 @@ if TYPE_CHECKING:
 
     from tensorzero import ToolChoice
 
+    from t0_agents.core.conversation import ConversationIndex, ConversationSummary
     from t0_agents.core.middleware.base import Middleware
-    from t0_agents.core.types import MemoryProvider
+    from t0_agents.core.types import AgentResult, MemoryProvider
     from t0_agents.glow.decorators import _AgentWrapper
 
 __all__ = ["App"]
@@ -733,6 +735,92 @@ class App:
             ),
             prepare=prepare,
         )
+
+    def _invoke_in_conversation(
+        self,
+        spec: _AgentSpec,
+        message: str,
+        *,
+        episode_id: str,
+        tags: dict[str, str] | None,
+        prior_messages: Callable[[], Sequence[Mapping[str, Any]] | None] | None,
+        on_result: Callable[[AgentResult[Any]], None],
+        extra_prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> FluentRun[Any]:
+        """Build a :class:`FluentRun` for one turn of a :class:`Conversation`.
+
+        A sibling of :meth:`_invoke` that seeds the per-call invoke surface a
+        conversation owns — ``episode_id`` (pinned to ``conv.id``), ``tags``,
+        and an optional ``prior_messages`` snapshot resolved lazily at
+        consumption (so it reflects any hydration and prior recorded turns) —
+        then attaches the ``on_result`` recorder and folds an ``extra_prepare``
+        step (hydration) into the auto-build ``prepare`` hook.  Seeds ride
+        ``setdefault`` so an explicit ``.with_(episode_id=...)`` still wins, and
+        agent resolution stays deferred to first consumption (the M7 rule that
+        a config error surfaces at consumption, never at call).
+        """
+        system_prompt = spec.system_prompt
+
+        async def prepare() -> None:
+            await self._ensure_ready_for(spec)
+            if extra_prepare is not None:
+                await extra_prepare()
+
+        def build(mode: Any, **call_kwargs: Any) -> Any:
+            agent = self._lookup_or_build(spec)
+            call_kwargs.setdefault("episode_id", episode_id)
+            if tags:
+                call_kwargs.setdefault("tags", dict(tags))
+            if prior_messages is not None:
+                seeded = prior_messages()
+                if seeded:
+                    call_kwargs.setdefault("prior_messages", seeded)
+            return self._agent_invoke(
+                agent,
+                message,
+                mode,
+                call_kwargs,
+                system_prompt=system_prompt,
+                spec_name=spec.name,
+            )
+
+        return FluentRun(
+            build,
+            spec.output_mode,
+            value_transform=spec.value_transform,
+            known_servers=tuple(
+                s.namespace for s in self._mcp_specs if s.namespace is not None
+            ),
+            prepare=prepare,
+            on_result=on_result,
+        )
+
+    async def conversations(
+        self,
+        agent: _AgentWrapper[Any, Any],
+        *,
+        tags: dict[str, str] | None = None,
+        limit: int = 20,
+        index: ConversationIndex | None = None,
+    ) -> list[ConversationSummary]:
+        """List ``agent``'s recent conversations, newest first.
+
+        **Dev-grade by default**: builds a
+        :class:`~t0_agents.memory.tensorzero.TensorZeroMemory` over the App
+        gateway and groups a bounded window of recent inferences client-side —
+        see :meth:`TensorZeroMemory.list_conversations` for the exact horizon
+        and ``turn_count`` guarantees.  Pass ``index=`` — any
+        :class:`~t0_agents.core.conversation.ConversationIndex` — to delegate
+        to a production inbox instead; that is the seam a real store plugs into
+        with no further glow change.  ``tags`` scopes the listing (e.g.
+        ``tags={"customer_id": cid}``), aligning read filters with the write
+        tags a :class:`~t0_agents.glow.conversation.Conversation` stamps.
+        """
+        if index is not None:
+            return list(await index.list_conversations(tags=tags, limit=limit))
+        t0 = await self._ensure_t0()
+        memory = TensorZeroMemory(t0, function_name=agent._spec.function_name)
+        return list(await memory.list_conversations(tags=tags, limit=limit))
 
     async def build(self) -> None:
         """Eagerly construct every registered agent and connect the Client.
