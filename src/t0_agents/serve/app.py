@@ -107,10 +107,12 @@ async def create_app_from_glow(
 ) -> FastAPI:
     """Bridge a glow :class:`~t0_agents.glow.app.App` into :func:`create_app`.
 
-    Boots the App (``await glow_app.build()`` — gateway resolution, MCP
-    mounts, client connection, ``tools=`` filters; idempotent), selects
-    an agent (the sole registered one, or ``agent=`` by name — anything
-    else raises :class:`ConfigurationError` listing the options), and
+    Validates the agent selection first (the sole registered agent, or
+    ``agent=`` by name — anything else raises
+    :class:`ConfigurationError` listing the options; the registry is
+    populated at decoration time, so this is cheap and fail-fast), then
+    boots the App (``await glow_app.build()`` — gateway resolution, MCP
+    mounts, client connection, ``tools=`` filters; idempotent) and
     delegates to :func:`create_app` with the built core
     :class:`Agent`.
 
@@ -123,7 +125,6 @@ async def create_app_from_glow(
     ConfigurationError — compose :func:`create_app` directly with a
     ``client_factory`` for that shape.
     """
-    await glow_app.build()
     registered = sorted(glow_app._agent_registry)
     if not registered:
         raise ConfigurationError(
@@ -141,6 +142,7 @@ async def create_app_from_glow(
             f"create_app_from_glow: agent {agent!r} is not registered.  "
             f"Available: {', '.join(registered)}."
         )
+    await glow_app.build()
     core_agent = glow_app._lookup_or_build(glow_app._agent_registry[agent])
     return create_app(
         core_agent,

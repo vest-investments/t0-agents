@@ -64,3 +64,18 @@ async def test_bridge_rejects_unknown_agent_and_empty_app() -> None:
     async with glow_app:
         with pytest.raises(ConfigurationError, match="not registered"):
             await create_app_from_glow(glow_app, agent="ghost")
+
+
+async def test_bridge_validates_selection_before_booting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selection errors must win over boot errors (fail-fast ordering).
+
+    A deferred App with no env and no agents used to raise the
+    no-gateway error from ``build()`` before the selection was ever
+    validated — the gemini-flagged ordering on PR #77.
+    """
+    monkeypatch.delenv("TENSORZERO_URL", raising=False)
+    monkeypatch.delenv("TENSORZERO_CONFIG", raising=False)
+    with pytest.raises(ConfigurationError, match="no registered agents"):
+        await create_app_from_glow(App())
