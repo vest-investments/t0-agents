@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.1] — 2026-07-15
+
+### Fixed
+
+- **Replayed thought blocks stripped from the intra-run loop.**  The agent
+  loop appended each assistant turn to its replay history with any reasoning
+  `Thought` block intact; on the next turn TensorZero rejected those input
+  thought blocks for thought-less providers (e.g. groq) and dropped them with
+  a WARN.  `run_agent` now strips `Thought` blocks before appending the
+  assistant turn, matching the cross-conversation strip already applied by the
+  memory subsystem.  Provider-agnostic (no capability signal exists in the
+  pinned SDK); the returned answer and the `response_source == "thought"`
+  fallback are unchanged.
+
 ## [2.1.0] — 2026-07-15
 
 Production-mount ergonomics for glow's App-owned MCP client — the three

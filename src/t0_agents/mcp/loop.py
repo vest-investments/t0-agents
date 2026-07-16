@@ -97,6 +97,19 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
     return any(isinstance(b, ToolCall) for b in content_blocks)
 
 
+def _strip_thoughts(content_blocks: list[Any]) -> list[Any]:
+    """Return ``content_blocks`` without any ``Thought`` blocks.
+
+    Applied to the assistant turn before it is appended to the replay
+    ``messages``: TensorZero rejects input thought blocks for thought-less
+    providers (e.g. groq) and drops them with a WARN, so replaying them is
+    never useful. Mirrors the cross-conversation strip-on-replay rule in
+    ``t0_agents.memory.tensorzero`` (``_to_native_message`` /
+    ``_output_to_content_blocks``).
+    """
+    return [b for b in content_blocks if not isinstance(b, Thought)]
+
+
 async def _execute_single_tool_call(
     tool_provider: Client[Any],
     block: ToolCall,
@@ -487,7 +500,7 @@ async def run_agent(
 
         episode_id = str(response.episode_id)
         inference_ids.append(str(response.inference_id))
-        messages.append(Message(role="assistant", content=response.content))
+        messages.append(Message(role="assistant", content=_strip_thoughts(response.content)))
 
         # Content-type breakdown per turn.
         content_types = [type(b).__name__ for b in response.content]

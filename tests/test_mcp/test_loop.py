@@ -416,6 +416,38 @@ class TestRunAgent:
         assert results_block[0].name == "add"
         assert results_block[0].id == "c1"
 
+    async def test_replayed_assistant_turn_strips_thought_keeps_tool_call(self) -> None:
+        """The assistant turn replayed as turn-2 input drops its ``Thought``
+        and keeps its ``ToolCall``.
+
+        Reasoning models (e.g. gpt_oss_120 via groq) emit a Thought beside the
+        ToolCall on turn 1; TensorZero rejects input thought blocks for
+        thought-less providers, so the loop must not replay them. The ToolCall
+        is preserved and the returned answer / response_source stay unchanged.
+        """
+        tc = _tool_call(name="add", call_id="c1")
+        t0 = FakeT0([
+            FakeChatResponse(content=[Thought(text="let me add these"), tc]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("add")],
+            call_results={"add": _make_result(data=5)},
+        )
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "compute 2+3",
+            "agent",
+        )
+        assert result.response == "done"
+        assert result.turns == 2
+
+        # Turn-2 input: the assistant turn is [tc] — Thought stripped, ToolCall kept.
+        assistant = t0.calls[1]["input"]["messages"][1]
+        assert assistant["role"] == "assistant"
+        assert assistant["content"] == [tc]
+
     async def test_two_tool_calls_collapse_into_one_user_message(self) -> None:
         """N tool calls in one response → ONE Message(role="user")
         carrying N ToolResults. Not N separate user messages."""
