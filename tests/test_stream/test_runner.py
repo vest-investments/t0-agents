@@ -8,7 +8,7 @@ import pytest
 from fastmcp.client.client import CallToolResult
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
-from tensorzero import AsyncTensorZeroGateway, Text, Thought
+from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
 from tensorzero.types import TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
@@ -143,6 +143,83 @@ async def test_streaming_loop_dispatches_tool_calls() -> None:
     turn_ends = [e for e in events if isinstance(e, TurnEndEvent)]
     assert [t.turn for t in turn_ends] == [1, 2]
 
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "sum is 3"
+    assert done[0].result.turns == 2
+
+
+async def test_streaming_replay_strips_thought_keeps_tool_call() -> None:
+    """The assistant turn replayed as turn-2 input drops its ``Thought`` and
+    keeps its ``ToolCall``.
+
+    Reasoning models (e.g. gpt_oss_120 via groq) emit a Thought beside the
+    ToolCall on turn 1; TensorZero rejects input thought blocks for
+    thought-less providers, so the streaming loop must not replay them. The
+    ToolCall is preserved so the tool-result turn stays coherent, and the
+    returned answer is unchanged.
+    """
+    fake_t0 = FakeT0(
+        responses=[
+            # Turn 1: a reasoning Thought beside the tool call.
+            [
+                chat_chunk(
+                    [
+                        thought_chunk(text="let me add these", block_id="th1"),
+                        tool_call_chunk(
+                            raw_name="add",
+                            raw_arguments='{"a":1,"b":2}',
+                            block_id="c1",
+                        ),
+                    ]
+                ),
+                final_chunk(),
+            ],
+            # Turn 2: text response → done.
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                },
+            )
+        ],
+        call_results={"add": _tool_result("3")},
+    )
+
+    runner = StreamingAgentLoop()
+    events = []
+    async for event in runner.stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "What is 1+2?",
+        "agent",
+    ):
+        events.append(event)
+
+    # calls[1] is turn 2's inference; its input replays the turn-1 assistant
+    # message — the Thought must be stripped and the ToolCall kept.
+    turn2_messages = fake_t0.calls[1]["input"]["messages"]
+    assistant = next(m for m in turn2_messages if m["role"] == "assistant")
+    blocks = assistant["content"]
+    assert not any(isinstance(b, Thought) for b in blocks)
+    tool_calls = [b for b in blocks if isinstance(b, ToolCall)]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].name == "add"
+
+    # The reasoning-model answer and turn count are unaffected by the strip.
     done = [e for e in events if isinstance(e, DoneEvent)]
     assert len(done) == 1
     assert done[0].result.response == "sum is 3"

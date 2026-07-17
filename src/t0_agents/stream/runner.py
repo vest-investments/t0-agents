@@ -48,6 +48,7 @@ from t0_agents.mcp.loop import (
     RECOVERABLE_INFERENCE_PATTERNS,
     RECOVERABLE_INFERENCE_STATUS_CODES,
     ProgressCallback,
+    _strip_thoughts,
     execute_tool_calls,
     execute_tool_calls_parallel,
 )
@@ -267,7 +268,9 @@ class StreamingAgentLoop:
                 assembler=assembler,
                 tool_calls=tool_calls_collected,
             )
-            messages.append(Message(role="assistant", content=assistant_blocks))
+            messages.append(
+                Message(role="assistant", content=_strip_thoughts(assistant_blocks))
+            )
 
             # Fire the observability hook with a synthesised ChatInferenceResponse
             # mirror so guardrails (``max_cost``) can accumulate usage exactly
@@ -426,12 +429,14 @@ class StreamingAgentLoop:
         assembler: TurnStreamAssembler,
         tool_calls: list[ToolCallEvent],
     ) -> list[Any]:
-        """Reconstruct the assistant turn's ``content`` list for history.
+        """Reconstruct the assistant turn's full ``content`` list.
 
-        The history the next turn sees must carry ``Text``, ``Thought``, and
-        ``ToolCall`` blocks in the same shape ``run_agent`` appends when
-        non-streaming — otherwise the LLM sees a different conversation
-        history between streaming and non-streaming modes.
+        Returns the turn's ``Text``, ``Thought`` and ``ToolCall`` blocks — the
+        complete shape read locally by the final-answer / thought fallback
+        (:func:`_final_text`) and by the ``on_inference`` cost mirror. The
+        caller strips ``Thought`` before appending to the replay ``messages``
+        (parity with ``run_agent``: TensorZero rejects input thought blocks for
+        thought-less providers such as groq).
         """
         blocks: list[Any] = []
         for _tid, text in assembler.text_blocks.items():
