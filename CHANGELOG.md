@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.2] — 2026-07-17
+
+### Fixed
+
+- **Replayed thought blocks stripped from the streaming loop too.**  `2.1.1`
+  fixed the non-streaming `run_agent`, but the streaming loop
+  (`stream/runner.py`) still replayed each assistant turn with its `Thought`
+  block intact, so thought-less providers (e.g. groq) kept rejecting those
+  input thought blocks with a WARN on the streaming path.  The streaming loop
+  now strips `Thought` at the same replay-append boundary via the shared
+  `_strip_thoughts` helper, so both loops behave identically.  The turn's
+  local blocks are untouched, so the returned answer and the
+  `response_source == "thought"` fallback are unchanged.
+
 ## [2.1.1] — 2026-07-15
 
 ### Fixed
