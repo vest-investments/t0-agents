@@ -29,6 +29,17 @@ error string in the `result` field. The five cases:
 | `McpError` | MCP protocol error or transport timeout (code `-32000`) | `"ERROR: MCP protocol error (possibly timeout): <e>"` | MCP transport layer failure, including per-call timeout expiry |
 | Unexpected exception | Any other exception type | `"ERROR: unexpected <ExceptionType>: <e>"` | Catch-all safety net so a single misbehaving tool cannot crash the loop |
 
+**One taxonomy, both loops.** The turn-level logic around dispatch —
+input validation, the corrective retry, the assistant append, final-text
+mining, `AgentResult`, the max-turns guard — is shared by `run_agent`
+and `StreamingAgentLoop` via `core/turn_engine.py`, and both dispatch
+through `_execute_single_tool_call`. The first two rows apply
+identically on the streaming path: TensorZero only zeroes
+`name`/`arguments` on non-streaming responses, so the streaming rebuild
+mirrors that zeroing against the advertised tool list before dispatch —
+a hallucinated name or unparseable arguments never reach the tool on
+either loop.
+
 **Elicitation not supported.** When a tool calls `ctx.elicit()` but the
 Client was created without an `elicitation_handler`, the server raises
 `McpError(-32600, "Elicitation not supported")`. FastMCP's tool dispatch
