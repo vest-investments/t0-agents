@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`run_agent` accepts `progress_callback`.**  The tool executors have
+  always accepted a per-call progress relay, but only the streaming loop
+  wired it — server-side ``ctx.report_progress(...)`` notifications were
+  silently dropped on non-streaming runs.  ``run_agent`` now forwards an
+  optional ``progress_callback`` (same ``ProgressCallback`` shape) to the
+  executors on every dispatch turn.
+
 ### Fixed
 
 - **`tool_timeout=None` now disables the per-call timeout — everywhere.**

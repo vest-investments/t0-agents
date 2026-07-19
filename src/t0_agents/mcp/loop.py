@@ -278,6 +278,7 @@ async def run_agent(
     system: str | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
     prior_messages: list[Message] | None = None,
+    progress_callback: ProgressCallback | None = None,
     model_name: str | None = None,
     variant_name: str | None = None,
     params: dict[str, Any] | None = None,
@@ -368,6 +369,11 @@ async def run_agent(
             from ``response.usage.cost`` so ``max_cost`` can abort the
             run at the next tool call. ``None`` (the default) is a no-op
             that preserves today's behaviour byte-for-byte.
+        progress_callback: Optional :data:`ProgressCallback` forwarded to
+            the tool executors on every dispatch turn, so server-side
+            ``ctx.report_progress(...)`` notifications reach
+            non-streaming callers tagged with the emitting block's id.
+            ``None`` (the default) keeps the quiet behaviour.
         prior_messages: Optional TensorZero-native message history to
             seed the loop with.  Used by the ``messages`` memory
             strategy (``Agent`` with ``memory_strategy="messages"`` and a
@@ -512,7 +518,12 @@ async def run_agent(
 
         if tool_provider is None:
             raise_missing_tool_provider(entry_point="run_agent")
-        tool_results = await executor(tool_provider, response.content, tool_timeout)
+        tool_results = await executor(
+            tool_provider,
+            response.content,
+            tool_timeout,
+            progress_callback=progress_callback,
+        )
         # N tool results MUST go into a single user message, not N.
         state.messages.append(Message(role="user", content=tool_results))
 
