@@ -86,8 +86,9 @@ class AgentConfig:
             of ``"write_only"``/``"read_only"``/``"on"``/``"off"``; set it
             explicitly rather than relying on the gateway default.
         max_turns: Maximum inference turns before ``MaxTurnsExceededError``.
-        tool_timeout: Per-tool-call timeout in seconds, or ``None`` to use the
-            framework default (30.0 s).
+        tool_timeout: Per-tool-call timeout in seconds, or ``None`` to
+            disable the per-call timeout entirely — required when a tool
+            can block on human elicitation longer than any fixed budget.
         parallel_tools: Dispatch tool calls via ``asyncio.gather`` when ``True``.
         dryrun: Forward ``dryrun=True`` to every ``t0.inference()`` call.
         tool_choice: Tool-choice directive (``"auto"``, ``"required"``, ``"off"``,
