@@ -8,16 +8,21 @@ here or not at all.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator, Callable, Generator
+from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 import pytest
 from fastmcp import Context, FastMCP
+from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow import MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler
-from t0_agents.mcp.runtime import MCPRuntime
+from t0_agents.mcp.runtime import MCPRuntime, _remote_transport
 
 
 def _named_server(server_name: str, *tool_names: str) -> FastMCP[Any]:
@@ -155,3 +160,112 @@ async def test_missing_tool_on_routed_server_raises_tool_error() -> None:
     async with MCPRuntime([spec]) as runtime:
         with pytest.raises(ToolError, match="Unknown tool"):
             await runtime.call_tool("calc_nope", {})
+
+
+# --- Remote transport builder ----------------------------------------------
+
+
+class _ServiceAuth(httpx.Auth):
+    """Inject a service-auth header per request (glow only needs *an*
+    ``httpx.Auth``)."""
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        request.headers["X-Service-Auth-Token"] = self._token
+        yield request
+
+
+def test_remote_transport_bare_url_when_unauthed() -> None:
+    spec = MCPServer(url="https://x/mcp", namespace="x")._to_spec()
+    assert _remote_transport(spec) == "https://x/mcp"
+
+
+def test_remote_transport_builds_http_transport_with_headers_and_auth() -> None:
+    auth = _ServiceAuth("svc-tok")
+    spec = MCPServer(url="https://x/mcp", headers={"X-A": "1"}, auth=auth)._to_spec()
+    target = _remote_transport(spec)
+    assert isinstance(target, StreamableHttpTransport)
+    assert target.headers == {"X-A": "1"}
+    assert target.auth is auth
+
+
+def test_remote_transport_builds_sse_transport() -> None:
+    spec = MCPServer(
+        url="https://x/sse", transport="sse", headers={"X-A": "1"}
+    )._to_spec()
+    assert isinstance(_remote_transport(spec), SSETransport)
+
+
+def test_remote_transport_rejects_authed_non_http_transport() -> None:
+    spec = MCPServer(
+        url="stdio://x", transport="stdio", headers={"X-A": "1"}
+    )._to_spec()
+    with pytest.raises(ConfigurationError, match="require transport 'http' or 'sse'"):
+        _remote_transport(spec)
+
+
+# --- Remote handles over real HTTP (ephemeral uvicorn) ----------------------
+
+
+@asynccontextmanager
+async def _ephemeral_http_server(
+    server: FastMCP[Any],
+    wrap_asgi: Callable[[Any], Any] | None = None,
+) -> AsyncIterator[str]:
+    """Serve ``server`` on an OS-assigned port; yield the /mcp URL."""
+    uvicorn = pytest.importorskip("uvicorn")
+
+    app: Any = server.http_app(path="/mcp")
+    if wrap_asgi is not None:
+        app = wrap_asgi(app)
+    config = uvicorn.Config(
+        app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"
+    )
+    http = uvicorn.Server(config)
+    serve_task = asyncio.create_task(http.serve())
+    try:
+        while not http.started:
+            await asyncio.sleep(0.02)
+        port = http.servers[0].sockets[0].getsockname()[1]
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        http.should_exit = True
+        await serve_task
+
+
+def _elicit_server() -> FastMCP[Any]:
+    server: FastMCP[Any] = FastMCP("remote-elicit")
+
+    @server.tool
+    async def order(ctx: Context) -> str:
+        """Ask for approval before acting."""
+        result = await ctx.elicit("Place the order?", response_type=None)
+        return "placed" if result.action == "accept" else "declined"
+
+    return server
+
+
+async def test_remote_spec_lists_and_calls_over_http() -> None:
+    async with _ephemeral_http_server(_named_server("rsrv", "hello")) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            names = {tool.name for tool in await runtime.list_tools()}
+            result = await runtime.call_tool("svc_hello", {})
+    assert names == {"svc_hello"}
+    assert result.data == "rsrv:hello"
+
+
+async def test_remote_elicitation_reaches_app_scoped_handler() -> None:
+    """A remote server's ``ctx.elicit`` must reach the runtime's handler
+    through the direct client — the proxy's back-forwarding is gone."""
+    async with _ephemeral_http_server(_elicit_server()) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime(
+            [spec], elicitation_handler=auto_approve_handler
+        ) as runtime:
+            result = await runtime.call_tool("svc_order", {})
+    assert result.data == "placed"

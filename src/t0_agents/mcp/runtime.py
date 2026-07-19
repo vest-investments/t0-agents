@@ -32,6 +32,7 @@ from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fastmcp import Client, FastMCP
+from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
 from t0_agents.core.exceptions import ConfigurationError
@@ -77,6 +78,31 @@ class MCPServerSpecLike(Protocol):
 
     @property
     def prefix(self) -> bool: ...
+
+
+def _remote_transport(
+    spec: MCPServerSpecLike,
+) -> str | StreamableHttpTransport | SSETransport:
+    """Resolve a ``url`` spec to what the direct client should mount.
+
+    A bare URL lets ``Client`` infer the transport (the default, and the
+    no-auth path).  ``headers``/``auth`` cannot ride an inferred
+    transport, so when either is set build the explicit transport named
+    by ``spec.transport`` (``"http"`` / ``"sse"``) carrying them.
+    """
+    url = spec.url
+    if url is None:
+        raise ConfigurationError("a remote handle requires url=")
+    if spec.headers is None and spec.auth is None:
+        return url
+    if spec.transport == "sse":
+        return SSETransport(url, headers=spec.headers, auth=spec.auth)
+    if spec.transport == "http":
+        return StreamableHttpTransport(url, headers=spec.headers, auth=spec.auth)
+    raise ConfigurationError(
+        f"MCPServer(url={url!r}): headers=/auth= require transport 'http' "
+        f"or 'sse', got {spec.transport!r}."
+    )
 
 
 class _ServerHandle:
@@ -288,9 +314,23 @@ class MCPRuntime:
             return self._in_memory_handle(
                 key, spec.server, namespace=spec.namespace, prefix=spec.prefix
             )
-        raise ConfigurationError(
-            f"MCPRuntime cannot route url={spec.url!r} yet — remote handles "
-            f"land in the next slice."
+        return self._remote_handle(spec.namespace or spec.url or "remote", spec)
+
+    def _remote_handle(self, key: str, spec: MCPServerSpecLike) -> _ServerHandle:
+        elicitation_handler = self._elicitation_handler
+
+        def factory(invalidate: Callable[[], None]) -> Client[Any]:
+            return Client(
+                _remote_transport(spec),
+                elicitation_handler=elicitation_handler,
+            )
+
+        return _ServerHandle(
+            key,
+            namespace=spec.namespace,
+            prefix=spec.prefix,
+            live_inventory=False,
+            client_factory=factory,
         )
 
     def _in_memory_handle(
