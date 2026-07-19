@@ -320,7 +320,16 @@ class MCPRuntime:
                     "@app.tool", local_server, namespace=None, prefix=False
                 )
             )
+        # Value-identical specs fold into one handle — the composite path
+        # tolerated re-registration because ``FastMCP.mount`` is idempotent
+        # on identical mounts (e.g. ``servers=[GithubMCP]`` plus the same
+        # class appearing as a parameter annotation).
+        unique_specs: list[MCPServerSpecLike] = []
         for spec in specs:
+            if any(spec == seen for seen in unique_specs):
+                continue
+            unique_specs.append(spec)
+        for spec in unique_specs:
             self._handles.append(self._handle_for_spec(spec))
         # Longest namespace first, so a server whose name prefixes another
         # (``fred`` vs ``fred_api``) never steals the longer match — the

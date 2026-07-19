@@ -169,6 +169,18 @@ async def test_missing_tool_on_routed_server_raises_tool_error() -> None:
             await runtime.call_tool("calc_nope", {})
 
 
+async def test_value_identical_specs_fold_into_one_handle() -> None:
+    """Registering the same spec twice (servers= plus annotation) was
+    harmless on the composite (mount idempotence) — parity here."""
+    server = _named_server("calc-tools", "ping")
+    spec_a = _spec(server, namespace="calc")
+    spec_b = _spec(server, namespace="calc")
+    async with MCPRuntime([spec_a, spec_b]) as runtime:
+        assert len(runtime._handles) == 1
+        names = [tool.name for tool in await runtime.list_tools()]
+    assert names == ["calc_ping"]
+
+
 # --- Remote transport builder ----------------------------------------------
 
 
