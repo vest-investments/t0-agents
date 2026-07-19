@@ -27,11 +27,13 @@ Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.27.0:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fastmcp import Client, FastMCP
+from fastmcp.client.tasks import TaskNotificationHandler
 from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
@@ -47,6 +49,31 @@ if TYPE_CHECKING:
     from t0_agents.core.types import ToolProgressHandler
 
 __all__ = ["MCPRuntime"]
+
+_TOOL_LIST_TTL_SECONDS = 60.0
+
+
+class _InventoryMessageHandler(TaskNotificationHandler):
+    """Invalidate a handle's inventory cache on ``tools/list_changed``.
+
+    Subclasses ``TaskNotificationHandler`` because fastmcp installs that
+    as the *default* message handler (``message_handler or
+    TaskNotificationHandler(self)``) — passing a plain handler would
+    silently disable task-status routing.  The parent's ``__init__``
+    wants the not-yet-constructed client, so :meth:`bind` runs it right
+    after ``Client(...)`` and before any traffic can flow.
+    """
+
+    def __init__(self, invalidate: Callable[[], None]) -> None:
+        self._invalidate = invalidate
+
+    def bind(self, client: Client[Any]) -> None:
+        super().__init__(client)
+
+    async def on_tool_list_changed(
+        self, message: mcp.types.ToolListChangedNotification
+    ) -> None:
+        self._invalidate()
 
 
 class MCPServerSpecLike(Protocol):
@@ -161,8 +188,32 @@ class _ServerHandle:
         self._stack = AsyncExitStack()
 
     async def tools(self) -> list[mcp.types.Tool]:
+        """This handle's inventory — live for in-memory servers, TTL-cached
+        for remotes.
+
+        In-memory servers stay live-linked (a ``@server.tool`` registered
+        after boot is visible immediately, as it was on the composite).
+        Remote inventories cache for ``_TOOL_LIST_TTL_SECONDS``;
+        ``tools/list_changed`` invalidates early, and the TTL is the
+        backstop for notifications lost to the GET stream's 2-attempt
+        reconnect cap.
+        """
         await self.connect()
-        return await self.client.list_tools()
+        if self.live_inventory:
+            return await self.client.list_tools()
+        cached = self._cache
+        if cached is not None and time.monotonic() - cached[1] < _TOOL_LIST_TTL_SECONDS:
+            return cached[0]
+        async with self._lock:
+            cached = self._cache
+            if (
+                cached is not None
+                and time.monotonic() - cached[1] < _TOOL_LIST_TTL_SECONDS
+            ):
+                return cached[0]
+            tools = await self.client.list_tools()
+            self._cache = (tools, time.monotonic())
+            return tools
 
     async def call(
         self,
@@ -299,6 +350,12 @@ class MCPRuntime:
             bare_name, arguments, timeout=timeout, progress_handler=progress_handler
         )
 
+    async def refresh(self) -> list[mcp.types.Tool]:
+        """Drop every cached inventory and return the freshly merged list."""
+        for handle in self._handles:
+            handle.invalidate()
+        return await self.list_tools()
+
     async def _route(self, name: str) -> tuple[_ServerHandle, str] | None:
         for namespace, handle in self._prefix_routes:
             if name.startswith(f"{namespace}_"):
@@ -320,10 +377,14 @@ class MCPRuntime:
         elicitation_handler = self._elicitation_handler
 
         def factory(invalidate: Callable[[], None]) -> Client[Any]:
-            return Client(
+            handler = _InventoryMessageHandler(invalidate)
+            client = Client(
                 _remote_transport(spec),
                 elicitation_handler=elicitation_handler,
+                message_handler=handler,
             )
+            handler.bind(client)
+            return client
 
         return _ServerHandle(
             key,

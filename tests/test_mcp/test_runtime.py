@@ -14,15 +14,22 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+import mcp.types
 import pytest
 from fastmcp import Context, FastMCP
+from fastmcp.client.tasks import TaskNotificationHandler
 from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow import MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler
-from t0_agents.mcp.runtime import MCPRuntime, _remote_transport
+from t0_agents.mcp.runtime import (
+    MCPRuntime,
+    _InventoryMessageHandler,
+    _remote_transport,
+    _ServerHandle,
+)
 
 
 def _named_server(server_name: str, *tool_names: str) -> FastMCP[Any]:
@@ -269,3 +276,151 @@ async def test_remote_elicitation_reaches_app_scoped_handler() -> None:
         ) as runtime:
             result = await runtime.call_tool("svc_order", {})
     assert result.data == "placed"
+
+
+# --- Inventory cache: TTL, invalidation, refresh ----------------------------
+
+
+class _StubClient:
+    """Counts list_tools round trips; stands in for a remote client in
+    cache-arithmetic units (the framework boundary is covered by the
+    real-HTTP tests)."""
+
+    def __init__(self) -> None:
+        self.list_calls = 0
+
+    async def __aenter__(self) -> _StubClient:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def list_tools(self) -> list[mcp.types.Tool]:
+        self.list_calls += 1
+        return [
+            mcp.types.Tool(name=f"call{self.list_calls}", inputSchema={"type": "object"})
+        ]
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.value = 1000.0
+
+    def monotonic(self) -> float:
+        return self.value
+
+
+def _stub_handle(stub: _StubClient, *, live_inventory: bool = False) -> _ServerHandle:
+    return _ServerHandle(
+        "stub",
+        namespace=None,
+        prefix=False,
+        live_inventory=live_inventory,
+        client_factory=lambda _invalidate: stub,  # type: ignore[arg-type,return-value]
+    )
+
+
+async def test_remote_inventory_cached_within_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    stub = _StubClient()
+    handle = _stub_handle(stub)
+    first = await handle.tools()
+    clock.value += 59.0
+    second = await handle.tools()
+    assert stub.list_calls == 1
+    assert first is second
+
+
+async def test_remote_inventory_refetched_after_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    stub = _StubClient()
+    handle = _stub_handle(stub)
+    await handle.tools()
+    clock.value += 61.0
+    await handle.tools()
+    assert stub.list_calls == 2
+
+
+async def test_invalidate_forces_refetch_before_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    stub = _StubClient()
+    handle = _stub_handle(stub)
+    await handle.tools()
+    handle.invalidate()
+    await handle.tools()
+    assert stub.list_calls == 2
+
+
+async def test_live_inventory_handles_never_cache() -> None:
+    stub = _StubClient()
+    handle = _stub_handle(stub, live_inventory=True)
+    await handle.tools()
+    await handle.tools()
+    assert stub.list_calls == 2
+
+
+async def test_local_tool_registered_after_boot_is_visible() -> None:
+    server = _named_server("local-live", "first")
+    async with MCPRuntime(local_server=server) as runtime:
+        await runtime.call_tool("first", {})
+
+        @server.tool
+        async def second() -> str:
+            """Late registration."""
+            return "second"
+
+        names = {tool.name for tool in await runtime.list_tools()}
+        result = await runtime.call_tool("second", {})
+    assert {"first", "second"} <= names
+    assert result.data == "second"
+
+
+async def test_message_handler_invalidates_on_list_changed_and_keeps_chain() -> None:
+    """The handler must extend ``TaskNotificationHandler`` (fastmcp's
+    default) — a bare callable would silently disable task routing."""
+    invalidated: list[bool] = []
+    handler = _InventoryMessageHandler(lambda: invalidated.append(True))
+    assert isinstance(handler, TaskNotificationHandler)
+
+    class _FakeClient:
+        pass
+
+    sentinel = _FakeClient()
+    handler.bind(sentinel)  # type: ignore[arg-type]
+    assert handler._client_ref() is sentinel
+
+    notification = mcp.types.ServerNotification(
+        mcp.types.ToolListChangedNotification(
+            method="notifications/tools/list_changed"
+        )
+    )
+    await handler(notification)
+    assert invalidated == [True]
+
+
+async def test_refresh_surfaces_server_side_tool_additions() -> None:
+    server = _named_server("growing", "first")
+    async with _ephemeral_http_server(server) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            before = {tool.name for tool in await runtime.list_tools()}
+
+            @server.tool
+            async def second() -> str:
+                """Late registration."""
+                return "second"
+
+            cached = {tool.name for tool in await runtime.list_tools()}
+            refreshed = {tool.name for tool in await runtime.refresh()}
+    assert before == {"svc_first"}
+    assert cached == {"svc_first"}
+    assert refreshed == {"svc_first", "svc_second"}
