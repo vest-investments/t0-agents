@@ -81,6 +81,15 @@ class MCPServerSpec:
     with ``namespace=None`` — so a single-server mount presents tool names
     verbatim; ``namespace`` is then a logical label only.  Keep the default
     for multi-server setups so their tool names stay collision-free.
+
+    ``timeout`` (seconds) sets the httpx **read** timeout on a ``url``
+    mount's HTTP connections: the maximum silent gap between bytes on the
+    wire, not a wall-clock budget for the whole call — any SSE frame the
+    server emits (progress notification, log message, elicitation request)
+    resets it.  ``None`` (default) keeps the transport default (300 s
+    read).  Like ``headers``/``auth`` it is meaningless on an in-memory
+    ``server`` mount (validation error), and setting it makes the mount
+    ride an explicit ``transport`` like the authed path.
     """
 
     url: str | None = None
@@ -90,6 +99,7 @@ class MCPServerSpec:
     headers: dict[str, str] | None = None
     auth: httpx.Auth | None = None
     prefix: bool = True
+    timeout: float | None = None
 
 
 class MCPServer:
@@ -129,10 +139,11 @@ class MCPServer:
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | None = None,
         prefix: bool = True,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init_subclass__(**kwargs)
-        _validate_spec(cls.__name__, url, server, headers, auth)
+        _validate_spec(cls.__name__, url, server, headers, auth, timeout)
         cls._mcp_spec = MCPServerSpec(
             url=url,
             server=server,
@@ -141,6 +152,7 @@ class MCPServer:
             headers=headers,
             auth=auth,
             prefix=prefix,
+            timeout=timeout,
         )
 
     def __init__(
@@ -153,8 +165,9 @@ class MCPServer:
         headers: dict[str, str] | None = None,
         auth: httpx.Auth | None = None,
         prefix: bool = True,
+        timeout: float | None = None,
     ) -> None:
-        _validate_spec("MCPServer", url, server, headers, auth)
+        _validate_spec("MCPServer", url, server, headers, auth, timeout)
         self.url = url
         self.server = server
         self.transport = transport
@@ -162,6 +175,7 @@ class MCPServer:
         self.headers = headers
         self.auth = auth
         self.prefix = prefix
+        self.timeout = timeout
 
     def _to_spec(self) -> MCPServerSpec:
         """Project the Annotated-instance fields to an :class:`MCPServerSpec`.
@@ -179,6 +193,7 @@ class MCPServer:
             headers=self.headers,
             auth=self.auth,
             prefix=self.prefix,
+            timeout=self.timeout,
         )
 
 
@@ -188,11 +203,13 @@ def _validate_spec(
     server: FastMCP[Any] | None,
     headers: dict[str, str] | None = None,
     auth: httpx.Auth | None = None,
+    timeout: float | None = None,
 ) -> None:
     """Validate an ``MCPServer`` spec on both ``__init_subclass__`` and
-    ``__init__``: exactly one of ``url``/``server``, and ``headers``/``auth``
-    only on the remote ``url`` path (they have no meaning for an in-memory
-    ``server`` mount, which is not an HTTP transport)."""
+    ``__init__``: exactly one of ``url``/``server``, and
+    ``headers``/``auth``/``timeout`` only on the remote ``url`` path (they
+    have no meaning for an in-memory ``server`` mount, which is not an
+    HTTP transport)."""
     if url is None and server is None:
         raise ConfigurationError(
             f"{name}: at least one of `url` or `server` must be set on "
@@ -205,10 +222,16 @@ def _validate_spec(
             f"MCPServer — both were provided.  Use `url` for remote "
             f"transports and `server` for in-memory FastMCP instances."
         )
-    if server is not None and (headers is not None or auth is not None):
+    if server is not None and (
+        headers is not None or auth is not None or timeout is not None
+    ):
         raise ConfigurationError(
-            f"{name}: headers=/auth= apply only to a remote `url` mount, "
-            f"not an in-memory `server` mount."
+            f"{name}: headers=/auth=/timeout= apply only to a remote `url` "
+            f"mount, not an in-memory `server` mount."
+        )
+    if timeout is not None and timeout <= 0:
+        raise ConfigurationError(
+            f"{name}: timeout must be positive or None, got {timeout}."
         )
 
 
