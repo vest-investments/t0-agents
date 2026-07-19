@@ -27,22 +27,56 @@ Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.27.0:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 
+from t0_agents.core.exceptions import ConfigurationError
+
 if TYPE_CHECKING:
     from types import TracebackType
 
+    import httpx
     import mcp.types
     from fastmcp.client.elicitation import ElicitationHandler
 
     from t0_agents.core.types import ToolProgressHandler
 
 __all__ = ["MCPRuntime"]
+
+
+class MCPServerSpecLike(Protocol):
+    """Structural view of glow's ``MCPServerSpec``.
+
+    ``mcp/`` sits below ``glow/`` in the dependency graph, so the runtime
+    reads the spec shape structurally instead of importing it.  Exactly
+    one of ``url``/``server`` is set (xor-validated where specs are
+    built); ``prefix=True`` applies ``namespace`` as the tool-name prefix.
+    """
+
+    @property
+    def url(self) -> str | None: ...
+
+    @property
+    def server(self) -> FastMCP[Any] | None: ...
+
+    @property
+    def transport(self) -> str: ...
+
+    @property
+    def namespace(self) -> str | None: ...
+
+    @property
+    def headers(self) -> dict[str, str] | None: ...
+
+    @property
+    def auth(self) -> httpx.Auth | None: ...
+
+    @property
+    def prefix(self) -> bool: ...
 
 
 class _ServerHandle:
@@ -75,6 +109,12 @@ class _ServerHandle:
 
     def invalidate(self) -> None:
         self._cache = None
+
+    def public_name(self, tool_name: str) -> str:
+        """The name inference sees — mount-parity with ``namespace=``."""
+        if self.prefix and self.namespace is not None:
+            return f"{self.namespace}_{tool_name}"
+        return tool_name
 
     async def connect(self) -> None:
         """Enter the client on first use; concurrent callers share one enter."""
@@ -125,6 +165,7 @@ class MCPRuntime:
 
     def __init__(
         self,
+        specs: Sequence[MCPServerSpecLike] = (),
         *,
         local_server: FastMCP[Any] | None = None,
         elicitation_handler: ElicitationHandler | None = None,
@@ -137,6 +178,25 @@ class MCPRuntime:
                     "@app.tool", local_server, namespace=None, prefix=False
                 )
             )
+        for spec in specs:
+            self._handles.append(self._handle_for_spec(spec))
+        # Longest namespace first, so a server whose name prefixes another
+        # (``fred`` vs ``fred_api``) never steals the longer match — the
+        # same rule as ``t0_agents.stream.status.split_tool_identity``.
+        self._prefix_routes: list[tuple[str, _ServerHandle]] = sorted(
+            (
+                (handle.namespace, handle)
+                for handle in self._handles
+                if handle.prefix and handle.namespace is not None
+            ),
+            key=lambda route: len(route[0]),
+            reverse=True,
+        )
+        self._unprefixed: list[_ServerHandle] = [
+            handle
+            for handle in self._handles
+            if not (handle.prefix and handle.namespace is not None)
+        ]
 
     async def __aenter__(self) -> MCPRuntime:
         return self
@@ -156,13 +216,35 @@ class MCPRuntime:
                 stack.push_async_callback(handle.aclose)
 
     async def list_tools(self) -> list[mcp.types.Tool]:
-        """Merged inventory across every handle.
+        """Merged inventory with namespace prefixes applied runtime-side.
 
-        Unprefixed handles (the local server) present tool names verbatim.
+        Naming is identical to the composite path's ``mount(namespace=…)``:
+        ``{namespace}_{tool}`` when the spec keeps ``prefix=True`` and has a
+        namespace, verbatim otherwise.  A final name provided by two
+        handles raises :class:`ConfigurationError` — the composite silently
+        forwarded duplicates to inference.
         """
+        per_handle = await asyncio.gather(
+            *(handle.tools() for handle in self._handles)
+        )
         merged: list[mcp.types.Tool] = []
-        for handle in self._handles:
-            merged.extend(await handle.tools())
+        owners: dict[str, str] = {}
+        for handle, tools in zip(self._handles, per_handle, strict=True):
+            for tool in tools:
+                final = handle.public_name(tool.name)
+                other = owners.get(final)
+                if other is not None:
+                    raise ConfigurationError(
+                        f"Tool name collision: {final!r} is provided by "
+                        f"both {other!r} and {handle.key!r}. Give one of "
+                        f"them a distinct namespace= (or rename the tool)."
+                    )
+                owners[final] = handle.key
+                merged.append(
+                    tool
+                    if final == tool.name
+                    else tool.model_copy(update={"name": final})
+                )
         return merged
 
     async def call_tool(
@@ -175,22 +257,41 @@ class MCPRuntime:
     ) -> Any:
         """Route ``name`` to its handle and execute.
 
-        An unroutable name raises :class:`~fastmcp.exceptions.ToolError`,
-        matching what the composite client raised for unknown tools — the
-        agent loop's error contract stays byte-identical.
+        Prefixed names route by longest-namespace decomposition (no
+        inventory lookup — the owning server stays the authority on
+        whether the bare tool exists); unprefixed names route by live
+        inventory membership.  An unroutable name raises
+        :class:`~fastmcp.exceptions.ToolError` with the same message shape
+        the composite produced, keeping the agent loop's error contract
+        intact.
         """
-        handle = await self._route(name)
-        if handle is None:
+        routed = await self._route(name)
+        if routed is None:
             raise ToolError(f"Unknown tool: {name!r}")
+        handle, bare_name = routed
         return await handle.call(
-            name, arguments, timeout=timeout, progress_handler=progress_handler
+            bare_name, arguments, timeout=timeout, progress_handler=progress_handler
         )
 
-    async def _route(self, name: str) -> _ServerHandle | None:
-        for handle in self._handles:
+    async def _route(self, name: str) -> tuple[_ServerHandle, str] | None:
+        for namespace, handle in self._prefix_routes:
+            if name.startswith(f"{namespace}_"):
+                return handle, name[len(namespace) + 1 :]
+        for handle in self._unprefixed:
             if any(tool.name == name for tool in await handle.tools()):
-                return handle
+                return handle, name
         return None
+
+    def _handle_for_spec(self, spec: MCPServerSpecLike) -> _ServerHandle:
+        if spec.server is not None:
+            key = spec.namespace or f"server:{spec.server.name}"
+            return self._in_memory_handle(
+                key, spec.server, namespace=spec.namespace, prefix=spec.prefix
+            )
+        raise ConfigurationError(
+            f"MCPRuntime cannot route url={spec.url!r} yet — remote handles "
+            f"land in the next slice."
+        )
 
     def _in_memory_handle(
         self,

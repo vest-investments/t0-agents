@@ -14,8 +14,30 @@ import pytest
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
+from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.glow import MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler
 from t0_agents.mcp.runtime import MCPRuntime
+
+
+def _named_server(server_name: str, *tool_names: str) -> FastMCP[Any]:
+    server: FastMCP[Any] = FastMCP(server_name)
+    for tool_name in tool_names:
+
+        def make(tool: str) -> Any:
+            async def impl() -> str:
+                return f"{server_name}:{tool}"
+
+            impl.__name__ = tool
+            impl.__doc__ = f"Return the {tool} marker."
+            return impl
+
+        server.tool(make(tool_name))
+    return server
+
+
+def _spec(server: FastMCP[Any], **kwargs: Any) -> Any:
+    return MCPServer(server=server, **kwargs)._to_spec()
 
 
 def _local_server() -> FastMCP[Any]:
@@ -78,3 +100,58 @@ async def test_elicitation_handler_bound_to_local_handle() -> None:
     ) as runtime:
         result = await runtime.call_tool("confirm", {})
     assert result.data == "approved"
+
+
+# --- Inventory: prefixes, mount parity, collisions -------------------------
+
+
+async def test_namespaced_spec_prefixes_names_with_mount_parity() -> None:
+    spec = _spec(_named_server("calc-tools", "ping"), namespace="calc")
+    async with MCPRuntime([spec]) as runtime:
+        names = {tool.name for tool in await runtime.list_tools()}
+        result = await runtime.call_tool("calc_ping", {})
+    assert names == {"calc_ping"}
+    assert result.data == "calc-tools:ping"
+
+
+async def test_prefix_optout_presents_names_verbatim() -> None:
+    spec = _spec(_named_server("solo", "lookup"), namespace="solo", prefix=False)
+    async with MCPRuntime([spec]) as runtime:
+        names = {tool.name for tool in await runtime.list_tools()}
+        result = await runtime.call_tool("lookup", {})
+    assert names == {"lookup"}
+    assert result.data == "solo:lookup"
+
+
+async def test_local_and_namespaced_specs_merge() -> None:
+    spec = _spec(_named_server("calc-tools", "ping"), namespace="calc")
+    async with MCPRuntime([spec], local_server=_local_server()) as runtime:
+        names = {tool.name for tool in await runtime.list_tools()}
+    assert {"add", "confirm", "calc_ping"} <= names
+
+
+async def test_longest_namespace_wins_routing() -> None:
+    fred = _spec(_named_server("fred-srv", "data"), namespace="fred")
+    fred_api = _spec(_named_server("fred-api-srv", "x"), namespace="fred_api")
+    async with MCPRuntime([fred, fred_api]) as runtime:
+        names = {tool.name for tool in await runtime.list_tools()}
+        via_long = await runtime.call_tool("fred_api_x", {})
+        via_short = await runtime.call_tool("fred_data", {})
+    assert names == {"fred_data", "fred_api_x"}
+    assert via_long.data == "fred-api-srv:x"
+    assert via_short.data == "fred-srv:data"
+
+
+async def test_final_name_collision_raises_configuration_error() -> None:
+    fred = _spec(_named_server("fred-srv", "api_x"), namespace="fred")
+    fred_api = _spec(_named_server("fred-api-srv", "x"), namespace="fred_api")
+    async with MCPRuntime([fred, fred_api]) as runtime:
+        with pytest.raises(ConfigurationError, match=r"collision.*fred_api_x"):
+            await runtime.list_tools()
+
+
+async def test_missing_tool_on_routed_server_raises_tool_error() -> None:
+    spec = _spec(_named_server("calc-tools", "ping"), namespace="calc")
+    async with MCPRuntime([spec]) as runtime:
+        with pytest.raises(ToolError, match="Unknown tool"):
+            await runtime.call_tool("calc_nope", {})
