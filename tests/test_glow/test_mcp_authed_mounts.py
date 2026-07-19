@@ -137,6 +137,40 @@ def test_remote_target_rejects_authed_non_http_transport() -> None:
         _remote_target(spec)
 
 
+def test_remote_target_timeout_alone_builds_explicit_transport() -> None:
+    """timeout= forces the explicit-transport path even without headers/auth."""
+    spec = MCPServer(url="https://x/mcp", timeout=2.0)._to_spec()
+    target = _remote_target(spec)
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    assert isinstance(target, StreamableHttpTransport)
+    assert target.httpx_client_factory is not None
+
+
+async def test_remote_target_timeout_factory_pins_read_and_mints_fresh_clients() -> None:
+    """The factory sets httpx read=timeout and returns a NEW client per call
+    (fastmcp closes each client on disconnect — a shared one would arrive
+    already-closed on the next connect)."""
+    spec = MCPServer(
+        url="https://x/mcp", headers={"X-A": "1"}, timeout=2.0
+    )._to_spec()
+    target = _remote_target(spec)
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    assert isinstance(target, StreamableHttpTransport)
+    factory = target.httpx_client_factory
+    assert factory is not None
+    c1 = factory(headers={"X-A": "1"})
+    c2 = factory(headers={"X-A": "1"})
+    try:
+        assert c1 is not c2
+        assert c1.timeout.read == 2.0
+        assert c1.timeout.connect == 30.0
+    finally:
+        await c1.aclose()
+        await c2.aclose()
+
+
 # --- End-to-end identity-header witness (real HTTP, guarded) ---------------
 
 
