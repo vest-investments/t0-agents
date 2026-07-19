@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`tool_timeout=None` now disables the per-call timeout — everywhere.**
+  `Agent` coerced a `None` config value back to 30.0 s before dispatch (both
+  the non-streaming and streaming terminals), so the documented "set
+  `tool_timeout=None` for elicitation-capable tools" advice silently did not
+  hold on the `Agent`/`AgentConfig`/`@app.agent` surface: any elicitation
+  slower than 30 s died with `McpError` while the human deliberated.  `None`
+  now flows through to `call_tool(timeout=None)` on every path
+  (`run_agent`, `StreamingAgentLoop.stream`, and both executors widened to
+  `float | None`).  **Behavior change** only for callers passing an explicit
+  `None` — they now get what the docs always promised; the 30.0 s default is
+  unchanged.
+
+### Added
+
+- **`MCPServer(timeout=…)` — per-server transport read timeout.**  Pins the
+  httpx read window (maximum silent gap between bytes; any SSE frame the
+  server emits resets it) on a `url` mount's connections, replacing the
+  previously unreachable SDK default of 300 s.  Size it above an
+  elicitation-capable server's elicit wait.  Url-only, like
+  `headers=`/`auth=`; validated eagerly.
+- **Docs: the timeout stack.**  `error-handling.md` now maps all four timeout
+  layers (per-call deadline, session default, httpx read window, proxy inner
+  hop), including the source-verified SDK hang mode (a dead request stream
+  without a per-call deadline never resolves) and heartbeat guidance.
+
 ## [2.1.2] — 2026-07-17
 
 ### Fixed
