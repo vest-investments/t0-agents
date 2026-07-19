@@ -27,6 +27,7 @@ Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.27.0:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
@@ -36,6 +37,7 @@ from fastmcp import Client, FastMCP
 from fastmcp.client.tasks import TaskNotificationHandler
 from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import McpError
 
 from t0_agents.core.exceptions import ConfigurationError
 
@@ -50,7 +52,18 @@ if TYPE_CHECKING:
 
 __all__ = ["MCPRuntime"]
 
+logger = logging.getLogger(__name__)
+
 _TOOL_LIST_TTL_SECONDS = 60.0
+
+# The SDK maps a POST rejected with HTTP 404 (dead/rolled session) to a
+# JSON-RPC error with this positive literal code — mcp 1.27.0
+# streamable_http.py `_send_session_terminated_error`.
+_SESSION_TERMINATED_CODE = 32600
+
+
+def _is_session_terminated(error: McpError) -> bool:
+    return error.error.code == _SESSION_TERMINATED_CODE
 
 
 class _InventoryMessageHandler(TaskNotificationHandler):
@@ -157,6 +170,7 @@ class _ServerHandle:
         self.client: Client[Any] = client_factory(self.invalidate)
         self._lock = asyncio.Lock()
         self._connected = False
+        self._generation = 0
         self._stack = AsyncExitStack()
         self._cache: tuple[list[mcp.types.Tool], float] | None = None
 
@@ -223,10 +237,61 @@ class _ServerHandle:
         timeout: float | None,
         progress_handler: ToolProgressHandler | None,
     ) -> Any:
+        """Execute one call, resending it at most once on session loss.
+
+        A session-terminated error means the server rejected the POST at
+        the session layer — the request provably never dispatched, so one
+        re-send on a rebuilt client is safe even for non-idempotent
+        (order-write) tools.  Any other failure, including timeouts and
+        mid-call stream deaths, propagates: the call MAY have executed.
+        """
         await self.connect()
-        return await self.client.call_tool(
-            name, arguments, timeout=timeout, progress_handler=progress_handler
-        )
+        generation = self._generation
+        try:
+            return await self.client.call_tool(
+                name, arguments, timeout=timeout, progress_handler=progress_handler
+            )
+        except McpError as error:
+            if not _is_session_terminated(error):
+                raise
+            logger.warning(
+                "MCP session for %r terminated; rebuilding client and "
+                "resending %r once",
+                self.key,
+                name,
+            )
+            await self.rebuild_if(generation)
+            await self.connect()
+            return await self.client.call_tool(
+                name, arguments, timeout=timeout, progress_handler=progress_handler
+            )
+
+    async def rebuild_if(self, generation: int) -> None:
+        """Replace the client after a session-terminated error.
+
+        Generation-guarded: N concurrent calls hitting the same dead
+        session trigger ONE rebuild — later arrivals see the bumped
+        generation and reuse the already-fresh client.
+        """
+        async with self._lock:
+            if self._generation != generation:
+                return
+            self._generation += 1
+            self._cache = None
+            was_connected = self._connected
+            self._connected = False
+            stale_stack = self._stack
+            self._stack = AsyncExitStack()
+            self.client = self._client_factory(self.invalidate)
+            if was_connected:
+                try:
+                    await stale_stack.aclose()
+                except Exception:
+                    logger.debug(
+                        "closing the terminated session for %r failed",
+                        self.key,
+                        exc_info=True,
+                    )
 
 
 class MCPRuntime:

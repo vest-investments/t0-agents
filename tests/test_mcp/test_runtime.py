@@ -407,6 +407,110 @@ async def test_message_handler_invalidates_on_list_changed_and_keeps_chain() -> 
     assert invalidated == [True]
 
 
+async def test_message_handler_replaces_client_on_rebuild() -> None:
+    """Each factory call must return a freshly-wired client so the rebuilt
+    session keeps invalidation + elicitation bindings."""
+    async with _ephemeral_http_server(_named_server("rsrv", "hello")) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            (handle,) = runtime._handles
+            await runtime.call_tool("svc_hello", {})
+            original = handle.client
+            await handle.rebuild_if(handle._generation)
+            rebuilt = await runtime.call_tool("svc_hello", {})
+    assert handle.client is not original
+    assert rebuilt.data == "rsrv:hello"
+
+
+# --- Session-terminated taxonomy --------------------------------------------
+
+
+class _SessionKiller:
+    """ASGI wrapper that 404s the next N POSTs — the SDK maps that to the
+    session-terminated JSON-RPC error (code 32600)."""
+
+    def __init__(self) -> None:
+        self.kill_next_posts = 0
+
+    def wrap(self, app: Any) -> Any:
+        async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+            if (
+                scope["type"] == "http"
+                and scope["method"] == "POST"
+                and self.kill_next_posts > 0
+            ):
+                self.kill_next_posts -= 1
+                await send(
+                    {"type": "http.response.start", "status": 404, "headers": []}
+                )
+                await send({"type": "http.response.body", "body": b""})
+                return
+            await app(scope, receive, send)
+
+        return wrapper
+
+
+def _counting_server(executions: list[str]) -> FastMCP[Any]:
+    server: FastMCP[Any] = FastMCP("flaky")
+
+    @server.tool
+    async def work() -> str:
+        """Record one execution."""
+        executions.append("work")
+        return "done"
+
+    @server.tool
+    async def slow() -> str:
+        """Record one execution, slowly."""
+        executions.append("slow")
+        await asyncio.sleep(1.5)
+        return "finally"
+
+    return server
+
+
+async def test_session_terminated_rebuilds_and_resends_exactly_once() -> None:
+    executions: list[str] = []
+    killer = _SessionKiller()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=killer.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            warm = await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            original_client = handle.client
+
+            killer.kill_next_posts = 1
+            recovered = await runtime.call_tool("svc_work", {})
+
+    assert warm.data == "done"
+    assert recovered.data == "done"
+    assert executions == ["work", "work"]
+    assert handle.client is not original_client
+
+
+async def test_non_session_errors_never_resend() -> None:
+    """A per-call timeout fires AFTER the request dispatched — resending
+    could double-execute an order-write. It must propagate untouched."""
+    from mcp.shared.exceptions import McpError
+
+    executions: list[str] = []
+    async with _ephemeral_http_server(_counting_server(executions)) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            client_before = handle.client
+
+            with pytest.raises(McpError):
+                await runtime.call_tool("svc_slow", {}, timeout=0.3)
+            await asyncio.sleep(1.5)
+
+    assert executions == ["work", "slow"]
+    assert handle.client is client_before
+
+
 async def test_refresh_surfaces_server_side_tool_additions() -> None:
     server = _named_server("growing", "first")
     async with _ephemeral_http_server(server) as url:
