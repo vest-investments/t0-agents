@@ -28,6 +28,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ``ERROR: invalid JSON arguments...`` result instead.  Streaming now follows
   the same contract: no dispatch, same error string, ``ToolResultEvent``
   flagged ``is_error=True``.  The wire event sequence is unchanged.
+- **Streaming no longer dispatches hallucinated tool names.**  TensorZero
+  validates tool names against the advertised schema on the non-streaming
+  path and zeroes unknown ones — the loop answers with
+  ``ERROR: tool name ... is not in the schema`` without dispatching.
+  Streamed chunks carry the raw name unvalidated, so the streaming loop
+  forwarded hallucinated names to fastmcp and surfaced a provider
+  ``ToolError`` instead.  The rebuild now applies the same zeroing against
+  the advertised tool list, aligning both loops on the schema-error
+  contract.
 
 ### Added
 

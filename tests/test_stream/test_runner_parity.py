@@ -79,6 +79,27 @@ async def test_non_object_json_args_are_not_dispatched() -> None:
     assert result.result == 'ERROR: invalid JSON arguments from LLM: "hello"'
 
 
+async def test_hallucinated_tool_name_is_not_dispatched() -> None:
+    """Parity fix: a name outside the advertised schema must not reach fastmcp.
+
+    TensorZero zeroes unknown names on the non-streaming path and the loop
+    answers with a schema-error string without dispatching; streaming
+    historically forwarded the hallucinated name to the provider.
+    """
+    fake_t0, client, events = await _run_one_tool_turn("bogus", '{"x": 1}')
+
+    assert client.call_tool_invocations == []
+
+    (result,) = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert result.is_error is True
+    assert result.result == "ERROR: tool name 'bogus' is not in the schema"
+
+    replayed_assistant = fake_t0.calls[1]["input"]["messages"][1]
+    (tool_call,) = replayed_assistant["content"]
+    assert tool_call.name is None
+    assert tool_call.raw_name == "bogus"
+
+
 async def test_empty_args_tool_call_still_dispatches() -> None:
     """An empty raw-argument stream is a legitimate no-args call, not an error."""
     _, client, events = await _run_one_tool_turn("add", "")

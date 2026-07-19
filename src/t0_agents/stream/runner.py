@@ -158,6 +158,7 @@ class StreamingAgentLoop:
             await tool_provider.list_tools() if tool_provider is not None else []
         )
         t0_tools = convert_tools(mcp_tools)
+        known_tool_names = frozenset(t["name"] for t in t0_tools)
         state = TurnState(
             messages=seed_messages(prior_messages, user_message),
             episode_id=episode_id,
@@ -244,6 +245,7 @@ class StreamingAgentLoop:
             assistant_blocks = self._build_assistant_blocks(
                 assembler=assembler,
                 tool_calls=tool_calls_collected,
+                known_tool_names=known_tool_names,
             )
 
             # The engine drives the post-inference sequence off a synthesised
@@ -366,6 +368,7 @@ class StreamingAgentLoop:
         *,
         assembler: TurnStreamAssembler,
         tool_calls: list[ToolCallEvent],
+        known_tool_names: frozenset[str],
     ) -> list[Any]:
         """Reconstruct the assistant turn's full ``content`` list.
 
@@ -375,6 +378,13 @@ class StreamingAgentLoop:
         caller strips ``Thought`` before appending to the replay ``messages``
         (parity with ``run_agent``: TensorZero rejects input thought blocks for
         thought-less providers such as groq).
+
+        The rebuild mirrors the two zeroings TensorZero applies on the
+        non-streaming path but not on chunks: a name outside
+        ``known_tool_names`` becomes ``name=None`` and arguments that
+        failed JSON parsing become ``arguments=None`` — both route
+        dispatch through ``_execute_single_tool_call``'s no-dispatch
+        error branches, keeping the two loops' contracts identical.
         """
         blocks: list[Any] = []
         for _tid, text in assembler.text_blocks.items():
@@ -382,17 +392,14 @@ class StreamingAgentLoop:
         for _tid, thought in assembler.thought_blocks.items():
             blocks.append(Thought(type="thought", text=thought))
         for tc in tool_calls:
+            name = tc.name if tc.name in known_tool_names else None
             invalid_raw = assembler.invalid_tool_args.get(tc.id)
             if invalid_raw is not None:
-                # Mirror TensorZero's non-streaming contract for invalid
-                # LLM JSON: arguments=None routes dispatch to the
-                # no-dispatch error branch; raw_arguments carries the
-                # broken payload for the model to read and retry from.
                 blocks.append(
                     ToolCall(
                         type="tool_call",
                         id=tc.id,
-                        name=tc.name,
+                        name=name,
                         raw_name=tc.name,
                         arguments=None,
                         raw_arguments=invalid_raw,
@@ -403,7 +410,7 @@ class StreamingAgentLoop:
                 ToolCall(
                     type="tool_call",
                     id=tc.id,
-                    name=tc.name,
+                    name=name,
                     raw_name=tc.name,
                     arguments=tc.arguments,
                     raw_arguments=(
