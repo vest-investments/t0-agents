@@ -528,3 +528,105 @@ async def test_refresh_surfaces_server_side_tool_additions() -> None:
     assert before == {"svc_first"}
     assert cached == {"svc_first"}
     assert refreshed == {"svc_first", "svc_second"}
+
+
+# --- Concurrency, teardown, and efficiency battery ---------------------------
+
+
+def _echo_server() -> FastMCP[Any]:
+    server: FastMCP[Any] = FastMCP("echo-srv")
+
+    @server.tool
+    async def echo(value: str) -> str:
+        """Echo the value back."""
+        return value
+
+    return server
+
+
+async def test_concurrent_calls_on_one_warm_client_do_not_mix_results() -> None:
+    """25 tasks x call_tool over ONE warm client — the SDK's request-id
+    multiplexing is the contract the runtime's whole design rests on."""
+    async with _ephemeral_http_server(_echo_server()) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.list_tools()
+
+            async def one(index: int) -> tuple[int, Any]:
+                result = await runtime.call_tool("svc_echo", {"value": f"v{index}"})
+                return index, result.data
+
+            results = await asyncio.gather(*(one(index) for index in range(25)))
+    assert sorted(results) == [(index, f"v{index}") for index in range(25)]
+
+
+async def test_parallel_executor_runs_over_the_runtime() -> None:
+    """`parallel_tools=True` reaches the runtime through the real loop
+    executor — provider-protocol integration, not a direct-call shortcut."""
+    from tensorzero import ToolCall
+
+    from t0_agents.mcp.loop import execute_tool_calls_parallel
+
+    async with _ephemeral_http_server(_echo_server()) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            blocks = [
+                ToolCall(
+                    id=f"c{index}",
+                    raw_arguments="{}",
+                    raw_name="svc_echo",
+                    arguments={"value": f"v{index}"},
+                    name="svc_echo",
+                )
+                for index in range(10)
+            ]
+            results = await execute_tool_calls_parallel(runtime, blocks, timeout=30)
+    assert [result.result for result in results] == [f"v{index}" for index in range(10)]
+    assert [result.id for result in results] == [f"c{index}" for index in range(10)]
+
+
+async def test_teardown_leaves_no_leaked_tasks() -> None:
+    """Warm in-memory handles spawn the same client session machinery as
+    remotes; after aclose() none of it may survive.  (The remote flavor is
+    implicitly gated by every uvicorn test's graceful shutdown — a leaked
+    client connection would hang `await serve_task`.)"""
+    before = set(asyncio.all_tasks())
+    runtime = MCPRuntime(
+        [_spec(_named_server("mem", "probe"), namespace="mem")],
+        local_server=_local_server(),
+    )
+    await runtime.list_tools()
+    await runtime.call_tool("mem_probe", {})
+    assert set(asyncio.all_tasks()) - before
+    await runtime.aclose()
+    await asyncio.sleep(0.05)
+    leaked = set(asyncio.all_tasks()) - before
+    assert leaked == set()
+
+
+class _PostCounter:
+    def __init__(self) -> None:
+        self.posts = 0
+
+    def wrap(self, app: Any) -> Any:
+        async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+            if scope["type"] == "http" and scope["method"] == "POST":
+                self.posts += 1
+            await app(scope, receive, send)
+
+        return wrapper
+
+
+async def test_warm_call_costs_exactly_one_post() -> None:
+    """The proxy path paid ~5 HTTP requests per call (fresh client each
+    time); a warm runtime call is exactly one POST."""
+    counter = _PostCounter()
+    async with _ephemeral_http_server(_echo_server(), wrap_asgi=counter.wrap) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.list_tools()
+            await runtime.call_tool("svc_echo", {"value": "warmup"})
+            before = counter.posts
+            await runtime.call_tool("svc_echo", {"value": "warm"})
+            after = counter.posts
+    assert after - before == 1
