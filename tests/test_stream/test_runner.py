@@ -149,6 +149,63 @@ async def test_streaming_loop_dispatches_tool_calls() -> None:
     assert done[0].result.turns == 2
 
 
+async def test_streaming_loop_forwards_none_tool_timeout() -> None:
+    """``tool_timeout=None`` reaches ``call_tool(timeout=None)`` verbatim.
+
+    Regression gate for the M1 timeout-truth fix: the streaming loop must
+    never coerce ``None`` back to a numeric default (the old ``Agent``
+    terminals coerced it to 30 s, silently killing long elicitation waits).
+    """
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [
+                        tool_call_chunk(
+                            raw_name="add",
+                            raw_arguments='{"a":1,"b":2}',
+                            block_id="c1",
+                        )
+                    ]
+                ),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                },
+            )
+        ],
+        call_results={"add": _tool_result("3")},
+    )
+
+    runner = StreamingAgentLoop()
+    async for _ in runner.stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "What is 1+2?",
+        "agent",
+        tool_timeout=None,
+    ):
+        pass
+
+    assert fake_client.call_tool_invocations[0][2] is None
+
+
 async def test_streaming_replay_strips_thought_keeps_tool_call() -> None:
     """The assistant turn replayed as turn-2 input drops its ``Thought`` and
     keeps its ``ToolCall``.
