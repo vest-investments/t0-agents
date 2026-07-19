@@ -382,6 +382,23 @@ class StreamingAgentLoop:
         for _tid, thought in assembler.thought_blocks.items():
             blocks.append(Thought(type="thought", text=thought))
         for tc in tool_calls:
+            invalid_raw = assembler.invalid_tool_args.get(tc.id)
+            if invalid_raw is not None:
+                # Mirror TensorZero's non-streaming contract for invalid
+                # LLM JSON: arguments=None routes dispatch to the
+                # no-dispatch error branch; raw_arguments carries the
+                # broken payload for the model to read and retry from.
+                blocks.append(
+                    ToolCall(
+                        type="tool_call",
+                        id=tc.id,
+                        name=tc.name,
+                        raw_name=tc.name,
+                        arguments=None,
+                        raw_arguments=invalid_raw,
+                    )
+                )
+                continue
             blocks.append(
                 ToolCall(
                     type="tool_call",

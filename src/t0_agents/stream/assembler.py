@@ -57,6 +57,7 @@ class TurnStreamAssembler:
         self._text: dict[str, str] = {}
         self._tool: dict[str, dict[str, str]] = {}
         self._thought: dict[str, str] = {}
+        self._invalid_args: dict[str, str] = {}
 
     @property
     def text_blocks(self) -> dict[str, str]:
@@ -76,6 +77,19 @@ class TurnStreamAssembler:
     def tool_calls(self) -> dict[str, dict[str, str]]:
         """Raw tool-call accumulators (``raw_name`` / ``raw_arguments``)."""
         return self._tool
+
+    @property
+    def invalid_tool_args(self) -> dict[str, str]:
+        """Raw argument strings that failed JSON parsing, keyed by block ``id``.
+
+        Populated during the final flush.  :class:`StreamingAgentLoop`
+        rebuilds these blocks with ``arguments=None`` so dispatch applies
+        the same no-dispatch error contract as the non-streaming loop
+        (TensorZero marks invalid LLM JSON with ``arguments=None``).
+        An empty ``raw_arguments`` is a legitimate no-args call, never
+        recorded here.
+        """
+        return self._invalid_args
 
     async def assemble(
         self, chunks: AsyncIterator[ChatChunk]
@@ -188,6 +202,7 @@ class TurnStreamAssembler:
                 name,
                 exc,
             )
+            self._invalid_args[tool_id] = raw_args
             yield ErrorEvent(
                 message=f"invalid tool-call JSON arguments: {exc}",
                 detail={"tool_call_id": tool_id, "name": name},
@@ -200,6 +215,7 @@ class TurnStreamAssembler:
                 tool_id,
                 type(parsed).__name__,
             )
+            self._invalid_args[tool_id] = raw_args
             yield ErrorEvent(
                 message="tool-call JSON arguments must be an object",
                 detail={"tool_call_id": tool_id, "name": name},

@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `float | None`).  **Behavior change** only for callers passing an explicit
   `None` — they now get what the docs always promised; the 30.0 s default is
   unchanged.
+- **Streaming no longer dispatches tool calls whose JSON arguments failed to
+  parse.**  When the LLM streamed invalid (or non-object) JSON arguments, the
+  streaming loop rebuilt the call with ``arguments={}`` and executed the tool
+  — a tool with all-optional parameters would run on garbage input.  The
+  non-streaming loop has always refused to dispatch these (TensorZero marks
+  them ``arguments=None``) and fed the model an
+  ``ERROR: invalid JSON arguments...`` result instead.  Streaming now follows
+  the same contract: no dispatch, same error string, ``ToolResultEvent``
+  flagged ``is_error=True``.  The wire event sequence is unchanged.
 
 ### Added
 
