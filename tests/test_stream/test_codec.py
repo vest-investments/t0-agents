@@ -72,6 +72,8 @@ _ALL_VARIANTS: list[AgentEvent] = [
         result='{"temp": 22}',
         is_error=False,
         structured={"temp": 22},
+        duration_ms=12.5,
+        server="weather",
     ),
     ToolProgressEvent(id="c1", progress=2.0, total=5.0, message="fetching page 2"),
     ThoughtDeltaEvent(id="th1", delta="hmm"),
@@ -129,17 +131,27 @@ class TestGoldenRoundTrip:
         assert decoded.exception is None
         assert decoded == event  # exception is compare=False
 
-    def test_tool_result_structured_is_encoded_and_round_trips(self) -> None:
+    def test_tool_result_observability_fields_round_trip(self) -> None:
         populated = ToolResultEvent(
-            id="c1", name="get_weather", result='{"temp": 22}', structured={"temp": 22}
+            id="c1",
+            name="get_weather",
+            result='{"temp": 22}',
+            structured={"temp": 22},
+            duration_ms=12.5,
+            server="weather",
         )
         encoded = event_to_dict(populated)
         assert encoded["structured"] == {"temp": 22}
+        assert encoded["duration_ms"] == 12.5
+        assert encoded["server"] == "weather"
         assert event_from_dict(encoded) == populated
 
         default = ToolResultEvent(id="c2", name="t", result="ok")
-        assert event_to_dict(default)["structured"] is None
-        assert event_from_dict(event_to_dict(default)) == default
+        encoded_default = event_to_dict(default)
+        assert encoded_default["structured"] is None
+        assert encoded_default["duration_ms"] is None
+        assert encoded_default["server"] is None
+        assert event_from_dict(encoded_default) == default
 
 
 class TestValueDegradation:

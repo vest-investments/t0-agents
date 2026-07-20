@@ -67,11 +67,17 @@ class ToolCallEvent:
 class ToolResultEvent:
     """Result of executing the :class:`ToolCallEvent` with matching ``id``.
 
-    ``result`` is the model-visible serialized string; ``structured`` is the
-    tool's raw ``CallToolResult.structured_content`` (a plain dict) when it
-    returned one, else ``None``. It is an additive channel: consumers get the
-    structured payload without re-parsing ``result``, and the serialized string
-    stays the source of truth for the model.
+    ``result`` is the model-visible serialized string and stays the source of
+    truth for the model.  The rest is additive observability:
+
+    * ``is_error`` — typed error flag from the executor (the dispatch error
+      branch or ``CallToolResult.is_error``), not a sniff of ``result``.
+    * ``structured`` — the tool's raw ``CallToolResult.structured_content``
+      (a plain dict) when it returned one, else ``None``.
+    * ``duration_ms`` — the ``call_tool`` round-trip in milliseconds; ``None``
+      when the call never dispatched (hallucinated name / invalid JSON args).
+    * ``server`` — namespace of the owning mounted server, or ``None`` for an
+      unprefixed / single-server mount (the ``statuses()`` attribution rule).
     """
 
     id: str
@@ -79,6 +85,8 @@ class ToolResultEvent:
     result: str
     is_error: bool = False
     structured: dict[str, Any] | None = None
+    duration_ms: float | None = None
+    server: str | None = None
     type: Literal["tool_result"] = "tool_result"
 
 

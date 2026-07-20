@@ -152,9 +152,15 @@ async def test_streaming_loop_dispatches_tool_calls() -> None:
     assert done[0].result.turns == 2
 
 
-async def test_streaming_loop_exposes_structured_on_tool_result() -> None:
-    """A tool whose result carries structured_content surfaces it additively on
-    ToolResultEvent.structured, without altering the model-visible result string."""
+async def test_streaming_loop_surfaces_observability_on_tool_result() -> None:
+    """The streaming ToolResultEvent carries the executor's observability
+    fields — typed is_error, structured payload, duration, and the attributed
+    server — without altering the model-visible result string."""
+
+    class _AttributingMCP(FakeMCPClient):
+        def server_for(self, name: str) -> str | None:
+            return "math" if name == "add" else None
+
     fake_t0 = FakeT0(
         responses=[
             [
@@ -175,7 +181,7 @@ async def test_streaming_loop_exposes_structured_on_tool_result() -> None:
             ],
         ],
     )
-    fake_client = FakeMCPClient(
+    fake_client = _AttributingMCP(
         tools=[
             MCPTool(
                 name="add",
@@ -202,6 +208,8 @@ async def test_streaming_loop_exposes_structured_on_tool_result() -> None:
     assert tool_results[0].result == "3"  # model-visible string unchanged
     assert tool_results[0].structured == {"sum": 3}
     assert tool_results[0].is_error is False
+    assert tool_results[0].duration_ms is not None
+    assert tool_results[0].server == "math"
 
 
 async def test_streaming_loop_forwards_none_tool_timeout() -> None:
