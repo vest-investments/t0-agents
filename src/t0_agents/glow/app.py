@@ -197,11 +197,12 @@ def _read_timeout_client_factory(read_timeout: float) -> McpHttpClientFactory:
         auth: httpx.Auth | None = None,
         **kwargs: Any,
     ) -> httpx.AsyncClient:
+        kwargs.setdefault("follow_redirects", True)
         return httpx.AsyncClient(
             headers=headers,
             auth=auth,
             timeout=httpx.Timeout(30.0, read=read_timeout),
-            follow_redirects=True,
+            **kwargs,
         )
 
     return cast(McpHttpClientFactory, factory)

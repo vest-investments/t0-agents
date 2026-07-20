@@ -97,6 +97,9 @@ async def _ephemeral_server(server: FastMCP[Any]) -> AsyncIterator[str]:
     srv = uvicorn.Server(config)
     serve_task = asyncio.create_task(srv.serve())
     while not srv.started:
+        if serve_task.done():
+            await serve_task
+            raise RuntimeError("uvicorn exited before startup completed")
         await asyncio.sleep(0.02)
     port = srv.servers[0].sockets[0].getsockname()[1]
     try:
