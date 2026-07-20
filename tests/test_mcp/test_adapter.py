@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from fastmcp import Client
+from fastmcp import Client, FastMCP
 from fastmcp.client.client import CallToolResult
 from mcp.types import (
     AudioContent,
@@ -19,6 +19,7 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp.types import Tool as MCPTool
+from pydantic import BaseModel
 from tensorzero import ToolCall
 
 from t0_agents.mcp import build_tool_result, convert_tools, serialize_tool_result
@@ -417,3 +418,64 @@ class TestPromptStabilityGolden:
         self, result: CallToolResult, expected: str
     ) -> None:
         assert serialize_tool_result(result) == expected
+
+
+class _BoundaryWeather(BaseModel):
+    """Module-level so FastMCP can resolve the tool's return annotation
+    (pydantic evaluates it against the function's module globals)."""
+
+    temp: int
+    city: str
+
+
+class TestSerializeThroughFastMCPBoundary:
+    """Real FastMCP results (not hand-built) pin the serializer against the
+    schema hydration the client actually performs — the framework-boundary
+    gate. Object results carry ``structured_content`` (the raw dict the event
+    exposes); the model-visible string still comes from ``.data``, which
+    FastMCP hydrates from ``structured_content`` even without an output schema,
+    so a schema-less dict and a schema'd one serialise identically."""
+
+    async def test_object_results_are_stable_and_carry_structured_content(
+        self,
+    ) -> None:
+        server = FastMCP("adapter-boundary")
+
+        @server.tool
+        def as_dict() -> dict[str, Any]:
+            return {"count": 42, "label": "ok"}
+
+        @server.tool
+        def as_scalar() -> int:
+            return 42
+
+        @server.tool
+        def as_list() -> list[int]:
+            return [1, 2, 3]
+
+        @server.tool
+        def as_model() -> _BoundaryWeather:
+            return _BoundaryWeather(temp=22, city="Bogotá")
+
+        async with Client(server) as client:
+            dict_r = await client.call_tool("as_dict", {})
+            scalar_r = await client.call_tool("as_scalar", {})
+            list_r = await client.call_tool("as_list", {})
+            model_r = await client.call_tool("as_model", {})
+
+        # The model-visible string: byte-identical to the pre-upgrade behavior.
+        assert serialize_tool_result(dict_r) == '{"count": 42, "label": "ok"}'
+        assert serialize_tool_result(scalar_r) == "42"
+        assert serialize_tool_result(list_r) == "[1, 2, 3]"
+        # Known, prompt-stable wart: a pydantic-model .data stringifies via
+        # default=str (its repr), NOT clean JSON. The clean dict lives on
+        # structured_content (→ ToolResultEvent.structured), not in this string.
+        model_str = serialize_tool_result(model_r)
+        assert model_str != '{"temp": 22, "city": "Bogotá"}'
+        assert "22" in model_str and "Bogotá" in model_str
+
+        # structured_content is the clean dict for every object result — the raw
+        # payload ToolResultEvent.structured surfaces.
+        assert dict_r.structured_content == {"count": 42, "label": "ok"}
+        assert model_r.structured_content == {"temp": 22, "city": "Bogotá"}
+        assert scalar_r.structured_content == {"result": 42}

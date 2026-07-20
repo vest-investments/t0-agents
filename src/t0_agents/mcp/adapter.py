@@ -91,6 +91,15 @@ def serialize_tool_result(result: CallToolResult) -> str:
     rare case where ``default=str`` cannot rescue an unserializable type (e.g.
     an object whose ``__str__`` raises): we fall through to the content-block
     fallback rather than letting the loop crash.
+
+    ``.structured_content`` (the raw dict FastMCP parsed from the wire) is
+    deliberately NOT a separate step here: the client hydrates ``.data`` from
+    it even without an output schema, so every object result already serialises
+    through ``.data`` above (a schema-less dict and a schema'd one come out
+    identically). The one wart is a pydantic-model ``.data``, which
+    ``default=str`` renders as its repr; the clean dict is surfaced raw on
+    ``ToolResultEvent.structured`` rather than re-serialised into this string,
+    so the model-visible bytes stay stable across the upgrade.
     """
     if result.is_error:
         error_texts = [
