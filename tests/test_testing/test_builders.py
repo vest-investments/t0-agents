@@ -38,6 +38,19 @@ class TestName:
             "order": {"symbol": "NVDA", "qty": 1}
         }
 
+    def test_arguments_mirror_the_parsed_raw_arguments(self) -> None:
+        # A real ToolCall's `arguments` is TensorZero's parse of
+        # `raw_arguments`, so a tuple the caller passed must surface as the
+        # list JSON delivers — not stay a tuple.
+        tc = tool_call("t", coords=(1, 2))
+
+        assert tc.arguments == {"coords": [1, 2]}
+        assert json.loads(tc.raw_arguments) == tc.arguments
+
+    def test_non_json_argument_fails_loud(self) -> None:
+        with pytest.raises(TypeError):
+            tool_call("t", when=object())
+
 
 class TestServerToolForm:
     def test_server_and_tool_compose_prefixed_name(self) -> None:

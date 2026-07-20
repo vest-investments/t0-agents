@@ -42,9 +42,16 @@ def tool_call(
 
     Exactly one of ``name`` or ``tool`` is required.  Keyword arguments become
     the tool arguments; ``raw_arguments`` is their JSON encoding and
-    ``raw_name``/``name`` are both set to the resolved name (TensorZero
-    populates both on a real call).  ``id`` defaults to a unique value so
-    parallel calls in one turn stay distinct; pass ``id=`` to pin it.
+    ``arguments`` is the re-parse of that string — the invariant every real
+    ``ToolCall`` holds (``arguments == json.loads(raw_arguments)``), so a tuple
+    surfaces as the list JSON delivers.  ``raw_name``/``name`` are both set to
+    the resolved name (TensorZero populates both on a real call).  ``id``
+    defaults to a unique value so parallel calls in one turn stay distinct;
+    pass ``id=`` to pin it.
+
+    Arguments must be JSON-native, exactly as a model emits them; a non-JSON
+    value (a UUID, a Pydantic model) raises ``TypeError`` here rather than
+    producing a call the wire could never carry.
 
     ``id``, ``server`` and ``tool`` are reserved keywords — a tool that takes
     an argument literally so named must use the ``tensorzero.ToolCall``
@@ -64,10 +71,11 @@ def tool_call(
     else:
         raise ValueError("tool_call requires exactly one of `name` or `tool`")
 
+    raw_arguments = json.dumps(arguments)
     return ToolCall(
         id=id if id is not None else f"call-{uuid4().hex[:8]}",
         raw_name=final_name,
         name=final_name,
-        raw_arguments=json.dumps(arguments),
-        arguments=arguments,
+        raw_arguments=raw_arguments,
+        arguments=json.loads(raw_arguments),
     )
