@@ -32,6 +32,7 @@ Public surface::
         assert_parsed_equals, assert_parsed_matches_schema,
         assert_invalid_json, assert_parse_strategy, assert_retry_attempts,
         scenarios, streaming_mocks, tool_call,
+        glow_tools,
         mock_t0, mock_tool_provider, embedded_t0, agent_test_factory,
     )
 
@@ -64,6 +65,7 @@ from t0_agents.testing.fixtures import (
     mock_t0,
     mock_tool_provider,
 )
+from t0_agents.testing.mcp import glow_tools
 from t0_agents.testing.mocks import (
     MockChatResponse,
     MockGateway,
@@ -102,6 +104,7 @@ __all__ = [
     "assert_tool_not_called",
     "embedded_t0",
     "fake_event_stream",
+    "glow_tools",
     "mock_t0",
     "mock_tool_provider",
     "scenarios",
