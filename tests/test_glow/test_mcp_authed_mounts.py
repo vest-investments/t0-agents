@@ -27,7 +27,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow import App, MCPServer
-from t0_agents.glow.app import _remote_target
+from t0_agents.mcp.runtime import _remote_transport as _remote_target
 
 
 def _fake_t0() -> AsyncTensorZeroGateway:
@@ -234,3 +234,55 @@ async def test_authed_mount_propagates_identity_headers() -> None:
     assert seen.get("x-vest-customer-token") == "tok-1"
     assert seen.get("x-vest-session-source") == "api"
     assert seen.get("x-service-auth-token") == "service-token"
+
+
+async def test_per_message_app_lifecycle_over_shared_server() -> None:
+    """vest-ai builds a fresh App per user message; consecutive lifespans
+    against one server must each mount, list, and call cleanly (the
+    compat proof for the runtime swap).
+
+    Skipped when the ``serve`` extra (uvicorn) is absent."""
+    uvicorn = pytest.importorskip("uvicorn")
+
+    recorder: FastMCP[Any] = FastMCP("recorder")
+
+    @recorder.tool
+    async def whoami() -> str:
+        return "ok"
+
+    config = uvicorn.Config(
+        recorder.http_app(path="/mcp"),
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        lifespan="on",
+    )
+    server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.02)
+        port = server.servers[0].sockets[0].getsockname()[1]
+
+        for message in range(3):
+            app = App(
+                t0=_fake_t0(),
+                servers=[
+                    MCPServer(
+                        url=f"http://127.0.0.1:{port}/mcp",
+                        namespace="svc",
+                        headers={"X-Vest-Customer-Id": f"c-{message}"},
+                        auth=_ServiceAuth("service-token"),
+                    )
+                ],
+            )
+            async with app.lifespan():
+                client = app._owned_client
+                assert client is not None
+                tool_names = {t.name for t in await client.list_tools()}
+                assert "svc_whoami" in tool_names
+                result = await client.call_tool("svc_whoami", {})
+                assert result.data == "ok"
+    finally:
+        server.should_exit = True
+        await serve_task

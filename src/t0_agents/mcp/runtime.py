@@ -31,12 +31,14 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
+import httpx
 from fastmcp import Client, FastMCP
 from fastmcp.client.tasks import TaskNotificationHandler
 from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from mcp.shared._httpx_utils import McpHttpClientFactory
 from mcp.shared.exceptions import McpError
 
 from t0_agents.core.exceptions import ConfigurationError
@@ -44,7 +46,6 @@ from t0_agents.core.exceptions import ConfigurationError
 if TYPE_CHECKING:
     from types import TracebackType
 
-    import httpx
     import mcp.types
     from fastmcp.client.elicitation import ElicitationHandler
 
@@ -119,29 +120,73 @@ class MCPServerSpecLike(Protocol):
     @property
     def prefix(self) -> bool: ...
 
+    @property
+    def timeout(self) -> float | None: ...
+
+
+def _read_timeout_client_factory(read_timeout: float) -> McpHttpClientFactory:
+    """Build an httpx-client factory pinning the read timeout to ``read_timeout``.
+
+    fastmcp calls the factory once per connection and closes the returned
+    client itself, so every invocation must mint a fresh
+    ``httpx.AsyncClient`` — sharing one would hand fastmcp an
+    already-closed client on the next connect.  The 30 s
+    connect/write/pool budget mirrors the MCP SDK default; only the read
+    gap is overridden.  The ``timeout`` the caller passes (derived from
+    the session read timeout, when one is set) is deliberately ignored —
+    the spec's per-server value wins.
+    """
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+        **kwargs: Any,
+    ) -> httpx.AsyncClient:
+        kwargs.setdefault("follow_redirects", True)
+        return httpx.AsyncClient(
+            headers=headers,
+            auth=auth,
+            timeout=httpx.Timeout(30.0, read=read_timeout),
+            **kwargs,
+        )
+
+    return cast(McpHttpClientFactory, factory)
+
 
 def _remote_transport(
     spec: MCPServerSpecLike,
 ) -> str | StreamableHttpTransport | SSETransport:
     """Resolve a ``url`` spec to what the direct client should mount.
 
-    A bare URL lets ``Client`` infer the transport (the default, and the
-    no-auth path).  ``headers``/``auth`` cannot ride an inferred
-    transport, so when either is set build the explicit transport named
-    by ``spec.transport`` (``"http"`` / ``"sse"``) carrying them.
+    A bare URL lets ``Client`` infer the transport (the default path).
+    ``headers``/``auth``/``timeout`` cannot ride an inferred transport,
+    so when any is set build the explicit transport named by
+    ``spec.transport`` (``"http"`` / ``"sse"``) carrying them;
+    ``timeout`` travels as an httpx-client factory that pins the read
+    window on every connection the client opens.
     """
     url = spec.url
     if url is None:
         raise ConfigurationError("a remote handle requires url=")
-    if spec.headers is None and spec.auth is None:
+    if spec.headers is None and spec.auth is None and spec.timeout is None:
         return url
+    factory = (
+        _read_timeout_client_factory(spec.timeout)
+        if spec.timeout is not None
+        else None
+    )
     if spec.transport == "sse":
-        return SSETransport(url, headers=spec.headers, auth=spec.auth)
+        return SSETransport(
+            url, headers=spec.headers, auth=spec.auth, httpx_client_factory=factory
+        )
     if spec.transport == "http":
-        return StreamableHttpTransport(url, headers=spec.headers, auth=spec.auth)
+        return StreamableHttpTransport(
+            url, headers=spec.headers, auth=spec.auth, httpx_client_factory=factory
+        )
     raise ConfigurationError(
-        f"MCPServer(url={url!r}): headers=/auth= require transport 'http' "
-        f"or 'sse', got {spec.transport!r}."
+        f"MCPServer(url={url!r}): headers=/auth=/timeout= require transport "
+        f"'http' or 'sse', got {spec.transport!r}."
     )
 
 

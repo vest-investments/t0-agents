@@ -14,10 +14,11 @@ Pattern lift from FastAPI's ``app = FastAPI()`` followed by
   before constructing any agent — ``app.agent_overrides["name"] =
   ScriptedAgent(...)`` swaps an agent by name (agent-level mirror of
   ``dependency_overrides``).
-- A lazy in-memory ``fastmcp.FastMCP`` server (``_mcp_server``) and
-  matching ``fastmcp.Client`` (``_owned_client``).  Only allocated when
-  the App needs a real MCP surface: at least one ``@app.tool``
-  registration or one :class:`MCPServer` spec.  Apps that only register
+- A lazy in-memory ``fastmcp.FastMCP`` server (``_mcp_server``) and an
+  :class:`~t0_agents.mcp.runtime.MCPRuntime` router (``_owned_client``)
+  of direct per-server clients.  Only allocated when the App needs a
+  real MCP surface: at least one ``@app.tool`` registration or one
+  :class:`MCPServer` spec.  Apps that only register
   sub-agent orchestrators pay zero FastMCP cost — every glow agent is
   constructed with ``tool_provider=None`` and the v1.0 core auto-allocates
   a :class:`SubAgentToolProvider` for any agent with ``sub_agents=[...]``.
@@ -43,11 +44,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 
-import httpx
-from fastmcp import Client, FastMCP
-from fastmcp.client.transports import SSETransport, StreamableHttpTransport
-from fastmcp.server import create_proxy
-from mcp.shared._httpx_utils import McpHttpClientFactory
+from fastmcp import FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
@@ -58,6 +55,7 @@ from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow.di import DependencyResolver
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer, MCPServerSpec
+from t0_agents.mcp.runtime import MCPRuntime
 from t0_agents.memory.tensorzero import TensorZeroMemory
 from t0_agents.tooling import FilteredToolProvider
 
@@ -178,68 +176,6 @@ def _resolve_tool_filter(
     return allow
 
 
-def _read_timeout_client_factory(read_timeout: float) -> McpHttpClientFactory:
-    """Build an httpx-client factory pinning the read timeout to ``read_timeout``.
-
-    fastmcp calls the factory once per connection and closes the returned
-    client itself, so every invocation must mint a fresh
-    ``httpx.AsyncClient`` — sharing one would hand fastmcp an
-    already-closed client on the next connect.  The 30 s
-    connect/write/pool budget mirrors the MCP SDK default; only the read
-    gap is overridden.  The ``timeout`` the caller passes (derived from
-    the session read timeout, when one is set) is deliberately ignored —
-    the spec's per-server value wins.
-    """
-
-    def factory(
-        headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-        **kwargs: Any,
-    ) -> httpx.AsyncClient:
-        kwargs.setdefault("follow_redirects", True)
-        return httpx.AsyncClient(
-            headers=headers,
-            auth=auth,
-            timeout=httpx.Timeout(30.0, read=read_timeout),
-            **kwargs,
-        )
-
-    return cast(McpHttpClientFactory, factory)
-
-
-def _remote_target(spec: MCPServerSpec) -> str | StreamableHttpTransport | SSETransport:
-    """Resolve a ``url`` spec to what :func:`create_proxy` should wrap.
-
-    A bare URL lets ``create_proxy`` infer the transport (the default
-    path).  ``headers``/``auth``/``timeout`` cannot ride an inferred
-    transport, so when any is set build the explicit transport named by
-    ``spec.transport`` (``"http"`` / ``"sse"``) carrying them; ``timeout``
-    travels as an httpx-client factory that pins the read window on every
-    connection the proxy opens.
-    """
-    url = cast(str, spec.url)  # xor-validated: non-None whenever server is None
-    if spec.headers is None and spec.auth is None and spec.timeout is None:
-        return url
-    factory = (
-        _read_timeout_client_factory(spec.timeout)
-        if spec.timeout is not None
-        else None
-    )
-    if spec.transport == "sse":
-        return SSETransport(
-            url, headers=spec.headers, auth=spec.auth, httpx_client_factory=factory
-        )
-    if spec.transport == "http":
-        return StreamableHttpTransport(
-            url, headers=spec.headers, auth=spec.auth, httpx_client_factory=factory
-        )
-    raise ConfigurationError(
-        f"MCPServer(url={url!r}): headers=/auth=/timeout= require transport "
-        f"'http' or 'sse', got {spec.transport!r}."
-    )
-
-
 class App:
     """Glow application — registry + lifecycle for ``@app.agent`` decorators.
 
@@ -347,11 +283,11 @@ class App:
         # :class:`Agent`, and the v1.0 core auto-allocates a
         # :class:`SubAgentToolProvider` for the delegation surface.
         self._mcp_server: FastMCP[Any] | None = None
-        self._owned_client: Client[Any] | None = None
-        # Bound onto ``_owned_client`` at allocation (:meth:`_ensure_mcp_server`)
-        # so a mounted tool's ``ctx.elicit(...)`` round-trips to a real
-        # resolver instead of auto-declining.  ``None`` keeps the auto-decline
-        # default.  One handler per Client — see the class docstring.
+        self._owned_client: MCPRuntime | None = None
+        # Bound onto every runtime handle's client (:meth:`_start`) so a
+        # mounted tool's ``ctx.elicit(...)`` round-trips to a real
+        # resolver instead of auto-declining.  ``None`` keeps the
+        # auto-decline default.
         self._elicitation_handler: ElicitationHandler | None = elicitation_handler
         self._exit_stack: AsyncExitStack = AsyncExitStack()
         self._client_entered: bool = False
@@ -377,14 +313,15 @@ class App:
         # Typed-MCP integration.  Specs discovered via the ``servers=``
         # kwarg are seeded first; ``@app.agent`` registration appends more
         # specs harvested from parameter annotations (``Annotated`` and
-        # subclass forms).  Each spec is mounted onto ``_mcp_server`` in
-        # :meth:`build` BEFORE entering ``_owned_client``, so mounted
-        # tools appear on the first ``list_tools()`` call.  The list is
-        # not deduplicated here because the same :class:`MCPServerSpec`
-        # instance could legitimately appear from multiple sources
-        # (e.g. ``servers=[GithubMCP]`` plus a decorator-side reference
-        # to the same class) — ``FastMCP.mount`` is idempotent on
-        # identical mounts and namespacing keeps tool names collision-free.
+        # subclass forms).  :meth:`build` hands the accumulated list to
+        # the :class:`MCPRuntime`, so every spec's tools appear on the
+        # first ``list_tools()`` call.  The list is not deduplicated here
+        # because the same :class:`MCPServerSpec` instance could
+        # legitimately appear from multiple sources (e.g.
+        # ``servers=[GithubMCP]`` plus a decorator-side reference to the
+        # same class) — the runtime folds value-identical specs into one
+        # handle (mount-idempotence parity) and genuinely distinct specs
+        # colliding on final tool names fail loud at its collision check.
         self._mcp_specs: list[MCPServerSpec] = []
         for entry in servers or []:
             if isinstance(entry, MCPServer):
@@ -553,18 +490,15 @@ class App:
     # ------------------------------------------------------------------
 
     def _ensure_mcp_server(self) -> FastMCP[Any]:
-        """Lazily allocate the App-owned FastMCP server + Client.
+        """Lazily allocate the App-owned FastMCP server for ``@app.tool``.
 
         Called from :meth:`tool` (the ``@app.tool`` decorator) at
-        decoration time and from :meth:`build` when there are
-        :class:`MCPServer` specs to mount.  Idempotent — subsequent
-        calls reuse the already-allocated pair.
+        decoration time.  Idempotent — subsequent calls reuse the
+        already-allocated server.  The :class:`MCPRuntime` built in
+        :meth:`_start` hosts it as a routed handle.
         """
         if self._mcp_server is None:
             self._mcp_server = FastMCP("glow-app")
-            self._owned_client = Client(
-                self._mcp_server, elicitation_handler=self._elicitation_handler
-            )
         return self._mcp_server
 
     def _needs_gateway(self) -> bool:
@@ -712,15 +646,11 @@ class App:
         # through verbatim.  ``AgentConfig`` validates them in
         # ``__post_init__``.
         config_kwargs.update(self._resolve_config_overrides(spec))
-        # tool_provider is the App-owned client when at least one tool
+        # tool_provider is the App-owned runtime when at least one tool
         # or MCP server is configured; otherwise None lets Agent.__init__
         # auto-allocate a SubAgentToolProvider for the sub-agents-only
         # case (or run toolless for the chat-only case).
-        tool_provider: ToolProvider | None = (
-            cast(ToolProvider, self._owned_client)
-            if self._owned_client is not None
-            else None
-        )
+        tool_provider: ToolProvider | None = self._owned_client
         # Per-agent ``tools=`` filter (resolved against the live tool list in
         # :meth:`build`).  Wrap the real-tool provider so only allow-listed
         # names reach inference.  ``Agent.__init__`` then layers a
@@ -956,44 +886,24 @@ class App:
     async def _start(self) -> None:
         """Boot the App infrastructure — everything except agent construction.
 
-        Mounts MCP specs, enters the owned Client, and resolves every
+        Builds the :class:`MCPRuntime` over the registered specs plus the
+        local ``@app.tool`` server, enters it, and resolves every
         registered ``tools=`` filter against the live tool list.  Sets
         the ``_started`` latch.  Shared by the eager :meth:`build` and
         the consumption-time auto-build, which constructs only the
         agents actually consumed.
         """
         if not self._client_entered:
-            # Materialise the FastMCP pair only when there's at least
-            # one MCP spec to mount.  ``@app.tool`` registrations already
-            # ensured allocation at decoration time; this branch covers
-            # the ``MCPServer``-only case.
-            if self._mcp_specs:
-                server = self._ensure_mcp_server()
-                # ``FastMCP.mount`` is sync and immediate.  ``url``-based
-                # specs are wrapped via ``create_proxy`` (FastMCP's
-                # canonical bridge from a URL / Client / Transport into a
-                # mountable ``FastMCP`` instance); in-memory ``server``
-                # specs are mounted directly (the ``examples/14_multi_server``
-                # pattern).
-                for mcp_spec in self._mcp_specs:
-                    backend: FastMCP[Any]
-                    if mcp_spec.server is not None:
-                        backend = mcp_spec.server
-                    else:
-                        # ``mcp_spec.url`` is guaranteed non-None when
-                        # ``mcp_spec.server`` is None (xor-enforced).
-                        # ``_remote_target`` returns a bare URL, or an
-                        # explicit transport carrying headers=/auth=.
-                        backend = create_proxy(_remote_target(mcp_spec))
-                    # ``prefix=False`` opts out of the namespace prefix:
-                    # mount with ``namespace=None`` so tool names stay
-                    # unprefixed (fastmcp presents them verbatim).
-                    mount_namespace = mcp_spec.namespace if mcp_spec.prefix else None
-                    server.mount(backend, namespace=mount_namespace)
-            # Enter the owned Client only if it exists — sub-agents-only
-            # apps that never registered a tool or an MCPServer spec
-            # leave it ``None`` and skip the FastMCP transport entirely.
-            if self._owned_client is not None:
+            # Build the runtime only when there's something to route —
+            # sub-agents-only apps that never registered a tool or an
+            # MCPServer spec leave it ``None`` and skip the FastMCP
+            # transports entirely.
+            if self._mcp_specs or self._mcp_server is not None:
+                self._owned_client = MCPRuntime(
+                    self._mcp_specs,
+                    local_server=self._mcp_server,
+                    elicitation_handler=self._elicitation_handler,
+                )
                 await self._exit_stack.enter_async_context(self._owned_client)
             self._client_entered = True
         # Resolve each agent's ``tools=`` filter against the now-connected
@@ -1015,17 +925,17 @@ class App:
         self._started = True
 
     async def shutdown(self) -> None:
-        """Disconnect the owned Client and close any owned gateway.  Idempotent.
+        """Disconnect the owned runtime and close any owned gateway.  Idempotent.
 
-        Closes the internal :class:`AsyncExitStack`, which exits the
-        ``Client.__aexit__`` registered by :meth:`build` and the owned
-        gateway entered by :meth:`_ensure_t0` (LIFO — client first, then
-        gateway).  A caller-supplied ``t0=`` is never closed.  Safe to
-        call multiple times — the stack is replaced after each close so
-        a subsequent :meth:`build` re-enters (and, for owned gateways,
-        re-resolves) cleanly.  Required after any non-:meth:`lifespan`
-        :meth:`build` to avoid leaking the in-process FastMCP transport
-        task across test boundaries.
+        Closes the internal :class:`AsyncExitStack`, which async-closes
+        the :class:`MCPRuntime` registered by :meth:`build` (every warm
+        per-server client) and the owned gateway entered by
+        :meth:`_ensure_t0` (LIFO — runtime first, then gateway).  A
+        caller-supplied ``t0=`` is never closed.  Safe to call multiple
+        times — the stack is replaced after each close so a subsequent
+        :meth:`build` re-enters (and, for owned gateways, re-resolves)
+        cleanly.  Required after any non-:meth:`lifespan` :meth:`build`
+        to avoid leaking client session tasks across test boundaries.
         """
         if self._client_entered or self._owns_t0:
             await self._exit_stack.aclose()
@@ -1116,10 +1026,10 @@ class App:
         """Async context manager that builds every agent and yields.
 
         Pattern lifted from FastAPI: ``async with app.lifespan(): ...``
-        enters the owned Client, eagerly constructs each registered
+        enters the owned runtime, eagerly constructs each registered
         agent, yields control to the caller, then unconditionally
         disconnects on exit (even if the body raises).  ``async with
-        app:`` is the equivalent shorthand; both make the Client (and
+        app:`` is the equivalent shorthand; both make the runtime (and
         any App-owned gateway) lifecycle bullet-proof.
         """
         await self.build()

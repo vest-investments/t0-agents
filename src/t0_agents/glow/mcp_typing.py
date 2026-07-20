@@ -23,22 +23,23 @@ Two patterns let users declare MCP servers their glow agents should see:
        ) -> str: ...
 
 Either pattern surfaces a :class:`MCPServerSpec` at decoration time;
-the App accumulates them and mounts each onto its long-lived in-memory
-:class:`fastmcp.FastMCP` server during :meth:`App.build`.
+the App accumulates them and hands the list to its
+:class:`~t0_agents.mcp.runtime.MCPRuntime` during :meth:`App.build`.
 
 Both transports are supported:
 
-- ``server=<FastMCP instance>`` mounts the in-memory server directly
+- ``server=<FastMCP instance>`` becomes an in-memory routed handle
   (``examples/14_multi_server`` pattern).
-- ``url=<str URL>`` is wrapped via :func:`fastmcp.server.create_proxy`
-  into a proxy ``FastMCP`` and then mounted.  HTTP, SSE, and any
-  ``ClientTransport`` accepted by ``create_proxy`` work transparently.
+- ``url=<str URL>`` gets a direct, long-lived ``fastmcp.Client`` — a
+  bare URL infers HTTP/SSE from its shape; ``headers=``/``auth=`` ride
+  an explicit transport named by ``transport=``.
 
-The composed ``FastMCP("glow-app")`` server feeds ``app._owned_client``,
-which is the ``tool_provider`` every glow agent is constructed with.
-The result: a single ``list_tools()`` view across every ``@app.tool``
-registration plus every ``MCPServer`` spec discovered through
-``servers=[...]`` or ``Annotated``/subclass annotations.
+The runtime is ``app._owned_client`` — the ``tool_provider`` every glow
+agent is constructed with.  The result: a single ``list_tools()`` view
+across every ``@app.tool`` registration plus every ``MCPServer`` spec
+discovered through ``servers=[...]`` or ``Annotated``/subclass
+annotations, with per-server warm connections instead of a composite
+proxy hop.
 """
 
 from __future__ import annotations
@@ -63,24 +64,23 @@ class MCPServerSpec:
     """Immutable descriptor for a typed MCP server registration.
 
     Exactly one of :attr:`url` or :attr:`server` must be set.  ``url``
-    drives the HTTP path (wrapped via ``create_proxy`` at mount time);
+    drives the HTTP path (a direct, long-lived client per server);
     ``server`` is the in-memory escape hatch for users with embedded
-    ``FastMCP`` instances.  ``namespace`` becomes the ``namespace=`` kwarg
-    on :meth:`FastMCP.mount` — mounted tool names are prefixed with it,
-    keeping multi-server setups collision-free.
+    ``FastMCP`` instances.  ``namespace`` prefixes the mounted tool
+    names, keeping multi-server setups collision-free.
 
     ``headers`` and ``auth`` (an :class:`httpx.Auth`) attach per-request
     identity to a ``url`` mount; combining either with an in-memory
-    ``server`` is a validation error.  When either is set the mount rides
-    an explicit ``transport`` (``"http"`` or ``"sse"``) rather than the
-    URL-inferred one, so ``transport`` is load-bearing on the authed path
-    (it is otherwise inferred by ``create_proxy``).
+    ``server`` is a validation error.  When either is set the client
+    rides an explicit ``transport`` (``"http"`` or ``"sse"``) rather
+    than the URL-inferred one, so ``transport`` is load-bearing on the
+    authed path (it is otherwise inferred from the URL).
 
     ``prefix`` (default ``True``) applies ``namespace`` as the tool-name
-    prefix.  Set ``prefix=False`` to mount unprefixed — ``FastMCP.mount``
-    with ``namespace=None`` — so a single-server mount presents tool names
-    verbatim; ``namespace`` is then a logical label only.  Keep the default
-    for multi-server setups so their tool names stay collision-free.
+    prefix.  Set ``prefix=False`` to mount unprefixed, so a
+    single-server mount presents tool names verbatim; ``namespace`` is
+    then a logical label only.  Keep the default for multi-server setups
+    so their tool names stay collision-free.
 
     ``timeout`` (seconds) sets the httpx **read** timeout on a ``url``
     mount's HTTP connections: the maximum silent gap between bytes on the
@@ -213,8 +213,8 @@ def _validate_spec(
     if url is None and server is None:
         raise ConfigurationError(
             f"{name}: at least one of `url` or `server` must be set on "
-            f"an MCPServer (url for HTTP/SSE-style remotes wrapped via "
-            f"fastmcp.create_proxy; server for in-memory FastMCP instances)."
+            f"an MCPServer (url for HTTP/SSE-style remotes reached via a "
+            f"direct client; server for in-memory FastMCP instances)."
         )
     if url is not None and server is not None:
         raise ConfigurationError(
