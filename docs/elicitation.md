@@ -162,7 +162,9 @@ the `{"value": ...}` format**.
 
 `tool_timeout` (default `30.0` seconds) wraps the **entire** `call_tool()`
 duration, including elicitation wait time. If the human takes longer than the
-timeout to respond, the call fails with `McpError`.
+timeout to respond, the call fails with `McpError`. `None` disables the
+per-call timeout on every path — `run_agent`, `AgentConfig`, and
+`@app.agent(tool_timeout=None)` alike.
 
 When using elicitation-enabled tools, set `tool_timeout` to `None` (no timeout)
 or a generous value:
@@ -184,8 +186,18 @@ result = await run_agent(
 not just elicitation-capable ones. If you have a mix of fast tools and
 elicitation tools, use a generous value (e.g., `300.0`) rather than `None`.
 
-See [Error handling](error-handling.md) for the full taxonomy of timeout /
-`McpError` / `ToolError` wrapping.
+**Remote mounts have a second fuse.** `tool_timeout` is the wall-clock
+deadline, but a glow `url` mount also crosses an httpx **read window** on the
+wire (default 300 s of silence). A human deliberating for six minutes over a
+silent connection kills the call at ~300 s even with `tool_timeout=None`.
+Three levers, combined as needed: raise the window per server with
+[`MCPServer(timeout=...)`](glow/typed-mcp-and-guardrails.md#per-server-read-timeout--timeout),
+have the server emit a heartbeat (`ctx.info(...)` every few seconds — any SSE
+frame resets the window), and keep the client-side window **above the
+server's elicitation wait, with margin**. The full layer-by-layer picture —
+including why a dead stream plus `tool_timeout=None` hangs instead of
+erroring — lives in
+[Error handling § The timeout stack](error-handling.md#the-timeout-stack).
 
 ---
 
@@ -287,7 +299,7 @@ async def multi_step(ctx: Context) -> str:
 |---|-----------|--------|
 | 1 | **Flat schemas only** -- Elicitation schemas must be flat objects with primitive properties (string, number, integer, boolean, enum). No nesting, no arrays of objects. | `dataclass` / `BaseModel` fields must be primitive types. |
 | 2 | **Bidirectional session required** -- Elicitation needs a stateful MCP session. | In-memory, stdio, and SSE transports work. Stateless HTTP mode breaks elicitation. See [Production](production.md). |
-| 3 | **Timeout covers elicitation** -- Both server-side (`@mcp.tool(timeout=X)`) and client-side (`tool_timeout`) timeouts include human wait time. | Set `tool_timeout=None` or a generous value. |
+| 3 | **Timeout covers elicitation** -- Both server-side (`@mcp.tool(timeout=X)`) and client-side (`tool_timeout`) timeouts include human wait time, and remote mounts add an httpx read window (default 300 s of silence). | Set `tool_timeout=None` or a generous value; for remote mounts also see [Timeout](#timeout) (heartbeats / `MCPServer(timeout=)`). |
 | 4 | **Scalar wrapping** -- Scalar types (str, int, bool) are wrapped in `{"value": <type>}` for MCP protocol compatibility. | Handlers must use `content={"value": ...}` for scalar responses. Transparent on the server side. |
 | 5 | **`tool_choice` is evaluated on every turn** -- Passing `tool_choice={"specific": <tool_name>}` to `run_agent` forces the LLM to emit a tool call on *each* turn, including the terminating turn where the model needs to emit final text. The gateway propagates the provider's validation failure. | For elicitation-driven flows (approval, structured input), omit `tool_choice` and rely on prompt guidance to route the first turn. |
 

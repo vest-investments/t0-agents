@@ -116,6 +116,42 @@ def test_instance_with_both_url_and_server_raises_configuration_error() -> None:
 
 
 # ---------------------------------------------------------------------------
+# timeout= (per-server transport read timeout)
+# ---------------------------------------------------------------------------
+
+
+def test_subclass_with_timeout_records_spec() -> None:
+    class SlowMCP(MCPServer, url="https://example.com/mcp", timeout=1740.0): ...
+
+    assert SlowMCP._mcp_spec.timeout == 1740.0
+
+
+def test_timeout_defaults_to_none() -> None:
+    class PlainMCP(MCPServer, url="https://example.com/mcp"): ...
+
+    assert PlainMCP._mcp_spec.timeout is None
+    assert MCPServer(url="https://example.com/mcp")._to_spec().timeout is None
+
+
+def test_instance_timeout_reaches_spec() -> None:
+    meta = MCPServer(url="https://example.com/mcp", timeout=2.5)
+    assert meta._to_spec().timeout == 2.5
+
+
+def test_timeout_with_in_memory_server_raises_configuration_error() -> None:
+    server: FastMCP[Any] = FastMCP("test-server")
+    with pytest.raises(ConfigurationError, match="timeout="):
+        MCPServer(server=server, timeout=5.0)
+
+
+def test_non_positive_timeout_raises_configuration_error() -> None:
+    with pytest.raises(ConfigurationError, match="timeout must be positive"):
+        MCPServer(url="https://example.com/mcp", timeout=0.0)
+    with pytest.raises(ConfigurationError, match="timeout must be positive"):
+        MCPServer(url="https://example.com/mcp", timeout=-3.0)
+
+
+# ---------------------------------------------------------------------------
 # _extract_mcp_specs / _is_mcp_parameter
 # ---------------------------------------------------------------------------
 

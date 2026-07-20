@@ -122,7 +122,8 @@ The full mental model — including what parallelism cannot fix (inter-turn depe
 
 When tools use [elicitation](elicitation.md) (human-in-the-loop prompts),
 the default `tool_timeout=30.0` may be too short. The timeout wraps the
-entire `call_tool()` duration, including human response time.
+entire `call_tool()` duration, including human response time. `None`
+disables it on every path (`run_agent`, `AgentConfig`, `@app.agent`).
 
 | Scenario | Recommended `tool_timeout` |
 |----------|--------------------------|
@@ -138,6 +139,22 @@ result = await run_agent(
 )
 ```
 
+Two production invariants beyond the per-call deadline:
+
+- **Client windows must exceed the server's elicitation wait, with margin.**
+  If any timeout on the client path (per-call deadline, or the remote hop's
+  httpx read window — default 300 s of silence, per-server override via
+  `MCPServer(timeout=...)`) is below the server's elicit deadline, confirms
+  drop exactly when a human deliberates — a flaky, human-latency-dependent
+  failure that looks like an order bug. Audit every client when a server's
+  wait changes.
+- **Long-held calls should heartbeat.** A server emitting `ctx.info(...)`
+  (or progress) every few seconds resets every read window on the path —
+  client, proxies, and load balancers — so no idle-timeout anywhere needs to
+  tolerate a multi-minute silent connection.
+
+The layer-by-layer breakdown (including the dead-stream hang mode) lives in
+[Error handling § The timeout stack](error-handling.md#the-timeout-stack).
 See [Elicitation](elicitation.md) for the full guide.
 
 Note: the `parallel_tool_calls` inference parameter (which tells the LLM to emit multiple tool calls in one turn) is a separate provider-level concern. Only some providers support it (OpenAI, Fireworks AI). Even without provider support for parallel emission, the LLM may still emit multiple tool calls in one turn, which `parallel_tools=True` will execute concurrently.

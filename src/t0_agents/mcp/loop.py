@@ -113,7 +113,7 @@ def _strip_thoughts(content_blocks: list[Any]) -> list[Any]:
 async def _execute_single_tool_call(
     tool_provider: Client[Any],
     block: ToolCall,
-    timeout: float,
+    timeout: float | None,
     progress_callback: ProgressCallback | None = None,
 ) -> ToolResult:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
@@ -218,7 +218,7 @@ async def _execute_single_tool_call(
 async def execute_tool_calls(
     tool_provider: Client[Any],
     content_blocks: list[Any],
-    timeout: float = 30.0,
+    timeout: float | None = 30.0,
     *,
     progress_callback: ProgressCallback | None = None,
 ) -> list[ToolResult]:
@@ -239,7 +239,7 @@ async def execute_tool_calls(
 async def execute_tool_calls_parallel(
     tool_provider: Client[Any],
     content_blocks: list[Any],
-    timeout: float = 30.0,
+    timeout: float | None = 30.0,
     *,
     progress_callback: ProgressCallback | None = None,
 ) -> list[ToolResult]:
@@ -273,7 +273,7 @@ async def run_agent(
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
-    tool_timeout: float = 30.0,
+    tool_timeout: float | None = 30.0,
     parallel_tools: bool = False,
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
@@ -320,8 +320,11 @@ async def run_agent(
         max_turns: Maximum number of inference turns before the loop aborts with
             ``MaxTurnsExceededError``.
         tool_timeout: Per-tool-call timeout in seconds, forwarded to
-            ``Client.call_tool(timeout=...)``. Note: FastMCP's docs flag that
-            timeout only applies to foreground execution.
+            ``Client.call_tool(timeout=...)``. ``None`` disables the
+            per-call timeout — the call waits as long as the transport
+            allows, which is what elicitation-capable tools need while a
+            human deliberates. Note: FastMCP's docs flag that timeout only
+            applies to foreground execution.
         parallel_tools: If ``True``, dispatch tool calls via ``asyncio.gather``
             (``execute_tool_calls_parallel``); otherwise sequential.
         dryrun: If ``True``, forwarded to every ``t0.inference(dryrun=True)``

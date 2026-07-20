@@ -97,6 +97,50 @@ externally or wrap the call in a try/except.
 
 ---
 
+## The timeout stack
+
+A tool call crosses up to four independent timeout layers. Knowing which one
+fired (and which one *didn't*) is the difference between a five-minute fix and
+a day of confusion:
+
+| Layer | Knob | Semantics | Default |
+|-------|------|-----------|---------|
+| 1. Per-call deadline | `tool_timeout` (AgentConfig / `@app.agent` / `run_agent`) → `call_tool(timeout=)` | **Wall-clock** limit on receiving the tool's response. Transport-independent (an anyio deadline on the response future). **Not** reset by server activity — progress notifications, log messages, and elicitation requests do not extend it. `None` disables it. | `30.0` s |
+| 2. Session default | `fastmcp.Client(timeout=)` | Same mechanism as layer 1; a per-call `timeout=` beats it. Unset means *wait forever*. | unset |
+| 3. httpx read window | `MCPServer(timeout=)` on a glow `url` mount | Maximum **silent gap between bytes** on the remote HTTP hop. **Any** SSE frame the server emits — progress, log message, elicitation request — resets it, so a heartbeating server can hold a small window open indefinitely. | 300 s read (SDK `httpx.Timeout(30.0, read=300.0)`) |
+| 4. Proxy inner hop | — (pre-runtime; see note) | A glow `url` mount proxies through a fresh inner client per call. The inner call has **no per-call deadline**; only layer 3 governs the wire. | — |
+
+Two ground truths worth committing to memory (mcp SDK 1.27.0, source-verified):
+
+- **A dead request stream is a hang, not an error.** When layer 3 fires
+  mid-request, the SDK swallows the read-timeout on the request's SSE stream
+  (`"SSE stream ended"` at DEBUG) and — unless the server attached `id:`s to
+  its SSE events (requires a server-side event store) — the request future
+  simply never resolves. With `tool_timeout=None` and no session default,
+  that is an infinite hang. Pair a small read window with a per-call deadline,
+  or make the server heartbeat.
+- **Stream resumption exists but needs server support.** The SDK client
+  auto-reconnects a dropped request stream via GET + `Last-Event-ID` when it
+  has seen at least one `id:`-bearing event (independent of the
+  `resumption_token` machinery), and the standalone GET stream retries up to
+  2 consecutive failures. Without a server event store there are no event
+  ids, so neither path engages.
+
+Rules of thumb:
+
+- Elicitation-capable tools: `tool_timeout=None` (or a value comfortably above
+  the server's elicitation wait) **and** the client's read window above the
+  server's elicit deadline — the client-side window must always exceed the
+  server's wait, with margin.
+- Servers that hold calls open for minutes should emit a heartbeat
+  (`ctx.info(...)` or progress with a token) every few seconds; it keeps every
+  read window on the path alive and turns "mystery hang" into "bounded wait".
+- Fast tools: keep the 30 s default. It converts a wedged server into a
+  readable `McpError` (code `-32000`-style timeout) the loop folds into an
+  `ERROR:` tool result the LLM can react to.
+
+---
+
 ## Examples
 
 ### Easy -- basic try/except

@@ -93,7 +93,7 @@ async def run_agent(
     *,
     episode_id: str | None = None,
     max_turns: int = 20,
-    tool_timeout: float = 30.0,
+    tool_timeout: float | None = 30.0,
     parallel_tools: bool = False,
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,

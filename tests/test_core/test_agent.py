@@ -418,8 +418,8 @@ class TestAgent:
         await agent.invoke("go", system="raw prompt")
         assert t0.calls[0]["input"]["system"] == "raw prompt"
 
-    async def test_none_timeout_uses_default(self) -> None:
-        """tool_timeout=None on config → 30.0 passed to run_agent."""
+    async def test_none_timeout_passes_through(self) -> None:
+        """tool_timeout=None on config → None reaches call_tool (no coercion)."""
         from fastmcp.client.client import CallToolResult
 
         t0 = FakeT0([
@@ -436,7 +436,7 @@ class TestAgent:
         agent = _make_agent(t0=t0, client=client, tool_timeout=None)
         await agent.invoke("go")
         # FakeMCPClient records (name, args, timeout) per call_tool invocation.
-        assert client.call_tool_invocations[0][2] == 30.0
+        assert client.call_tool_invocations[0][2] is None
 
     async def test_custom_timeout_forwarded(self) -> None:
         """Explicit tool_timeout on config reaches call_tool."""

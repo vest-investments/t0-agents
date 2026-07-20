@@ -33,10 +33,6 @@ from t0_agents.stream.runner import StreamingAgentLoop
 
 logger = logging.getLogger(__name__)
 
-# Default tool timeout used when AgentConfig.tool_timeout is None.
-# Matches run_agent's own default so behaviour is identical.
-_DEFAULT_TOOL_TIMEOUT: float = 30.0
-
 
 T = TypeVar("T")
 
@@ -343,11 +339,6 @@ class Agent:
         already happened upstream in the middleware chain — the
         terminal is now the slim "drive the inference loop" body.
         """
-        tool_timeout = (
-            self._config.tool_timeout
-            if self._config.tool_timeout is not None
-            else _DEFAULT_TOOL_TIMEOUT
-        )
         extra_kwargs: dict[str, Any] = {}
         # Empty system_arguments dict collapses to "no key" so callers
         # passing ``system_arguments={}`` produce input without
@@ -365,7 +356,7 @@ class Agent:
             self._config.function_name,
             episode_id=ctx.episode_id,
             max_turns=self._config.max_turns,
-            tool_timeout=tool_timeout,
+            tool_timeout=self._config.tool_timeout,
             parallel_tools=self._config.parallel_tools,
             dryrun=self._config.dryrun,
             tool_choice=self._config.tool_choice,
@@ -396,11 +387,6 @@ class Agent:
         modifies it, e.g.  :class:`GuardrailsMiddleware` populating
         ``guardrail_log``) once the chain unwinds.
         """
-        tool_timeout = (
-            self._config.tool_timeout
-            if self._config.tool_timeout is not None
-            else _DEFAULT_TOOL_TIMEOUT
-        )
         extra_kwargs: dict[str, Any] = {}
         # Empty system_arguments dict collapses to "no key" (parity with
         # :meth:`_chat_terminal`).
@@ -421,7 +407,7 @@ class Agent:
             self._config.function_name,
             episode_id=ctx.episode_id,
             max_turns=self._config.max_turns,
-            tool_timeout=tool_timeout,
+            tool_timeout=self._config.tool_timeout,
             parallel_tools=self._config.parallel_tools,
             dryrun=self._config.dryrun,
             tool_choice=self._config.tool_choice,

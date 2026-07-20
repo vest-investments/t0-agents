@@ -101,6 +101,35 @@ This is the first-class replacement for hand-building a
 `create_proxy(MCPConfig({...: RemoteMCPServer(headers=..., auth=...)}))`
 and wrapping it in a locally-defined `MCPServer` subclass.
 
+### Per-server read timeout — `timeout=`
+
+`timeout=` (seconds) pins the httpx **read timeout** on a `url` mount's
+HTTP connections — the maximum silent gap between bytes on the wire, not
+a wall-clock budget for the call (that is `tool_timeout`'s job):
+
+```python
+class CustomersMCP(
+    MCPServer,
+    url="http://mcp-customers.mcp.svc.cluster.local/mcp/",
+    namespace="customers",
+    timeout=1800.0,   # elicit-capable server: window > its elicit wait
+): ...
+```
+
+Because any SSE frame the server emits (progress, log message,
+elicitation request) resets the gap timer, a heartbeating server can
+hold a small window open indefinitely — while a silent server is cut off
+at the window. Unset, the SDK default applies (300 s read). Size it
+**above the server's elicitation wait** for human-in-the-loop servers;
+see [Error handling § The timeout
+stack](../error-handling.md#the-timeout-stack) for how this layer
+composes with `tool_timeout` and why a dead stream without a per-call
+deadline hangs rather than errors.
+
+Like `headers=`/`auth=`, `timeout=` forces the explicit transport chosen
+by `transport=` and is a configuration error on an in-memory `server=`
+mount (there is no HTTP hop to configure).
+
 ### Unprefixed mounts — `prefix=False`
 
 By default a mount's tool names are prefixed with its `namespace`
