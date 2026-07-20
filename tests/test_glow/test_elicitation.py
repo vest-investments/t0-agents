@@ -12,8 +12,6 @@ server whose tool calls ``ctx.elicit``, mounted on the App, invoked via
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
 from typing import Any, cast
 
 import pytest
@@ -21,9 +19,9 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.elicitation_forwarder import ElicitationForwarder
 from t0_agents.glow import App, MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler, auto_decline_handler
+from t0_agents.testing import ScriptedElicitation
 
 
 def _fake_t0() -> AsyncTensorZeroGateway:
@@ -88,64 +86,30 @@ async def test_app_without_handler_keeps_unsupported_default() -> None:
 
 async def test_app_forwarder_round_trip_accept() -> None:
     """A full HITL round-trip through the owned Client: the tool blocks in
-    ``ctx.elicit``, the forwarder emits a wire-typed request envelope, the
-    'remote' side resolves accept, and the tool observes the value."""
-    requests: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    async def on_request(envelope: dict[str, Any]) -> None:
-        await requests.put(envelope)
-
-    forwarder = ElicitationForwarder(on_request=on_request, default_timeout=5.0)
-    app = App(t0=_fake_t0(), servers=[_HitlMCP], elicitation_handler=forwarder.handler)
+    ``ctx.elicit``, the scripted handler emits a wire-typed request envelope
+    and accepts it, and the tool observes the value."""
+    scripted = ScriptedElicitation([{"action": "accept", "content": {"value": True}}])
+    app = App(t0=_fake_t0(), servers=[_HitlMCP], elicitation_handler=scripted.handler)
 
     async with app.lifespan():
         client = app._owned_client
         assert client is not None
-        call = asyncio.create_task(client.call_tool("hitl_place", {}))
-        try:
-            envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
-            assert envelope["type"] == "elicitation_request"
-            assert envelope["response_type"] == "bool"
-            assert envelope["schema"] is not None
-            await forwarder.resolve(
-                envelope["elicitation_id"], {"action": "accept", "content": {"value": True}}
-            )
-            result = await asyncio.wait_for(call, timeout=2.0)
-        finally:
-            # Don't leak the tool task if an assertion above fails.
-            if not call.done():
-                call.cancel()
-                with suppress(asyncio.CancelledError):
-                    await call
+        result = await client.call_tool("hitl_place", {})
 
     assert result.data == "placed"
-    assert forwarder.pending == {}
+    assert scripted.received[0]["type"] == "elicitation_request"
+    assert scripted.received[0]["response_type"] == "bool"
+    assert scripted.received[0]["schema"] is not None
 
 
 async def test_app_forwarder_round_trip_decline() -> None:
-    """Same round-trip, remote declines → the tool takes its else branch."""
-    requests: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    async def on_request(envelope: dict[str, Any]) -> None:
-        await requests.put(envelope)
-
-    forwarder = ElicitationForwarder(on_request=on_request, default_timeout=5.0)
-    app = App(t0=_fake_t0(), servers=[_HitlMCP], elicitation_handler=forwarder.handler)
+    """Same round-trip, the handler declines → the tool takes its else branch."""
+    scripted = ScriptedElicitation(["decline"])
+    app = App(t0=_fake_t0(), servers=[_HitlMCP], elicitation_handler=scripted.handler)
 
     async with app.lifespan():
         client = app._owned_client
         assert client is not None
-        call = asyncio.create_task(client.call_tool("hitl_place", {}))
-        try:
-            envelope = await asyncio.wait_for(requests.get(), timeout=2.0)
-            await forwarder.resolve(envelope["elicitation_id"], {"action": "decline"})
-            result = await asyncio.wait_for(call, timeout=2.0)
-        finally:
-            # Don't leak the tool task if an assertion above fails.
-            if not call.done():
-                call.cancel()
-                with suppress(asyncio.CancelledError):
-                    await call
+        result = await client.call_tool("hitl_place", {})
 
     assert result.data == "skipped"
-    assert forwarder.pending == {}
