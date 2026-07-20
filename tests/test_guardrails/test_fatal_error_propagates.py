@@ -65,7 +65,7 @@ class TestFatalPropagation:
             name="x",
             arguments={},
         )
-        result = await _execute_single_tool_call(
+        outcome = await _execute_single_tool_call(
             cast(Client[Any], client), block, timeout=30.0,
         )
-        assert result.result.startswith("ERROR: unexpected RuntimeError")
+        assert outcome.result.result.startswith("ERROR: unexpected RuntimeError")
