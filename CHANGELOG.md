@@ -31,6 +31,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   an additive ``structured: dict | None`` field, so consumers get structured
   data without re-parsing the model-visible ``result`` string.  Round-trips
   through the codec with no version bump (additive).
+- **First-class in-memory testing for glow MCP mounts.**
+  `t0_agents.testing` gains `glow_tools(*servers)` — an async context
+  manager that mounts `MCPServer` specs on an in-memory glow `App` and
+  yields their tools as a `ToolProvider`, driving the real fastmcp
+  client→server→schema→result boundary with no sockets;
+  `ScriptedElicitation`, a scripted forwarder-backed `ctx.elicit` handler
+  that resolves each request inline for socket-free human-in-the-loop
+  round-trips; and `tool_call(name, **arguments)`, which builds a
+  `ToolCall` content block from the name and keyword arguments in place of
+  the five-field literal.  Documented in the new "Glow MCP servers" chapter
+  of `docs/testing.md`.
 
 ### Fixed
 
