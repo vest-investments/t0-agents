@@ -34,6 +34,52 @@ client = Client({
 
 The client auto-prefixes tool names with the server key (`math_`, `text_`). This happens at the Client level before tools reach `run_agent`.
 
+## Pattern C: glow `servers=` (the MCPRuntime router)
+
+On the glow API, declare servers once and let the App route them:
+
+```python
+from t0_agents.glow import App, MCPServer
+
+class Math(MCPServer, url="http://math-server:8000/mcp", namespace="math"): ...
+
+app = App(
+    t0=t0,
+    servers=[
+        Math,
+        MCPServer(server=text_fastmcp, namespace="text"),  # in-memory instance
+    ],
+)
+
+@app.agent("helper")
+async def helper(question: str) -> str:
+    """Answers with math_* and text_* tools."""
+```
+
+Behind `servers=` the App builds an `MCPRuntime` — one long-lived
+fastmcp `Client` per server, shared by every agent and conversation in
+the process.  Compared to composing servers by hand:
+
+- **Warm connections.**  The handshake happens once per server on first
+  use; a warm tool call is a single POST.  (The pre-2.2 composite proxy
+  reconnected on every remote call.)
+- **Mount-parity naming.**  `namespace="math"` prefixes tools as
+  `math_add`; `prefix=False` presents names verbatim.
+- **Fail-loud collisions.**  Two mounts producing the same final tool
+  name raise `ConfigurationError` at build instead of silently shipping
+  duplicates to inference.
+- **Cached inventories.**  Remote `list_tools` results cache for 60 s per
+  server, invalidated early by `tools/list_changed`; in-memory servers
+  stay live-linked.
+- **Session-loss recovery.**  A server rollout that terminates warm
+  sessions is absorbed: the runtime rebuilds the client and re-sends the
+  rejected call exactly once (safe — the server rejected it before
+  dispatch).
+
+Authenticated mounts (`headers=`/`auth=`) and per-agent `tools=`
+filtering are covered in
+[typed-mcp-and-guardrails](glow/typed-mcp-and-guardrails.md).
+
 ## Namespace rules
 
 | Scenario | Prefix behavior |

@@ -31,11 +31,15 @@ async def calc(query: str, math: Annotated[Any, MCPServer(url="http://...")]) ->
 
 Class-based declarations register the spec on `__init_subclass__`;
 annotation-based declarations are harvested by `@app.agent`'s
-parameter walk.  `App.build()` mounts every spec on the App-owned
-composed FastMCP via `FastMCP.mount()` for in-memory `server=` specs and
-`fastmcp.server.create_proxy(...)` for remote `url=` endpoints (HTTP,
-SSE, STDIO — the transport is inferred from the URL unless `headers=` /
-`auth=` are set; see below).
+parameter walk.  `App.build()` hands every spec to the App-owned
+`MCPRuntime` router: in-memory `server=` specs and remote `url=`
+endpoints each become a direct, long-lived `fastmcp.Client` handle
+(HTTP, SSE — the transport is inferred from the URL unless `headers=` /
+`auth=` are set; see below).  Remote connections are warm — the
+handshake happens once per server, not once per call — and a
+rolled/expired server session is rebuilt transparently with at most one
+safe re-send of the rejected call.  Duplicate final tool names across
+mounts fail loud at build time.
 
 Every glow agent on a given `App` sees every mounted server — per-agent
 MCP subsets are a [known limitation](limitations.md#no-per-agent-mcp-subsets);
@@ -92,8 +96,8 @@ app = App(t0=t0, servers=[customers])
 its `auth_flow` runs per request, the place for a rotating token or a
 signature.  When either is set the mount rides an explicit transport
 chosen by `transport=` (`"http"` default, or `"sse"`) so the headers and
-auth reach the server; without them the bare URL is passed to
-`create_proxy`, which infers the transport as before.  Setting
+auth reach the server; without them the bare URL is handed to the
+direct client, which infers the transport as before.  Setting
 `headers=`/`auth=` on an in-memory `server=` mount is a configuration
 error — they have no meaning off an HTTP transport.
 
