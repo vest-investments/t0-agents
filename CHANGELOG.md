@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`MCPRuntime` — a native multi-server router behind `ToolProvider`.**
+  glow's `App` now routes every `MCPServer` spec (and the local
+  `@app.tool` server) through direct, long-lived fastmcp Clients — one
+  warm connection per server shared by every agent and conversation —
+  instead of a composite FastMCP with `create_proxy` mounts that
+  reconnected (~5 HTTP requests) on every remote tool call.  A warm call
+  is now a single POST.  Includes: mount-parity namespace prefixing,
+  60 s TTL inventory caching with `tools/list_changed` invalidation
+  (in-memory servers stay live-linked), `refresh()`, and transparent
+  session-terminated recovery (the client is rebuilt and the rejected
+  call re-sent exactly once — safe, the server rejected it before
+  dispatch; all other failures propagate untouched).
 - **`run_agent` accepts `progress_callback`.**  The tool executors have
   always accepted a per-call progress relay, but only the streaming loop
   wired it — server-side ``ctx.report_progress(...)`` notifications were
@@ -59,6 +71,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   layers (per-call deadline, session default, httpx read window, proxy inner
   hop), including the source-verified SDK hang mode (a dead request stream
   without a per-call deadline never resolves) and heartbeat guidance.
+
+### Changed
+
+- **Duplicate final tool names across mounts now fail loud.**  Two
+  mounts producing the same prefixed name raise `ConfigurationError` at
+  build/refresh; the composite silently forwarded duplicates to
+  inference.  Value-identical specs registered twice (e.g. `servers=`
+  plus a parameter annotation) still fold into one mount, as before.
+- The public glow surface is unchanged; `create_proxy` is no longer
+  used anywhere in the library.
 
 ## [2.1.2] — 2026-07-17
 

@@ -12,8 +12,31 @@ This page maps the three layers, says which knob applies to which, and lists the
 | The LLM keeps emitting one tool per turn and you want to compress that into a single round trip | [Inter-turn](#l2-inter-turn-dependencies-and-the-batch-tool-pattern) | A "batch tool" on your MCP server |
 | You have an orchestrator with sub-agents and you want them to work concurrently when the orchestrator delegates to several at once | [Multi-agent](#l3-multi-agent-parallel-composition) | Same `parallel_tools=True` on the orchestrator |
 | You want to drive several agents from your own Python code (no orchestrator LLM) | [Multi-agent](#l3-multi-agent-parallel-composition) | `asyncio.gather(a.invoke(...), b.invoke(...))` |
+| Many conversations share one process and you're worried about connection counts or per-call reconnects | [Process](#l0-n-concurrent-conversations-in-one-process) | Nothing — the MCPRuntime default |
 
 If your problem does not fit any of the above, t0-agents is the wrong layer for it — see [Anti-patterns](#anti-patterns-that-t0-agents-deliberately-omits).
+
+## L0: N concurrent conversations in one process
+
+The axis underneath the other three: how much MCP machinery a single
+process holds when many conversations run at once.  A glow `App` routes
+every mounted server through one `MCPRuntime`, which keeps **one warm
+fastmcp `Client` per server** — shared by every agent and every
+conversation in the process.  The MCP SDK multiplexes concurrent
+requests over that session by request id (fastmcp's client context is
+reentrant and refcounted), so 1,000 conversations over 4 mounted
+servers hold 4 connections, not 4,000 — and a warm tool call costs one
+POST, with the connection handshake paid once per server, not per call.
+
+Tool inventories are likewise per-server, not per-conversation: remote
+`list_tools` results cache for 60 seconds (invalidated early by
+`tools/list_changed` notifications), so per-turn tool listing does not
+multiply with conversation count.  In-memory servers stay live-linked.
+
+Identity is App-scoped in this model — every conversation rides the
+same per-server `headers=`/`auth=`.  Per-conversation identity over one
+long-lived App is a separate seam (in progress); until it lands,
+per-user credentials mean one App per identity.
 
 ## L1: Intra-turn parallel tool execution
 
