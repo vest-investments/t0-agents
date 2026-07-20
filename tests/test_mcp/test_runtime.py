@@ -197,6 +197,40 @@ async def test_value_identical_specs_fold_into_one_handle() -> None:
     assert names == ["calc_ping"]
 
 
+# --- Server attribution (observability, no I/O) ----------------------------
+
+
+def test_server_for_attributes_prefixed_name() -> None:
+    spec = _spec(_named_server("calc-tools", "ping"), namespace="calc")
+    runtime = MCPRuntime([spec])
+    assert runtime.server_for("calc_ping") == "calc"
+
+
+def test_server_for_unprefixed_mount_returns_none() -> None:
+    spec = _spec(_named_server("solo", "lookup"), namespace="solo", prefix=False)
+    runtime = MCPRuntime([spec])
+    assert runtime.server_for("lookup") is None
+
+
+def test_server_for_local_tool_returns_none() -> None:
+    runtime = MCPRuntime(local_server=_local_server())
+    assert runtime.server_for("add") is None
+
+
+def test_server_for_longest_namespace_wins() -> None:
+    fred = _spec(_named_server("fred-srv", "data"), namespace="fred")
+    fred_api = _spec(_named_server("fred-api-srv", "x"), namespace="fred_api")
+    runtime = MCPRuntime([fred, fred_api])
+    assert runtime.server_for("fred_api_x") == "fred_api"
+    assert runtime.server_for("fred_data") == "fred"
+
+
+def test_server_for_unknown_name_returns_none() -> None:
+    spec = _spec(_named_server("calc-tools", "ping"), namespace="calc")
+    runtime = MCPRuntime([spec])
+    assert runtime.server_for("totally_unknown") is None
+
+
 # --- Remote transport builder ----------------------------------------------
 
 

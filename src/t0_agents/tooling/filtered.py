@@ -14,7 +14,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from t0_agents.core.exceptions import T0AgentsError
-from t0_agents.core.types import ToolProgressHandler, ToolProvider
+from t0_agents.core.types import (
+    SupportsServerAttribution,
+    ToolProgressHandler,
+    ToolProvider,
+)
 
 __all__ = ["FilteredToolProvider"]
 
@@ -59,3 +63,9 @@ class FilteredToolProvider:
         return await self._inner.call_tool(
             name, arguments, timeout=timeout, progress_handler=progress_handler
         )
+
+    def server_for(self, name: str) -> str | None:
+        """Delegate server attribution to ``inner`` when it can attribute one."""
+        if isinstance(self._inner, SupportsServerAttribution):
+            return self._inner.server_for(name)
+        return None

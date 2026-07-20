@@ -63,6 +63,23 @@ class ToolProvider(Protocol):
 
 
 @runtime_checkable
+class SupportsServerAttribution(Protocol):
+    """Optional capability: name the server that owns a public tool name.
+
+    A multi-server :class:`ToolProvider` implements this so per-call
+    observability can record which mounted server a tool call hit.
+    ``server_for`` is a synchronous name lookup with no I/O — never a
+    network round-trip.  Returns ``None`` for a name with no attribution:
+    an unprefixed (``prefix=False``) or single local mount has no
+    namespace to report.  Providers that cannot attribute a server (a bare
+    ``fastmcp.Client``) simply omit the method; callers probe with
+    ``isinstance`` and fall back to ``None``.
+    """
+
+    def server_for(self, name: str) -> str | None: ...
+
+
+@runtime_checkable
 class MemoryProvider(Protocol):
     """Repository-style memory interface.
 
