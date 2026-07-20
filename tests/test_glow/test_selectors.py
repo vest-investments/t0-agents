@@ -26,6 +26,8 @@ from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow import (
     Done,
+    ElicitationRequested,
+    ElicitationResolved,
     Error,
     FluentRun,
     RunError,
@@ -41,6 +43,8 @@ from t0_agents.glow.selectors import Selector
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -145,6 +149,23 @@ async def test_tool_result_selector_filters_and_maps_observability() -> None:
         )
     ]
     assert servers == ["math", None]
+
+
+async def test_elicitation_selectors_pick_their_events_only() -> None:
+    req = ElicitationRequestedEvent(id="e1", message="Approve?")
+    res = ElicitationResolvedEvent(id="e1", action="accept")
+    requested = [
+        e async for e in _make_fluent_run([req, _TOOL_CALL, res]).events(
+            ElicitationRequested
+        )
+    ]
+    assert requested == [req]
+    resolved = [
+        e async for e in _make_fluent_run([req, _TOOL_CALL, res]).events(
+            ElicitationResolved
+        )
+    ]
+    assert resolved == [res]
 
 
 async def test_text_selector_picks_text_delta_events_only() -> None:

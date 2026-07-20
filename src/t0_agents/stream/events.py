@@ -182,6 +182,39 @@ class RunErrorEvent:
     type: Literal["run_error"] = "run_error"
 
 
+@dataclass(slots=True)
+class ElicitationRequestedEvent:
+    """A human-in-the-loop prompt an MCP tool raised via ``ctx.elicit(...)``.
+
+    Emitted in-stream when glow owns the elicitation handler
+    (``App(elicitation_handler=...)``), additive to — and coexisting with —
+    the out-of-band forwarder path.  ``id`` correlates the request with its
+    :class:`ElicitationResolvedEvent`.  ``response_type`` mirrors MCP's wire
+    form: ``None`` for binary approval, else the requested scalar type name
+    (``"bool"``, ``"str"``, …).  ``schema_json`` is the raw requested-schema
+    JSON so clients render by schema introspection, never by class name.
+    """
+
+    id: str
+    message: str
+    response_type: str | None = None
+    schema_json: str = ""
+    type: Literal["elicitation_requested"] = "elicitation_requested"
+
+
+@dataclass(slots=True)
+class ElicitationResolvedEvent:
+    """Resolution of the :class:`ElicitationRequestedEvent` with matching ``id``.
+
+    ``action`` is the settled outcome — ``"accept"``, ``"decline"`` or
+    ``"cancel"`` — mirroring the MCP elicitation result the handler returned.
+    """
+
+    id: str
+    action: Literal["accept", "decline", "cancel"]
+    type: Literal["elicitation_resolved"] = "elicitation_resolved"
+
+
 AgentEvent = (
     TextDeltaEvent
     | TextEndEvent
@@ -195,4 +228,6 @@ AgentEvent = (
     | DoneEvent
     | ErrorEvent
     | RunErrorEvent
+    | ElicitationRequestedEvent
+    | ElicitationResolvedEvent
 )

@@ -19,6 +19,8 @@ from t0_agents.core.types import AgentResult
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -151,6 +153,28 @@ class TestProjectMapping:
     async def test_recoverable_error_passes_through(self) -> None:
         [frame] = await _project([ErrorEvent(message="boom", detail={"k": "v"})])
         assert frame == ErrorFrame(message="boom", detail={"k": "v"})
+
+    async def test_elicitation_requested_maps_to_request_frame(self) -> None:
+        [frame] = await _project(
+            [
+                ElicitationRequestedEvent(
+                    id="e1",
+                    message="Approve?",
+                    response_type=None,
+                    schema_json='{"type": "object"}',
+                )
+            ]
+        )
+        assert frame == ElicitationRequestFrame(
+            id="e1",
+            message="Approve?",
+            response_type=None,
+            schema_json='{"type": "object"}',
+        )
+
+    async def test_elicitation_resolved_maps_to_resolved_frame(self) -> None:
+        [frame] = await _project([ElicitationResolvedEvent(id="e1", action="accept")])
+        assert frame == ElicitationResolvedFrame(id="e1", action="accept")
 
 
 class TestProjectRunError:

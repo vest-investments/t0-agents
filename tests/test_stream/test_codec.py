@@ -20,6 +20,8 @@ from t0_agents import (
     CODEC_VERSION,
     AgentResult,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -87,6 +89,13 @@ _ALL_VARIANTS: list[AgentEvent] = [
         detail={"max_turns": 20},
         exception=None,
     ),
+    ElicitationRequestedEvent(
+        id="e1",
+        message="Approve the trade?",
+        response_type=None,
+        schema_json='{"type": "object", "properties": {}}',
+    ),
+    ElicitationResolvedEvent(id="e1", action="accept"),
 ]
 
 
