@@ -10,7 +10,14 @@ from uuid import UUID
 import pytest
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
-from mcp.types import ContentBlock, TextContent
+from mcp.types import (
+    AudioContent,
+    ContentBlock,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    TextResourceContents,
+)
 from mcp.types import Tool as MCPTool
 from tensorzero import ToolCall
 
@@ -111,6 +118,23 @@ class TestConvertTools:
 def _text(value: str) -> TextContent:
     """Build a TextContent block for fixture construction."""
     return TextContent(type="text", text=value)
+
+
+def _image(mime: str = "image/png") -> ImageContent:
+    return ImageContent(type="image", data="aGVsbG8=", mimeType=mime)
+
+
+def _audio(mime: str = "audio/mpeg") -> AudioContent:
+    return AudioContent(type="audio", data="aGVsbG8=", mimeType=mime)
+
+
+def _resource() -> EmbeddedResource:
+    return EmbeddedResource(
+        type="resource",
+        resource=TextResourceContents(
+            uri="file:///x.txt", text="body", mimeType="text/plain"
+        ),
+    )
 
 
 def _make_result(
@@ -251,6 +275,51 @@ class TestSerializeToolResult:
         )
         assert out == "ERROR: boom"
         assert "leaked" not in out
+
+    def test_serialize_image_only_returns_placeholder(self) -> None:
+        """A result whose only content is an image is no longer dropped to "";
+        it becomes a loud placeholder naming the omitted content."""
+        out = serialize_tool_result(_make_result(data=None, content=[_image()]))
+        assert out == (
+            "[tool returned 1 image (image/png); "
+            "non-text content is not forwarded to the model]"
+        )
+
+    def test_serialize_audio_only_returns_placeholder(self) -> None:
+        out = serialize_tool_result(_make_result(data=None, content=[_audio()]))
+        assert out.startswith("[tool returned ")
+        assert "1 audio clip (audio/mpeg)" in out
+
+    def test_serialize_resource_only_returns_placeholder(self) -> None:
+        out = serialize_tool_result(_make_result(data=None, content=[_resource()]))
+        assert out.startswith("[tool returned ")
+        assert "1 embedded resource" in out
+
+    def test_serialize_multiple_non_text_are_counted(self) -> None:
+        out = serialize_tool_result(
+            _make_result(data=None, content=[_image(), _image()])
+        )
+        assert "2 images" in out
+
+    def test_serialize_mixed_keeps_text_and_notes_the_dropped_rest(self) -> None:
+        """Mixed text + non-text: the text is preserved verbatim as the prefix
+        and the omitted non-text is appended as a note — never silently lost."""
+        out = serialize_tool_result(
+            _make_result(data=None, content=[_text("here is the chart"), _image()])
+        )
+        lines = out.split("\n")
+        assert lines[0] == "here is the chart"
+        assert lines[1] == (
+            "[tool returned 1 image (image/png); "
+            "non-text content is not forwarded to the model]"
+        )
+
+    def test_serialize_non_text_logs_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING"):
+            serialize_tool_result(_make_result(data=None, content=[_image()]))
+        assert any("non-text content" in record.message for record in caplog.records)
 
 
 class TestBuildToolResult:

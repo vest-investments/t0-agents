@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
 from fastmcp.client.client import CallToolResult
+from mcp.types import ContentBlock
 from mcp.types import Tool as MCPTool
 from tensorzero import ToolCall, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 def convert_tools(mcp_tools: list[MCPTool]) -> list[dict[str, Any]]:
@@ -35,6 +41,26 @@ def convert_tools(mcp_tools: list[MCPTool]) -> list[dict[str, Any]]:
     ]
 
 
+def _summarize_non_text(blocks: Sequence[ContentBlock]) -> str:
+    """One-line description of non-text content blocks for the model.
+
+    Grouped by the stable ``type`` discriminator (``"image"`` / ``"audio"`` /
+    ``"resource"``) rather than the FastMCP-generated class names, which change
+    between releases, with the mime type when a single block of a kind carries
+    one — e.g. ``"1 image (image/png)"`` or ``"2 images, 1 audio clip"``.
+    """
+    labels = {"image": "image", "audio": "audio clip", "resource": "embedded resource"}
+    counts = Counter(block.type for block in blocks)
+    mime_by_kind = {block.type: getattr(block, "mimeType", None) for block in blocks}
+    parts: list[str] = []
+    for kind, count in counts.items():
+        noun = labels.get(kind, kind)
+        noun = noun if count == 1 else f"{noun}s"
+        mime = mime_by_kind.get(kind)
+        parts.append(f"{count} {noun} ({mime})" if mime and count == 1 else f"{count} {noun}")
+    return ", ".join(parts)
+
+
 def serialize_tool_result(result: CallToolResult) -> str:
     """Serialize a FastMCP ``CallToolResult`` to the ``str`` T0 expects.
 
@@ -51,10 +77,15 @@ def serialize_tool_result(result: CallToolResult) -> str:
       ensure_ascii=False)``. Booleans become JSON-cased (``"true"`` /
       ``"false"``); ``datetime`` and ``UUID`` are stringified by ``default=str``
       and embedded as JSON strings.
-    * ``.data is None`` → concatenate ``.text`` from every content block
-      that exposes it, joined with ``"\\n"``. Non-textual blocks
-      (``ImageContent``, ``AudioContent``, ``EmbeddedResource``) are skipped
-      intentionally.
+    * ``.data is None`` → concatenate ``.text`` from every content block that
+      exposes it, joined with ``"\\n"``. Non-textual blocks (``ImageContent``,
+      ``AudioContent``, ``EmbeddedResource``) cannot be forwarded to the LLM;
+      rather than dropping them silently they are summarised into a loud
+      placeholder (e.g. ``"[tool returned 1 image (image/png); non-text
+      content is not forwarded to the model]"``) — the whole result when no
+      text block is present, or a trailing note when text and non-text are
+      mixed — and a ``WARNING`` is logged. Genuinely empty content (no blocks)
+      stays ``""``.
 
     The ``try``/``except`` around ``json.dumps`` is a defensive guard for the
     rare case where ``default=str`` cannot rescue an unserializable type (e.g.
@@ -78,6 +109,15 @@ def serialize_tool_result(result: CallToolResult) -> str:
             pass  # fall through to the content-block fallback
 
     text_parts = [block.text for block in result.content if hasattr(block, "text")]
+    non_text = [block for block in result.content if not hasattr(block, "text")]
+    if non_text:
+        summary = _summarize_non_text(non_text)
+        logger.warning(
+            "Tool result carried non-text content not forwarded to the model: %s",
+            summary,
+        )
+        note = f"[tool returned {summary}; non-text content is not forwarded to the model]"
+        return "\n".join([*text_parts, note]) if text_parts else note
     return "\n".join(text_parts)
 
 
