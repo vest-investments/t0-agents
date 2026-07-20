@@ -68,9 +68,12 @@ def serialize_tool_result(result: CallToolResult) -> str:
     this function must produce one. The serialization strategy handles each case:
 
     * ``is_error=True`` → ``"ERROR: "`` + joined ``.content[*].text``
-      (``"Unknown tool error"`` if no textual block is present). Callers should
-      invoke ``client.call_tool(..., raise_on_error=False)`` so that FastMCP
-      surfaces errors through the result rather than as exceptions.
+      (``"Unknown tool error"`` if no textual block is present). The agent loop
+      does NOT pass ``raise_on_error``: FastMCP defaults it to ``True``, so a
+      failing remote call raises ``ToolError``, which ``_execute_single_tool_call``
+      catches and turns into its own ``"ERROR: …"`` result. This branch therefore
+      serialises error results that are *constructed directly* (e.g. a
+      guardrail-blocked call), not the default remote-failure path.
     * ``.data: str`` → passthrough.
     * ``.data`` anything else (primitives, dicts, lists, and complex types via
       ``default=str``) → ``json.dumps(data, default=str,
