@@ -63,6 +63,27 @@ try a different approach, or report the error to the user.
 
 ---
 
+## Non-text tool content
+
+A tool can return images, audio, or embedded resources instead of (or
+alongside) text. These cannot be forwarded to the LLM as text, but — in the
+same spirit as the error taxonomy — they are never dropped silently.
+`serialize_tool_result` summarises them into a loud placeholder and logs a
+`WARNING`:
+
+- **Non-text only** → the placeholder is the whole result, e.g. `"[tool
+  returned 1 image (image/png); non-text content is not forwarded to the
+  model]"`.
+- **Mixed text + non-text** → the text is preserved verbatim and the omitted
+  content is appended as a trailing note.
+- **Genuinely empty** (a tool that returned nothing) → `""`, unchanged.
+
+Structured results (a tool returning an object) serialize as JSON through the
+normal `.data` path; the raw structured dict is additionally exposed on
+[`ToolResultEvent.structured`](streaming.md) for streaming consumers.
+
+---
+
 ## Recoverable inference errors
 
 Some `TensorZeroError` exceptions indicate a problem with the LLM's output

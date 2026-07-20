@@ -26,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   silently dropped on non-streaming runs.  ``run_agent`` now forwards an
   optional ``progress_callback`` (same ``ProgressCallback`` shape) to the
   executors on every dispatch turn.
+- **`ToolResultEvent.structured`.**  Streaming tool-result events now carry
+  the tool's raw structured payload (``CallToolResult.structured_content``) as
+  an additive ``structured: dict | None`` field, so consumers get structured
+  data without re-parsing the model-visible ``result`` string.  Round-trips
+  through the codec with no version bump (additive).
 
 ### Fixed
 
@@ -58,6 +63,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ``ToolError`` instead.  The rebuild now applies the same zeroing against
   the advertised tool list, aligning both loops on the schema-error
   contract.
+- **Non-text tool content is no longer dropped silently.**  A tool result
+  whose only content was image/audio/embedded-resource blocks serialized to
+  ``""`` — the model saw nothing.  It now becomes a loud placeholder naming
+  the omitted content (with a ``WARNING`` log); mixed text+non-text keeps the
+  text and appends a note.  **Behavior change** for tools returning non-text
+  content; all-text, ``.data``, and error results stay byte-identical.
 
 ### Added
 

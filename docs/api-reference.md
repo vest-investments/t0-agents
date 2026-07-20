@@ -329,7 +329,19 @@ Four branches, evaluated in order:
    fails, falls through to branch 4.
 4. **`.data` is `None`** (or `json.dumps` failed) -- concatenates `.text`
    from every content block that has it, joined with `"\n"`. Non-textual
-   blocks (`ImageContent`, `AudioContent`, `EmbeddedResource`) are skipped.
+   blocks (`ImageContent`, `AudioContent`, `EmbeddedResource`) are **not**
+   dropped silently: they are summarised into a loud placeholder (e.g.
+   `"[tool returned 1 image (image/png); non-text content is not forwarded to
+   the model]"`) -- the whole result when there is no text, or a trailing note
+   when text and non-text are mixed -- and a `WARNING` is logged. Genuinely
+   empty content (no blocks) stays `""`.
+
+**Structured content is not a separate branch.** FastMCP hydrates `.data`
+from `.structured_content` even without an output schema, so object results
+always serialize through branch 3. The raw structured dict is exposed
+additively on [`ToolResultEvent.structured`](streaming.md) for consumers that
+want the payload without re-parsing the string -- it is deliberately not
+re-serialized here, so the model-visible string stays stable.
 
 ### Example
 
