@@ -51,7 +51,11 @@ from t0_agents.core.turn_engine import (
     strip_thoughts,
     validate_run_inputs,
 )
-from t0_agents.core.types import AgentResult, ToolProgressHandler
+from t0_agents.core.types import (
+    AgentResult,
+    SupportsServerAttribution,
+    ToolProgressHandler,
+)
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
 
 __all__ = [
@@ -110,15 +114,28 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
 class _ToolOutcome:
     """One tool call's outcome carried through the executor.
 
-    ``result`` is the T0 ``ToolResult`` fed back to the model; ``structured``
-    is the raw ``CallToolResult.structured_content`` (``None`` for text-only
-    results and every error path). The public ``execute_tool_calls`` projects
-    this to ``.result``; the streaming loop also reads ``.structured`` to put
-    the structured payload on ``ToolResultEvent`` without a second tool call.
+    ``result`` is the T0 ``ToolResult`` fed back to the model.  The other
+    fields are per-call observability the streaming loop copies onto
+    ``ToolResultEvent``; the public ``execute_tool_calls`` drops them
+    (projecting to ``.result``):
+
+    * ``structured`` — the raw ``CallToolResult.structured_content`` (``None``
+      for text-only results and every error path).
+    * ``duration_ms`` — wall-clock of the ``call_tool`` round-trip; ``None``
+      on the pre-dispatch error branches (hallucinated name, invalid JSON)
+      that never reach the tool.
+    * ``is_error`` — typed error flag from the dispatch error branch or
+      ``CallToolResult.is_error``; the source of truth instead of sniffing
+      ``result`` for an ``"ERROR:"`` prefix.
+    * ``server`` — namespace of the owning server via the provider's
+      ``server_for`` (``None`` when the provider cannot attribute one).
     """
 
     result: ToolResult
     structured: dict[str, Any] | None = None
+    duration_ms: float | None = None
+    is_error: bool = False
+    server: str | None = None
 
 
 async def _execute_single_tool_call(
@@ -155,9 +172,20 @@ async def _execute_single_tool_call(
     ``assert`` while still surfacing the raw model intent to the LLM.
     """
     name = block.name or block.raw_name
+    server = (
+        tool_provider.server_for(block.name)
+        if block.name is not None
+        and isinstance(tool_provider, SupportsServerAttribution)
+        else None
+    )
 
-    def _error(message: str) -> _ToolOutcome:
-        return _ToolOutcome(ToolResult(name=name, result=message, id=block.id))
+    def _error(message: str, *, duration_ms: float | None = None) -> _ToolOutcome:
+        return _ToolOutcome(
+            ToolResult(name=name, result=message, id=block.id),
+            duration_ms=duration_ms,
+            is_error=True,
+            server=server,
+        )
 
     if block.name is None:
         logger.error("Tool %r: name not in schema", block.raw_name)
@@ -192,22 +220,33 @@ async def _execute_single_tool_call(
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (ToolError): %s", name, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return _error(f"ERROR: tool execution failed: {e}")
+        return _error(f"ERROR: tool execution failed: {e}", duration_ms=elapsed_ms)
     except McpError as e:
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (McpError): %s", name, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return _error(f"ERROR: MCP protocol error (possibly timeout): {e}")
+        return _error(
+            f"ERROR: MCP protocol error (possibly timeout): {e}",
+            duration_ms=elapsed_ms,
+        )
     except Exception as e:
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (%s): %s", name, type(e).__name__, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return _error(f"ERROR: unexpected {type(e).__name__}: {e}")
+        return _error(
+            f"ERROR: unexpected {type(e).__name__}: {e}", duration_ms=elapsed_ms
+        )
     elapsed_ms = (time.monotonic() - start) * 1000
     t0_result = build_tool_result(block, mcp_result)
     logger.debug("Tool %r returned: %.200s", name, t0_result.result)
     logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-    return _ToolOutcome(t0_result, structured=mcp_result.structured_content)
+    return _ToolOutcome(
+        t0_result,
+        structured=mcp_result.structured_content,
+        duration_ms=elapsed_ms,
+        is_error=mcp_result.is_error,
+        server=server,
+    )
 
 
 async def _execute_tool_calls_detailed(

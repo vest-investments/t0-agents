@@ -366,6 +366,91 @@ class TestExecuteToolCallsDetailed:
         assert outcomes[0].result.result.startswith("ERROR: tool execution failed:")
         assert outcomes[0].structured is None
 
+    async def test_success_carries_duration_and_clears_error_flag(self) -> None:
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].is_error is False
+        assert outcomes[0].duration_ms is not None
+        assert outcomes[0].duration_ms >= 0
+
+    async def test_error_branch_flags_is_error_and_times_the_call(self) -> None:
+        client = FakeMCPClient(call_results={"add": ToolError("boom")})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].is_error is True
+        assert outcomes[0].duration_ms is not None
+
+    async def test_predispatch_error_has_no_duration(self) -> None:
+        # Invalid-JSON args never reach call_tool, so there is nothing to time.
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1", null_args=True)],
+        )
+        assert outcomes[0].is_error is True
+        assert outcomes[0].duration_ms is None
+
+    async def test_typed_is_error_ignores_error_prefixed_success_string(self) -> None:
+        # The typed flag is CallToolResult.is_error, not a sniff of the
+        # serialized string: a successful result that renders as "ERROR: …"
+        # must NOT be flagged (where the old startswith heuristic misfired).
+        client = FakeMCPClient(
+            call_results={"add": _make_result(data="ERROR: not really an error")},
+        )
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].result.result == "ERROR: not really an error"
+        assert outcomes[0].is_error is False
+
+    async def test_server_attributed_via_provider_probe(self) -> None:
+        class _Attributing(FakeMCPClient):
+            def server_for(self, name: str) -> str | None:
+                return "calc" if name == "add" else None
+
+        client = _Attributing(call_results={"add": _make_result(data=5)})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].server == "calc"
+
+    async def test_server_none_when_provider_cannot_attribute(self) -> None:
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].server is None
+
+    async def test_parallel_carries_duration_and_server_per_outcome(self) -> None:
+        class _Attributing(FakeMCPClient):
+            def server_for(self, name: str) -> str | None:
+                return {"add": "math", "greet": "social"}.get(name)
+
+        client = _Attributing(
+            call_results={
+                "add": _make_result(data=5),
+                "greet": _make_result(data="hi"),
+            },
+        )
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [
+                _tool_call(name="add", raw_name="add", call_id="c1"),
+                _tool_call(name="greet", raw_name="greet", call_id="c2"),
+            ],
+            parallel=True,
+        )
+        assert [o.server for o in outcomes] == ["math", "social"]
+        assert all(o.duration_ms is not None for o in outcomes)
+
 
 # --- TestRunAgent -----------------------------------------------------------
 
