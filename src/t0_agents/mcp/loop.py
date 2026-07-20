@@ -231,13 +231,11 @@ async def _execute_tool_calls_detailed(
     if not tool_calls:
         return []
     if parallel:
-        return list(
-            await asyncio.gather(
-                *[
-                    _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
-                    for tc in tool_calls
-                ]
-            )
+        return await asyncio.gather(
+            *[
+                _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
+                for tc in tool_calls
+            ]
         )
     return [
         await _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
