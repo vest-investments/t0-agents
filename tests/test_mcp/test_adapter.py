@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import pytest
 from fastmcp import Client
 from fastmcp.client.client import CallToolResult
 from mcp.types import ContentBlock, TextContent
@@ -116,19 +117,20 @@ def _make_result(
     *,
     data: Any = None,
     content: list[ContentBlock] | None = None,
+    structured_content: dict[str, Any] | None = None,
     is_error: bool = False,
 ) -> CallToolResult:
     """Build a synthetic FastMCP CallToolResult for unit tests.
 
-    FastMCP's ``CallToolResult`` is a ``@dataclass`` with three required fields
-    (``content``, ``structured_content``, ``meta``) and two optional
-    (``data``, ``is_error``). We default ``structured_content`` and ``meta`` to
-    ``None`` because the serializer never looks at them — it relies on
-    ``.data``, ``.content``, and ``.is_error``.
+    FastMCP's ``CallToolResult`` is a ``@dataclass`` with fields ``content``,
+    ``structured_content``, ``meta``, ``data``, ``is_error``. ``meta`` is
+    always ``None`` here (the serializer ignores it); pass ``structured_content``
+    to exercise the ``.structured_content`` step of the serializer's mapping
+    policy (a schema-less object result carries it with ``data=None``).
     """
     return CallToolResult(
         content=content or [],
-        structured_content=None,
+        structured_content=structured_content,
         meta=None,
         data=data,
         is_error=is_error,
@@ -291,3 +293,58 @@ class TestBuildToolResult:
         tc = self._tool_call(name=None, raw_name="hallucinated_tool")
         tr = build_tool_result(tc, _make_result(data="ignored"))
         assert tr.name == "hallucinated_tool"
+
+
+# The exact model-visible string for every result shape that exists BEFORE the
+# structured-content work. This is the prompt-stability gate for the v2.2.0
+# upgrade: the string a tool result serializes to is part of the LLM prompt, so
+# these bytes must not drift across the release. A change that moves any entry
+# is a prompt change — justify it in the PR, never edit the frozen value to make
+# the test pass.
+_PROMPT_STABILITY_GOLDEN: list[tuple[str, CallToolResult, str]] = [
+    ("data_str", _make_result(data="hello"), "hello"),
+    ("data_int", _make_result(data=42), "42"),
+    ("data_float", _make_result(data=3.14), "3.14"),
+    ("data_bool_true", _make_result(data=True), "true"),
+    ("data_bool_false", _make_result(data=False), "false"),
+    (
+        "data_dict",
+        _make_result(data={"count": 42, "label": "ok"}),
+        '{"count": 42, "label": "ok"}',
+    ),
+    ("data_list", _make_result(data=[1, 2, 3]), "[1, 2, 3]"),
+    ("data_unicode", _make_result(data={"saludo": "hóla ñ"}), '{"saludo": "hóla ñ"}'),
+    ("text_single", _make_result(content=[_text("fallback result")]), "fallback result"),
+    (
+        "text_multi",
+        _make_result(content=[_text("line A"), _text("line B")]),
+        "line A\nline B",
+    ),
+    ("empty_no_content", _make_result(content=[]), ""),
+    (
+        "is_error_single",
+        _make_result(is_error=True, content=[_text("division by zero")]),
+        "ERROR: division by zero",
+    ),
+    (
+        "is_error_multi",
+        _make_result(
+            is_error=True, content=[_text("step 1 failed"), _text("step 2 failed")]
+        ),
+        "ERROR: step 1 failed\nstep 2 failed",
+    ),
+    ("is_error_empty", _make_result(is_error=True, content=[]), "ERROR: Unknown tool error"),
+]
+
+
+class TestPromptStabilityGolden:
+    """Freeze the model-visible string for every pre-structured-content shape."""
+
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [pytest.param(r, s, id=name) for name, r, s in _PROMPT_STABILITY_GOLDEN],
+    )
+    def test_serialized_string_is_byte_stable(
+        self, result: CallToolResult, expected: str
+    ) -> None:
+        assert serialize_tool_result(result) == expected
