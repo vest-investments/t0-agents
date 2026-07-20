@@ -31,7 +31,7 @@ Public surface::
         assert_max_turns, assert_response_contains,
         assert_parsed_equals, assert_parsed_matches_schema,
         assert_invalid_json, assert_parse_strategy, assert_retry_attempts,
-        scenarios, streaming_mocks,
+        scenarios, streaming_mocks, tool_call,
         mock_t0, mock_tool_provider, embedded_t0, agent_test_factory,
     )
 
@@ -55,6 +55,7 @@ from t0_agents.testing.assertions import (
     assert_tool_called,
     assert_tool_not_called,
 )
+from t0_agents.testing.builders import tool_call
 from t0_agents.testing.embedded import EmbeddedGatewayHelper
 from t0_agents.testing.fixtures import (
     AgentFactory,
@@ -105,4 +106,5 @@ __all__ = [
     "mock_tool_provider",
     "scenarios",
     "streaming_mocks",
+    "tool_call",
 ]
