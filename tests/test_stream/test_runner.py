@@ -34,10 +34,12 @@ from tests._fake_t0 import (
 )
 
 
-def _tool_result(text: str) -> CallToolResult:
+def _tool_result(
+    text: str, *, structured_content: dict[str, Any] | None = None
+) -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text=text)],
-        structured_content=None,
+        structured_content=structured_content,
         data=text,
         is_error=False,
         meta=None,
@@ -139,6 +141,7 @@ async def test_streaming_loop_dispatches_tool_calls() -> None:
     assert len(tool_results) == 1
     assert tool_results[0].id == "c1"
     assert tool_results[0].name == "add"
+    assert tool_results[0].structured is None  # tool returned no structured payload
 
     turn_ends = [e for e in events if isinstance(e, TurnEndEvent)]
     assert [t.turn for t in turn_ends] == [1, 2]
@@ -147,6 +150,58 @@ async def test_streaming_loop_dispatches_tool_calls() -> None:
     assert len(done) == 1
     assert done[0].result.response == "sum is 3"
     assert done[0].result.turns == 2
+
+
+async def test_streaming_loop_exposes_structured_on_tool_result() -> None:
+    """A tool whose result carries structured_content surfaces it additively on
+    ToolResultEvent.structured, without altering the model-visible result string."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [
+                        tool_call_chunk(
+                            raw_name="add",
+                            raw_arguments='{"a":1,"b":2}',
+                            block_id="c1",
+                        )
+                    ]
+                ),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"add": _tool_result("3", structured_content={"sum": 3})},
+    )
+
+    runner = StreamingAgentLoop()
+    tool_results = [
+        event
+        async for event in runner.stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "What is 1+2?",
+            "agent",
+        )
+        if isinstance(event, ToolResultEvent)
+    ]
+
+    assert len(tool_results) == 1
+    assert tool_results[0].result == "3"  # model-visible string unchanged
+    assert tool_results[0].structured == {"sum": 3}
+    assert tool_results[0].is_error is False
 
 
 async def test_streaming_loop_forwards_none_tool_timeout() -> None:

@@ -7,10 +7,19 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastmcp import Client
+import pytest
+from fastmcp import Client, FastMCP
 from fastmcp.client.client import CallToolResult
-from mcp.types import ContentBlock, TextContent
+from mcp.types import (
+    AudioContent,
+    ContentBlock,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+    TextResourceContents,
+)
 from mcp.types import Tool as MCPTool
+from pydantic import BaseModel
 from tensorzero import ToolCall
 
 from t0_agents.mcp import build_tool_result, convert_tools, serialize_tool_result
@@ -112,23 +121,41 @@ def _text(value: str) -> TextContent:
     return TextContent(type="text", text=value)
 
 
+def _image(mime: str = "image/png") -> ImageContent:
+    return ImageContent(type="image", data="aGVsbG8=", mimeType=mime)
+
+
+def _audio(mime: str = "audio/mpeg") -> AudioContent:
+    return AudioContent(type="audio", data="aGVsbG8=", mimeType=mime)
+
+
+def _resource() -> EmbeddedResource:
+    return EmbeddedResource(
+        type="resource",
+        resource=TextResourceContents(
+            uri="file:///x.txt", text="body", mimeType="text/plain"
+        ),
+    )
+
+
 def _make_result(
     *,
     data: Any = None,
     content: list[ContentBlock] | None = None,
+    structured_content: dict[str, Any] | None = None,
     is_error: bool = False,
 ) -> CallToolResult:
     """Build a synthetic FastMCP CallToolResult for unit tests.
 
-    FastMCP's ``CallToolResult`` is a ``@dataclass`` with three required fields
-    (``content``, ``structured_content``, ``meta``) and two optional
-    (``data``, ``is_error``). We default ``structured_content`` and ``meta`` to
-    ``None`` because the serializer never looks at them — it relies on
-    ``.data``, ``.content``, and ``.is_error``.
+    FastMCP's ``CallToolResult`` is a ``@dataclass`` with fields ``content``,
+    ``structured_content``, ``meta``, ``data``, ``is_error``. ``meta`` is
+    always ``None`` here (the serializer ignores it); pass ``structured_content``
+    to exercise the ``.structured_content`` step of the serializer's mapping
+    policy (a schema-less object result carries it with ``data=None``).
     """
     return CallToolResult(
         content=content or [],
-        structured_content=None,
+        structured_content=structured_content,
         meta=None,
         data=data,
         is_error=is_error,
@@ -250,6 +277,51 @@ class TestSerializeToolResult:
         assert out == "ERROR: boom"
         assert "leaked" not in out
 
+    def test_serialize_image_only_returns_placeholder(self) -> None:
+        """A result whose only content is an image is no longer dropped to "";
+        it becomes a loud placeholder naming the omitted content."""
+        out = serialize_tool_result(_make_result(data=None, content=[_image()]))
+        assert out == (
+            "[tool returned 1 image (image/png); "
+            "non-text content is not forwarded to the model]"
+        )
+
+    def test_serialize_audio_only_returns_placeholder(self) -> None:
+        out = serialize_tool_result(_make_result(data=None, content=[_audio()]))
+        assert out.startswith("[tool returned ")
+        assert "1 audio clip (audio/mpeg)" in out
+
+    def test_serialize_resource_only_returns_placeholder(self) -> None:
+        out = serialize_tool_result(_make_result(data=None, content=[_resource()]))
+        assert out.startswith("[tool returned ")
+        assert "1 embedded resource" in out
+
+    def test_serialize_multiple_non_text_are_counted(self) -> None:
+        out = serialize_tool_result(
+            _make_result(data=None, content=[_image(), _image()])
+        )
+        assert "2 images" in out
+
+    def test_serialize_mixed_keeps_text_and_notes_the_dropped_rest(self) -> None:
+        """Mixed text + non-text: the text is preserved verbatim as the prefix
+        and the omitted non-text is appended as a note — never silently lost."""
+        out = serialize_tool_result(
+            _make_result(data=None, content=[_text("here is the chart"), _image()])
+        )
+        lines = out.split("\n")
+        assert lines[0] == "here is the chart"
+        assert lines[1] == (
+            "[tool returned 1 image (image/png); "
+            "non-text content is not forwarded to the model]"
+        )
+
+    def test_serialize_non_text_logs_a_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING"):
+            serialize_tool_result(_make_result(data=None, content=[_image()]))
+        assert any("non-text content" in record.message for record in caplog.records)
+
 
 class TestBuildToolResult:
     """Shape of the constructed ToolResult."""
@@ -291,3 +363,119 @@ class TestBuildToolResult:
         tc = self._tool_call(name=None, raw_name="hallucinated_tool")
         tr = build_tool_result(tc, _make_result(data="ignored"))
         assert tr.name == "hallucinated_tool"
+
+
+# The exact model-visible string for every result shape that exists BEFORE the
+# structured-content work. This is the prompt-stability gate for the v2.2.0
+# upgrade: the string a tool result serializes to is part of the LLM prompt, so
+# these bytes must not drift across the release. A change that moves any entry
+# is a prompt change — justify it in the PR, never edit the frozen value to make
+# the test pass.
+_PROMPT_STABILITY_GOLDEN: list[tuple[str, CallToolResult, str]] = [
+    ("data_str", _make_result(data="hello"), "hello"),
+    ("data_int", _make_result(data=42), "42"),
+    ("data_float", _make_result(data=3.14), "3.14"),
+    ("data_bool_true", _make_result(data=True), "true"),
+    ("data_bool_false", _make_result(data=False), "false"),
+    (
+        "data_dict",
+        _make_result(data={"count": 42, "label": "ok"}),
+        '{"count": 42, "label": "ok"}',
+    ),
+    ("data_list", _make_result(data=[1, 2, 3]), "[1, 2, 3]"),
+    ("data_unicode", _make_result(data={"saludo": "hóla ñ"}), '{"saludo": "hóla ñ"}'),
+    ("text_single", _make_result(content=[_text("fallback result")]), "fallback result"),
+    (
+        "text_multi",
+        _make_result(content=[_text("line A"), _text("line B")]),
+        "line A\nline B",
+    ),
+    ("empty_no_content", _make_result(content=[]), ""),
+    (
+        "is_error_single",
+        _make_result(is_error=True, content=[_text("division by zero")]),
+        "ERROR: division by zero",
+    ),
+    (
+        "is_error_multi",
+        _make_result(
+            is_error=True, content=[_text("step 1 failed"), _text("step 2 failed")]
+        ),
+        "ERROR: step 1 failed\nstep 2 failed",
+    ),
+    ("is_error_empty", _make_result(is_error=True, content=[]), "ERROR: Unknown tool error"),
+]
+
+
+class TestPromptStabilityGolden:
+    """Freeze the model-visible string for every pre-structured-content shape."""
+
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [pytest.param(r, s, id=name) for name, r, s in _PROMPT_STABILITY_GOLDEN],
+    )
+    def test_serialized_string_is_byte_stable(
+        self, result: CallToolResult, expected: str
+    ) -> None:
+        assert serialize_tool_result(result) == expected
+
+
+class _BoundaryWeather(BaseModel):
+    """Module-level so FastMCP can resolve the tool's return annotation
+    (pydantic evaluates it against the function's module globals)."""
+
+    temp: int
+    city: str
+
+
+class TestSerializeThroughFastMCPBoundary:
+    """Real FastMCP results (not hand-built) pin the serializer against the
+    schema hydration the client actually performs — the framework-boundary
+    gate. Object results carry ``structured_content`` (the raw dict the event
+    exposes); the model-visible string still comes from ``.data``, which
+    FastMCP hydrates from ``structured_content`` even without an output schema,
+    so a schema-less dict and a schema'd one serialise identically."""
+
+    async def test_object_results_are_stable_and_carry_structured_content(
+        self,
+    ) -> None:
+        server = FastMCP("adapter-boundary")
+
+        @server.tool
+        def as_dict() -> dict[str, Any]:
+            return {"count": 42, "label": "ok"}
+
+        @server.tool
+        def as_scalar() -> int:
+            return 42
+
+        @server.tool
+        def as_list() -> list[int]:
+            return [1, 2, 3]
+
+        @server.tool
+        def as_model() -> _BoundaryWeather:
+            return _BoundaryWeather(temp=22, city="Bogotá")
+
+        async with Client(server) as client:
+            dict_r = await client.call_tool("as_dict", {})
+            scalar_r = await client.call_tool("as_scalar", {})
+            list_r = await client.call_tool("as_list", {})
+            model_r = await client.call_tool("as_model", {})
+
+        # The model-visible string: byte-identical to the pre-upgrade behavior.
+        assert serialize_tool_result(dict_r) == '{"count": 42, "label": "ok"}'
+        assert serialize_tool_result(scalar_r) == "42"
+        assert serialize_tool_result(list_r) == "[1, 2, 3]"
+        # Known, prompt-stable wart: a pydantic-model .data stringifies via
+        # default=str (its repr), NOT clean JSON. The clean dict lives on
+        # structured_content (→ ToolResultEvent.structured), not in this string.
+        model_str = serialize_tool_result(model_r)
+        assert model_str != '{"temp": 22, "city": "Bogotá"}'
+        assert "22" in model_str and "Bogotá" in model_str
+
+        # structured_content is the clean dict for every object result — the raw
+        # payload ToolResultEvent.structured surfaces.
+        assert dict_r.structured_content == {"count": 42, "label": "ok"}
+        assert model_r.structured_content == {"temp": 22, "city": "Bogotá"}
+        assert scalar_r.structured_content == {"result": 42}

@@ -18,6 +18,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
 from fastmcp import Client
@@ -105,12 +106,27 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
     return any(isinstance(b, ToolCall) for b in content_blocks)
 
 
+@dataclass(slots=True)
+class _ToolOutcome:
+    """One tool call's outcome carried through the executor.
+
+    ``result`` is the T0 ``ToolResult`` fed back to the model; ``structured``
+    is the raw ``CallToolResult.structured_content`` (``None`` for text-only
+    results and every error path). The public ``execute_tool_calls`` projects
+    this to ``.result``; the streaming loop also reads ``.structured`` to put
+    the structured payload on ``ToolResultEvent`` without a second tool call.
+    """
+
+    result: ToolResult
+    structured: dict[str, Any] | None = None
+
+
 async def _execute_single_tool_call(
     tool_provider: Client[Any],
     block: ToolCall,
     timeout: float | None,
     progress_callback: ProgressCallback | None = None,
-) -> ToolResult:
+) -> _ToolOutcome:
     """Execute one ``ToolCall`` against FastMCP and return one ``ToolResult``.
 
     Implements the error contract:
@@ -139,20 +155,16 @@ async def _execute_single_tool_call(
     ``assert`` while still surfacing the raw model intent to the LLM.
     """
     name = block.name or block.raw_name
+
+    def _error(message: str) -> _ToolOutcome:
+        return _ToolOutcome(ToolResult(name=name, result=message, id=block.id))
+
     if block.name is None:
         logger.error("Tool %r: name not in schema", block.raw_name)
-        return ToolResult(
-            name=name,
-            result=f"ERROR: tool name {block.raw_name!r} is not in the schema",
-            id=block.id,
-        )
+        return _error(f"ERROR: tool name {block.raw_name!r} is not in the schema")
     if block.arguments is None:
         logger.error("Tool %r: invalid JSON arguments: %s", name, block.raw_arguments)
-        return ToolResult(
-            name=name,
-            result=f"ERROR: invalid JSON arguments from LLM: {block.raw_arguments}",
-            id=block.id,
-        )
+        return _error(f"ERROR: invalid JSON arguments from LLM: {block.raw_arguments}")
     logger.debug("Executing tool %r with args: %s", name, block.arguments)
     start = time.monotonic()
     try:
@@ -180,34 +192,55 @@ async def _execute_single_tool_call(
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (ToolError): %s", name, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return ToolResult(
-            name=name,
-            result=f"ERROR: tool execution failed: {e}",
-            id=block.id,
-        )
+        return _error(f"ERROR: tool execution failed: {e}")
     except McpError as e:
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (McpError): %s", name, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return ToolResult(
-            name=name,
-            result=f"ERROR: MCP protocol error (possibly timeout): {e}",
-            id=block.id,
-        )
+        return _error(f"ERROR: MCP protocol error (possibly timeout): {e}")
     except Exception as e:
         elapsed_ms = (time.monotonic() - start) * 1000
         logger.error("Tool %r failed (%s): %s", name, type(e).__name__, e)
         logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-        return ToolResult(
-            name=name,
-            result=f"ERROR: unexpected {type(e).__name__}: {e}",
-            id=block.id,
-        )
+        return _error(f"ERROR: unexpected {type(e).__name__}: {e}")
     elapsed_ms = (time.monotonic() - start) * 1000
     t0_result = build_tool_result(block, mcp_result)
     logger.debug("Tool %r returned: %.200s", name, t0_result.result)
     logger.debug("Tool %r completed in %.1fms", name, elapsed_ms)
-    return t0_result
+    return _ToolOutcome(t0_result, structured=mcp_result.structured_content)
+
+
+async def _execute_tool_calls_detailed(
+    tool_provider: Client[Any],
+    content_blocks: list[Any],
+    timeout: float | None = 30.0,
+    *,
+    parallel: bool = False,
+    progress_callback: ProgressCallback | None = None,
+) -> list[_ToolOutcome]:
+    """Execute every ``ToolCall`` in ``content_blocks`` and return each full
+    outcome (``ToolResult`` + structured payload), in input order.
+
+    Shared core behind the public ``execute_tool_calls`` /
+    ``execute_tool_calls_parallel`` (which project to ``.result``) and the
+    streaming loop (which also reads ``.structured``). ``parallel`` dispatches
+    via ``asyncio.gather`` for I/O-bound tools; non-``ToolCall`` blocks are
+    skipped.
+    """
+    tool_calls = [b for b in content_blocks if isinstance(b, ToolCall)]
+    if not tool_calls:
+        return []
+    if parallel:
+        return await asyncio.gather(
+            *[
+                _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
+                for tc in tool_calls
+            ]
+        )
+    return [
+        await _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
+        for tc in tool_calls
+    ]
 
 
 async def execute_tool_calls(
@@ -224,11 +257,14 @@ async def execute_tool_calls(
     ``progress_callback`` (when given) receives every server-side progress
     notification, tagged with the emitting block's id.
     """
-    return [
-        await _execute_single_tool_call(tool_provider, b, timeout, progress_callback)
-        for b in content_blocks
-        if isinstance(b, ToolCall)
-    ]
+    outcomes = await _execute_tool_calls_detailed(
+        tool_provider,
+        content_blocks,
+        timeout,
+        parallel=False,
+        progress_callback=progress_callback,
+    )
+    return [outcome.result for outcome in outcomes]
 
 
 async def execute_tool_calls_parallel(
@@ -247,17 +283,14 @@ async def execute_tool_calls_parallel(
     ``progress_callback`` notifications from concurrent tools interleave; the
     block id tags each one.
     """
-    tool_calls = [b for b in content_blocks if isinstance(b, ToolCall)]
-    if not tool_calls:
-        return []
-    return list(
-        await asyncio.gather(
-            *[
-                _execute_single_tool_call(tool_provider, tc, timeout, progress_callback)
-                for tc in tool_calls
-            ]
-        )
+    outcomes = await _execute_tool_calls_detailed(
+        tool_provider,
+        content_blocks,
+        timeout,
+        parallel=True,
+        progress_callback=progress_callback,
     )
+    return [outcome.result for outcome in outcomes]
 
 
 async def run_agent(

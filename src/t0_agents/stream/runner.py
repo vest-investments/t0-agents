@@ -9,8 +9,8 @@ and yields :class:`AgentEvent` s as chunks arrive.  The non-streaming
 The runner reuses:
 
 * ``convert_tools`` / ``build_tool_result`` from :mod:`t0_agents.mcp.adapter`.
-* ``execute_tool_calls`` / ``execute_tool_calls_parallel`` from
-  :mod:`t0_agents.mcp.loop`.
+* ``_execute_tool_calls_detailed`` from :mod:`t0_agents.mcp.loop` — the shared
+  executor core, which also carries each tool's structured payload.
 * every acquisition-independent piece of turn logic from
   :mod:`t0_agents.core.turn_engine` — the same engine :func:`run_agent`
   drives, so the two loops cannot drift apart again.
@@ -58,8 +58,7 @@ from t0_agents.core.turn_engine import (
 from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
     ProgressCallback,
-    execute_tool_calls,
-    execute_tool_calls_parallel,
+    _execute_tool_calls_detailed,
 )
 from t0_agents.stream.assembler import TurnStreamAssembler
 from t0_agents.stream.events import (
@@ -162,9 +161,6 @@ class StreamingAgentLoop:
         state = TurnState(
             messages=seed_messages(prior_messages, user_message),
             episode_id=episode_id,
-        )
-        executor = (
-            execute_tool_calls_parallel if parallel_tools else execute_tool_calls
         )
         progress_callback: ProgressCallback | None = None
         if progress_sink is not None:
@@ -301,19 +297,24 @@ class StreamingAgentLoop:
                 raise_missing_tool_provider(
                     entry_point="StreamingAgentLoop.stream"
                 )
-            tool_results = await executor(
+            outcomes = await _execute_tool_calls_detailed(
                 tool_provider,
                 tool_call_blocks,
                 tool_timeout,
+                parallel=parallel_tools,
                 progress_callback=progress_callback,
             )
-            for tc_event, tr in zip(tool_calls_collected, tool_results, strict=True):
-                is_error = str(tr.result).startswith("ERROR:")
+            tool_results = [outcome.result for outcome in outcomes]
+            for tc_event, outcome in zip(
+                tool_calls_collected, outcomes, strict=True
+            ):
+                result_str = str(outcome.result.result)
                 yield ToolResultEvent(
                     id=tc_event.id,
                     name=tc_event.name,
-                    result=str(tr.result),
-                    is_error=is_error,
+                    result=result_str,
+                    is_error=result_str.startswith("ERROR:"),
+                    structured=outcome.structured,
                 )
             state.messages.append(Message(role="user", content=tool_results))
 

@@ -352,7 +352,7 @@ never invents copy for a genuinely empty turn.
 | `TextEndEvent` | Once per text block after its final delta | `id` |
 | `ToolCallDeltaEvent` | Each partial tool-call delta (name/args) | `id`, `raw_name_delta`, `raw_arguments_delta` |
 | `ToolCallEvent` | Once per tool call, args parsed | `id`, `name`, `arguments: dict[str, Any]` |
-| `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool` |
+| `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool`, `structured: dict \| None` (raw structured payload, additive) |
 | `ThoughtDeltaEvent` | Each reasoning-model thought chunk | `id`, `delta` |
 | `ThoughtEvent` | Once per thought block after its final delta | `id`, `text` |
 | `ToolProgressEvent` | Each server-side `ctx.report_progress(...)` while a tool runs | `id` (matches the `ToolCallEvent`), `progress: float`, `total: float \| None`, `message: str \| None` |

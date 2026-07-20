@@ -33,6 +33,7 @@ from t0_agents.mcp import (
     has_tool_calls,
     run_agent,
 )
+from t0_agents.mcp.loop import _execute_tool_calls_detailed
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
 
@@ -47,12 +48,13 @@ def _make_result(
     *,
     data: Any = None,
     content: list[ContentBlock] | None = None,
+    structured_content: dict[str, Any] | None = None,
     is_error: bool = False,
 ) -> CallToolResult:
     """Build a synthetic FastMCP CallToolResult (mirrors test_adapter._make_result)."""
     return CallToolResult(
         content=content or [],
-        structured_content=None,
+        structured_content=structured_content,
         meta=None,
         data=data,
         is_error=is_error,
@@ -320,6 +322,49 @@ class TestExecuteToolCallsParallel:
         assert results[0].result == "5"
         assert results[1].result.startswith("ERROR: tool execution failed:")
         assert "greet failed" in results[1].result
+
+
+class TestExecuteToolCallsDetailed:
+    """The internal executor core carries the structured payload alongside the
+    ToolResult — the seam the streaming loop reads for ToolResultEvent."""
+
+    async def test_carries_structured_content(self) -> None:
+        client = FakeMCPClient(
+            call_results={"add": _make_result(data=5, structured_content={"sum": 5})},
+        )
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert len(outcomes) == 1
+        assert outcomes[0].result.result == "5"
+        assert outcomes[0].structured == {"sum": 5}
+
+    async def test_parallel_carries_structured_content(self) -> None:
+        client = FakeMCPClient(
+            call_results={
+                "add": _make_result(data=5, structured_content={"sum": 5}),
+                "greet": _make_result(data="hi"),
+            },
+        )
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [
+                _tool_call(name="add", raw_name="add", call_id="c1"),
+                _tool_call(name="greet", raw_name="greet", call_id="c2"),
+            ],
+            parallel=True,
+        )
+        assert [o.structured for o in outcomes] == [{"sum": 5}, None]
+
+    async def test_error_outcome_has_no_structured(self) -> None:
+        client = FakeMCPClient(call_results={"add": ToolError("boom")})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].result.result.startswith("ERROR: tool execution failed:")
+        assert outcomes[0].structured is None
 
 
 # --- TestRunAgent -----------------------------------------------------------

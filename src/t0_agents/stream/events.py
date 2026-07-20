@@ -65,12 +65,20 @@ class ToolCallEvent:
 
 @dataclass(slots=True)
 class ToolResultEvent:
-    """Result of executing the :class:`ToolCallEvent` with matching ``id``."""
+    """Result of executing the :class:`ToolCallEvent` with matching ``id``.
+
+    ``result`` is the model-visible serialized string; ``structured`` is the
+    tool's raw ``CallToolResult.structured_content`` (a plain dict) when it
+    returned one, else ``None``. It is an additive channel: consumers get the
+    structured payload without re-parsing ``result``, and the serialized string
+    stays the source of truth for the model.
+    """
 
     id: str
     name: str
     result: str
     is_error: bool = False
+    structured: dict[str, Any] | None = None
     type: Literal["tool_result"] = "tool_result"
 
 
