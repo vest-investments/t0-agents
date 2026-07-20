@@ -20,8 +20,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from tensorzero import Text, ToolCall
+from tensorzero import Text
 
+from t0_agents.testing.builders import tool_call
 from t0_agents.testing.mocks import MockGateway
 
 
@@ -37,15 +38,7 @@ def single_tool_happy(
     """
     return MockGateway.script(
         [
-            [
-                ToolCall(
-                    id="mock-call-1",
-                    raw_name=tool_name,
-                    raw_arguments="{}",
-                    name=tool_name,
-                    arguments={},
-                )
-            ],
+            [tool_call(tool_name, id="mock-call-1")],
             [Text(text=final_text)],
         ]
     )
@@ -65,15 +58,7 @@ def tool_error_recovery(
     """
     return MockGateway.script(
         [
-            [
-                ToolCall(
-                    id="mock-call-1",
-                    raw_name=tool_name,
-                    raw_arguments="{}",
-                    name=tool_name,
-                    arguments={},
-                )
-            ],
+            [tool_call(tool_name, id="mock-call-1")],
             [Text(text=final_text)],
         ]
     )
@@ -89,15 +74,7 @@ def max_turns_exhausted(tool_name: str = "loop") -> MockGateway:
     """
 
     def source(**_: Any) -> list[Any]:
-        return [
-            ToolCall(
-                id="mock-call-loop",
-                raw_name=tool_name,
-                raw_arguments="{}",
-                name=tool_name,
-                arguments={},
-            )
-        ]
+        return [tool_call(tool_name, id="mock-call-loop")]
 
     return MockGateway.canned(source)
 

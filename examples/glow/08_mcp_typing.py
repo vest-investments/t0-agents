@@ -10,9 +10,12 @@ Two patterns for declaring an MCP server a glow agent should see:
    MCPServer(url=...)]`` for per-parameter overrides.
 
 This example builds an in-memory FastMCP server with one tool and
-mounts it onto the App-owned ``glow-app`` composed server.  The
-classifier agent can then call the tool through ``app._owned_client``
-just like any other ``@app.tool``.
+mounts it on the App-owned MCP runtime.  The classifier agent can then
+call the tool just like any other ``@app.tool``.
+
+To unit-test a mount like this in-memory (no gateway, no sockets), see
+the ``glow_tools`` helper in the testing guide (``docs/testing.md`` §
+Glow MCP servers).
 
 Prerequisites:
     1. Set GROQ_API_KEY in your environment (or in .env at the project root).
@@ -56,18 +59,23 @@ class MathMCP(MCPServer, server=_MATH_SERVER, namespace="math"):
     """Typed declaration that mounts the math server on the App."""
 
 
-# Uncomment to demonstrate the authenticated HTTP path (requires a
-# reachable MCP endpoint + a real token).  ``headers=`` is static;
-# ``auth=`` takes any ``httpx.Auth`` for per-request tokens/signatures:
+# Authenticated remote mount (illustrative — a real ``url=`` endpoint and
+# token are required, so it stays commented).  ``headers=`` is static and
+# ``auth=`` takes any ``httpx.Auth`` for per-request credentials; these
+# apply only to a remote ``url=`` mount, never to an in-memory ``server=``.
+# ``prefix=False`` presents the tools unprefixed (single-server case).
 # class GithubMCP(
 #     MCPServer,
 #     url="https://api.githubcopilot.com/mcp/",
 #     namespace="github",
 #     headers={"Authorization": "Bearer <token>"},
+#     # auth=MyHttpxAuth(),   # per-request credentials
+#     # prefix=False,         # present tools unprefixed
 # ): ...
 #
-# Add ``prefix=False`` to present its tools verbatim (no ``github_``
-# prefix) — the single-server / legacy-name case.
+# The authenticated HTTP path is exercised end-to-end against a live local
+# server in tests/test_glow/test_mcp_authed_mounts.py, and documented in
+# docs/glow/typed-mcp-and-guardrails.md § Authenticated remote mounts.
 
 
 async def main() -> None:
@@ -84,7 +92,9 @@ async def main() -> None:
         return llm()
 
     async with app:
-        # Verify the mounted tool is visible to the composed Client.
+        # Verify the mounted tool is visible through the App-owned runtime.
+        # `app._owned_client` is glow-internal; a public `app.tools()`
+        # inventory API lands in a later release.
         tools = await app._owned_client.list_tools()
         tool_names = sorted(t.name for t in tools)
         print(f"Visible tools: {tool_names}")

@@ -189,7 +189,7 @@ picks up the tension the previous one left open.  Start at
 - [Multi-Agent Composition](docs/multi-agent.md) — declarative `sub_agents=[...]`, the LLM-driven path.
 - [Serving](docs/serving.md) — `create_app(agent)` and the FastAPI surface.
 - [CLI](docs/cli.md) — the `t0-agents` terminal experience.
-- [Testing](docs/testing.md) — keep every layer above from regressing.
+- [Testing](docs/testing.md) — keep every layer above from regressing, including in-memory MCP mounts.
 
 **Appendices**
 - [API Reference](docs/api-reference.md) · [Migration v0.12 → v1.0](docs/migration-v0.12-to-v1.0.md) · [Error Handling](docs/error-handling.md) · [Observability](docs/observability.md) · [Production](docs/production.md) · [Concurrency](docs/concurrency.md) · [Multi-Server](docs/multi-server.md) · [Structured outputs (reference)](docs/structured-outputs.md)
@@ -221,7 +221,7 @@ heavier extras live behind named installs.
 | **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
 | **HTTP serving** | `create_app(agent)` wraps any agent in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` — plus `/chat/stream` (SSE) and `/chat/ws` (WebSocket) when `streaming=True`. |
 | **Terminal CLI** | `t0-agents run` (interactive streaming TUI), `t0-agents serve` (dev HTTP server), `t0-agents info` (config introspection). |
-| **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
+| **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `glow_tools` + `ScriptedElicitation` to drive in-memory MCP mounts and `ctx.elicit` round-trips through the real FastMCP boundary, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
 | **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
 
 ## Status & Limitations

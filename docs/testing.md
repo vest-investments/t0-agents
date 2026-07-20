@@ -5,7 +5,7 @@ You have built, composed, served, and driven agents interactively. This chapter 
 A first-class test-authoring surface for agents built on `t0-agents`.
 
 `t0_agents.testing` removes the boilerplate of writing tests for an
-`Agent` without locking you into a single style. Three complementary
+`Agent` without locking you into a single style. Complementary
 paths:
 
 - **`MockGateway` + `MockToolProvider`** — deterministic, no
@@ -19,6 +19,10 @@ paths:
   provider whose API key is in your environment, no Docker required.
   Ideal for integration tests that need realistic model behaviour
   without spinning up containers.
+- **`glow_tools` + `ScriptedElicitation`** — mount MCP servers on a glow
+  `App` in-memory and drive their tools (and `ctx.elicit` round-trips)
+  through the real FastMCP boundary — no sockets. Script a tool-calling
+  turn with `tool_call`. See [Glow MCP servers](#glow-mcp-servers).
 
 Everything in this document lives under `t0_agents.testing` and is
 importable from the base distribution — no extra needed.
@@ -31,6 +35,7 @@ from t0_agents.testing import (
     assert_tool_called, assert_tool_not_called, assert_tool_args_equal,
     assert_max_turns, assert_response_contains,
     scenarios, streaming_mocks,
+    glow_tools, ScriptedElicitation, tool_call,
     mock_t0, mock_tool_provider, embedded_t0, agent_test_factory,
     AgentFactory, ToolHandler,
 )
@@ -741,6 +746,117 @@ silent.
 
 ---
 
+## Glow MCP servers
+
+Testing a glow agent that mounts MCP servers means testing *across* the
+FastMCP boundary. An in-process closure call — reaching into a server's
+registered functions and invoking them directly — skips the schema
+generation, argument coercion, and result serialization FastMCP performs on
+every real call, so it silently misses framework-level bugs. These helpers
+drive the **real** in-memory boundary — client → server → schema → result —
+with no sockets, no uvicorn, and no TensorZero.
+
+### In-memory tool mounts — `glow_tools`
+
+`glow_tools(*servers)` mounts `MCPServer` specs on an in-memory glow `App`
+and yields their tools as a `ToolProvider`. An in-memory `server=` mount
+connects as a direct `fastmcp.Client` over the server instance (no
+transport), and nothing is sent to TensorZero — the whole round-trip is
+offline. It hides the three coupled facts a glow-MCP test used to spell out
+by hand: a stand-in gateway, the App lifespan, and the private App-owned
+runtime.
+
+```python
+from fastmcp import FastMCP
+from t0_agents.glow import MCPServer
+from t0_agents.testing import glow_tools
+
+server = FastMCP("calc")
+
+@server.tool
+async def ping() -> str:
+    return "pong"
+
+async def test_ping_mounts() -> None:
+    async with glow_tools(MCPServer(server=server, namespace="calc")) as tools:
+        assert "calc_ping" in {t.name for t in await tools.list_tools()}
+```
+
+`call_tool` runs the same boundary end to end — the argument dict is coerced
+against the tool's input schema and the return value is serialized and
+hydrated back, exactly as in production:
+
+```python
+async def test_add_through_the_boundary() -> None:
+    async with glow_tools(MCPServer(server=server, namespace="calc")) as tools:
+        result = await tools.call_tool("calc_add", {"a": 2, "b": 3})
+    assert result.data == 5
+```
+
+Pass several specs to mount several servers; the yielded inventory is the
+merged, namespace-prefixed set with name collisions rejected — the same
+runtime a glow `App` uses in production.
+
+### Scripting tool calls — `tool_call`
+
+To script an agent turn that *calls* a tool, a gateway response needs a
+`ToolCall` content block. Its five fields (`id`, `raw_name`, `name`,
+`raw_arguments` as a JSON string, `arguments` as a dict) must stay mutually
+consistent; `tool_call` derives them from the name and keyword arguments:
+
+```python
+from tensorzero import Text
+from t0_agents.testing import MockGateway, tool_call
+
+gateway = MockGateway.script([
+    [tool_call("search", query="hello")],   # turn 1 — the model calls a tool
+    [Text(text="Found it.")],                # turn 2 — the model answers
+])
+```
+
+Compose a prefixed name from a mounted server's namespace and bare tool name
+with `tool_call(server="db", tool="lookup", q="x")` (→ `db_lookup`), matching
+the name the runtime mints for that mount.
+
+### Human-in-the-loop — `ScriptedElicitation`
+
+A tool that calls `ctx.elicit(...)` blocks until a human answers.
+`ScriptedElicitation` answers from a fixed script and resolves each request
+inline, so the round-trip runs in-memory with no return channel to wire up —
+pass its `handler` to `glow_tools` (or `App(elicitation_handler=...)`):
+
+```python
+from fastmcp import Context, FastMCP
+from t0_agents.glow import MCPServer
+from t0_agents.testing import ScriptedElicitation, glow_tools
+
+server = FastMCP("hitl")
+
+@server.tool
+async def place(ctx: Context) -> str:
+    ok = await ctx.elicit("Place the order?", response_type=bool)
+    return "placed" if ok.action == "accept" and ok.data else "skipped"
+
+async def test_place_confirmed() -> None:
+    scripted = ScriptedElicitation([{"action": "accept", "content": {"value": True}}])
+    async with glow_tools(
+        MCPServer(server=server, namespace="hitl"),
+        elicitation_handler=scripted.handler,
+    ) as tools:
+        result = await tools.call_tool("hitl_place", {})
+    assert result.data == "placed"
+```
+
+Each response is an action string (`"accept"`, `"decline"`, `"cancel"`) or a
+`{"action": ..., "content": {...}}` payload — a scalar accept carries its
+value under `content`. Responses are consumed in order, and every request is
+recorded on `scripted.received`, so a test can assert on the `message`,
+`schema`, and `response_type` the server sent. For a full out-of-process
+envelope path (resolving from a WebSocket frame, say), drive
+`t0_agents.core.elicitation_forwarder.ElicitationForwarder` directly.
+
+---
+
 ## Embedded gateway
 
 For the questions mocks can't answer, run against real TensorZero
@@ -917,6 +1033,16 @@ table is what the test protects.
 | `single_tool_happy` | `single_tool_happy(tool_name: str = "do_thing", *, final_text: str = "done") -> MockGateway` |
 | `tool_error_recovery` | `tool_error_recovery(tool_name: str = "flaky", *, final_text: str = "I couldn't run the tool; answering from memory.") -> MockGateway` |
 | `max_turns_exhausted` | `max_turns_exhausted(tool_name: str = "loop") -> MockGateway` |
+
+### Glow MCP — `t0_agents.testing.mcp` + `tool_call`
+
+| Symbol | Signature |
+|---|---|
+| `tool_call` | `tool_call(name: str \| None = None, /, *, id=None, server=None, tool=None, **arguments) -> ToolCall` |
+| `glow_tools` | `@asynccontextmanager async def glow_tools(*servers: MCPServer \| type[MCPServer], elicitation_handler=None) -> AsyncIterator[ToolProvider]` |
+| `ScriptedElicitation` | `ScriptedElicitation(responses: Sequence[str \| dict[str, Any]])` |
+| `ScriptedElicitation.handler` | `property -> ElicitationHandler` — the FastMCP handler to bind |
+| `ScriptedElicitation.received` | `list[RequestEnvelope]` — every request seen, for assertions |
 
 ### Embedded
 

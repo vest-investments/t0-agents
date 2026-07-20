@@ -1,6 +1,6 @@
 """Test-authoring surface for t0-agents.
 
-Three complementary tools for writing agent tests:
+Complementary tools for writing agent tests:
 
 * :class:`MockGateway` + :class:`MockToolProvider` — deterministic, no
   infrastructure, ideal for unit tests pinning down *exactly* what the
@@ -19,6 +19,10 @@ Three complementary tools for writing agent tests:
   provider whose API key is in the environment, no Docker / ClickHouse /
   Postgres required.  Ideal for integration tests that need realistic
   model behaviour but shouldn't spin up containers.
+* :func:`glow_tools` + :class:`ScriptedElicitation` — mount MCP servers on
+  a glow ``App`` in-memory and drive their tools (and ``ctx.elicit``
+  round-trips) through the real fastmcp boundary, no sockets.  Script a
+  tool-calling turn for a ``MockGateway`` with :func:`tool_call`.
 
 Public surface::
 
@@ -31,7 +35,8 @@ Public surface::
         assert_max_turns, assert_response_contains,
         assert_parsed_equals, assert_parsed_matches_schema,
         assert_invalid_json, assert_parse_strategy, assert_retry_attempts,
-        scenarios, streaming_mocks,
+        scenarios, streaming_mocks, tool_call,
+        glow_tools, ScriptedElicitation,
         mock_t0, mock_tool_provider, embedded_t0, agent_test_factory,
     )
 
@@ -55,6 +60,7 @@ from t0_agents.testing.assertions import (
     assert_tool_called,
     assert_tool_not_called,
 )
+from t0_agents.testing.builders import tool_call
 from t0_agents.testing.embedded import EmbeddedGatewayHelper
 from t0_agents.testing.fixtures import (
     AgentFactory,
@@ -63,6 +69,7 @@ from t0_agents.testing.fixtures import (
     mock_t0,
     mock_tool_provider,
 )
+from t0_agents.testing.mcp import ScriptedElicitation, glow_tools
 from t0_agents.testing.mocks import (
     MockChatResponse,
     MockGateway,
@@ -87,6 +94,7 @@ __all__ = [
     "MockToolProvider",
     "RecordingGateway",
     "ScriptedAgent",
+    "ScriptedElicitation",
     "ToolHandler",
     "agent_test_factory",
     "assert_invalid_json",
@@ -101,8 +109,10 @@ __all__ = [
     "assert_tool_not_called",
     "embedded_t0",
     "fake_event_stream",
+    "glow_tools",
     "mock_t0",
     "mock_tool_provider",
     "scenarios",
     "streaming_mocks",
+    "tool_call",
 ]
