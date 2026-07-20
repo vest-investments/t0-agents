@@ -169,6 +169,22 @@ async def test_missing_tool_on_routed_server_raises_tool_error() -> None:
             await runtime.call_tool("calc_nope", {})
 
 
+async def test_single_unprefixed_handle_routes_without_inventory_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With exactly one unprefixed handle, unprefixed names route directly
+    — no per-call list_tools membership check on the hot path."""
+    async with MCPRuntime(local_server=_local_server()) as runtime:
+        await runtime.call_tool("add", {"a": 1, "b": 1})
+
+        async def boom(self: _ServerHandle) -> Any:
+            raise AssertionError("fast path must not list tools")
+
+        monkeypatch.setattr(_ServerHandle, "tools", boom)
+        result = await runtime.call_tool("add", {"a": 2, "b": 3})
+    assert result.data == 5
+
+
 async def test_value_identical_specs_fold_into_one_handle() -> None:
     """Registering the same spec twice (servers= plus annotation) was
     harmless on the composite (mount idempotence) — parity here."""

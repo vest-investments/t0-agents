@@ -328,15 +328,19 @@ class _ServerHandle:
             stale_stack = self._stack
             self._stack = AsyncExitStack()
             self.client = self._client_factory(self.invalidate)
-            if was_connected:
-                try:
-                    await stale_stack.aclose()
-                except Exception:
-                    logger.debug(
-                        "closing the terminated session for %r failed",
-                        self.key,
-                        exc_info=True,
-                    )
+        # The stale stack is independent of the rebuilt state — close it
+        # outside the lock so a slow dead-session teardown (bounded by the
+        # client disconnect timeout) never blocks connects to the fresh
+        # client.
+        if was_connected:
+            try:
+                await stale_stack.aclose()
+            except Exception:
+                logger.debug(
+                    "closing the terminated session for %r failed",
+                    self.key,
+                    exc_info=True,
+                )
 
 
 class MCPRuntime:
@@ -455,11 +459,12 @@ class MCPRuntime:
 
         Prefixed names route by longest-namespace decomposition (no
         inventory lookup — the owning server stays the authority on
-        whether the bare tool exists); unprefixed names route by live
-        inventory membership.  An unroutable name raises
-        :class:`~fastmcp.exceptions.ToolError` with the same message shape
-        the composite produced, keeping the agent loop's error contract
-        intact.
+        whether the bare tool exists); unprefixed names go straight to
+        the only unprefixed handle when there is exactly one, and route
+        by live inventory membership otherwise.  An unroutable name
+        raises :class:`~fastmcp.exceptions.ToolError` with the same
+        message shape the composite produced, keeping the agent loop's
+        error contract intact.
         """
         routed = await self._route(name)
         if routed is None:
@@ -479,6 +484,12 @@ class MCPRuntime:
         for namespace, handle in self._prefix_routes:
             if name.startswith(f"{namespace}_"):
                 return handle, name[len(namespace) + 1 :]
+        # A single unprefixed handle (the common case: just the local
+        # @app.tool server) receives unprefixed names directly — no
+        # per-call inventory lookup; the owning server stays the authority
+        # on existence and rejects unknown names with the same ToolError.
+        if len(self._unprefixed) == 1:
+            return self._unprefixed[0], name
         for handle in self._unprefixed:
             if any(tool.name == name for tool in await handle.tools()):
                 return handle, name
