@@ -10,13 +10,14 @@ transport fakes.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastmcp import Client
-from tensorzero import ToolCall
+from tensorzero import AsyncTensorZeroGateway, Text, ToolCall
 
-from t0_agents.mcp.loop import execute_tool_calls, execute_tool_calls_parallel
+from t0_agents.mcp.loop import execute_tool_calls, execute_tool_calls_parallel, run_agent
 from t0_agents.tooling import FilteredToolProvider
+from tests._fake_t0 import FakeChatResponse, FakeT0
 from tests.server import mcp
 
 Notification = tuple[str, float, float | None, str | None]
@@ -89,3 +90,31 @@ class TestWrapperForwarding:
             )
         assert "counted 2" in str(results[0].result)
         assert [n[1] for n in recorder.notifications] == [1.0, 2.0]
+
+
+class TestRunAgent:
+    async def test_progress_callback_reaches_run_agent_callers(self) -> None:
+        """Parity fix: ``run_agent`` forwards ``progress_callback`` to the
+        executors, so server-side progress reaches non-streaming callers —
+        historically only the streaming loop wired it."""
+        recorder = _Recorder()
+        fake_t0 = FakeT0(
+            responses=[
+                FakeChatResponse(content=[_progress_call(2)]),
+                FakeChatResponse(content=[Text(type="text", text="done")]),
+            ],
+        )
+        async with Client(mcp) as client:
+            result = await run_agent(
+                cast(AsyncTensorZeroGateway, fake_t0),
+                client,
+                "count",
+                "agent",
+                tool_timeout=5.0,
+                progress_callback=recorder,
+            )
+        assert result.value == "done"
+        assert recorder.notifications == [
+            ("c1", 1.0, 2.0, "step 1"),
+            ("c1", 2.0, 2.0, "step 2"),
+        ]

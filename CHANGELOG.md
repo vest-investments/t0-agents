@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`run_agent` accepts `progress_callback`.**  The tool executors have
+  always accepted a per-call progress relay, but only the streaming loop
+  wired it — server-side ``ctx.report_progress(...)`` notifications were
+  silently dropped on non-streaming runs.  ``run_agent`` now forwards an
+  optional ``progress_callback`` (same ``ProgressCallback`` shape) to the
+  executors on every dispatch turn.
+
 ### Fixed
 
 - **`tool_timeout=None` now disables the per-call timeout — everywhere.**
@@ -19,6 +28,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `float | None`).  **Behavior change** only for callers passing an explicit
   `None` — they now get what the docs always promised; the 30.0 s default is
   unchanged.
+- **Streaming no longer dispatches tool calls whose JSON arguments failed to
+  parse.**  When the LLM streamed invalid (or non-object) JSON arguments, the
+  streaming loop rebuilt the call with ``arguments={}`` and executed the tool
+  — a tool with all-optional parameters would run on garbage input.  The
+  non-streaming loop has always refused to dispatch these (TensorZero marks
+  them ``arguments=None``) and fed the model an
+  ``ERROR: invalid JSON arguments...`` result instead.  Streaming now follows
+  the same contract: no dispatch, same error string, ``ToolResultEvent``
+  flagged ``is_error=True``.  The wire event sequence is unchanged.
+- **Streaming no longer dispatches hallucinated tool names.**  TensorZero
+  validates tool names against the advertised schema on the non-streaming
+  path and zeroes unknown ones — the loop answers with
+  ``ERROR: tool name ... is not in the schema`` without dispatching.
+  Streamed chunks carry the raw name unvalidated, so the streaming loop
+  forwarded hallucinated names to fastmcp and surfaced a provider
+  ``ToolError`` instead.  The rebuild now applies the same zeroing against
+  the advertised tool list, aligning both loops on the schema-error
+  contract.
 
 ### Added
 

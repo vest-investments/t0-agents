@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
@@ -27,7 +26,6 @@ from mcp import McpError
 from tensorzero import (
     AsyncTensorZeroGateway,
     Message,
-    Text,
     Thought,
     ToolCall,
     ToolChoice,
@@ -35,9 +33,38 @@ from tensorzero import (
 )
 from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
-from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
+from t0_agents.core.exceptions import T0AgentsFatalError
+from t0_agents.core.turn_engine import (
+    RECOVERABLE_INFERENCE_PATTERNS,
+    RECOVERABLE_INFERENCE_STATUS_CODES,
+    TurnState,
+    build_agent_result,
+    build_inference_kwargs,
+    complete_assistant_turn,
+    corrective_retry,
+    is_recoverable,
+    mine_final_text,
+    raise_max_turns,
+    raise_missing_tool_provider,
+    seed_messages,
+    strip_thoughts,
+    validate_run_inputs,
+)
 from t0_agents.core.types import AgentResult, ToolProgressHandler
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
+
+__all__ = [
+    "RECOVERABLE_INFERENCE_PATTERNS",
+    "RECOVERABLE_INFERENCE_STATUS_CODES",
+    "ProgressCallback",
+    "execute_tool_calls",
+    "execute_tool_calls_parallel",
+    "has_tool_calls",
+    "run_agent",
+]
+
+# Historical import path — the engine owns the helper since v2.2.0.
+_strip_thoughts = strip_thoughts
 
 logger = logging.getLogger(__name__)
 
@@ -67,25 +94,6 @@ def _progress_handler_for(
     return _forward
 
 
-# Patterns in TensorZeroError.text that indicate a recoverable inference
-# failure.  When a match is found AND the status code is in
-# ``RECOVERABLE_INFERENCE_STATUS_CODES``, the loop injects a corrective
-# user message and retries instead of propagating the exception.  Extend
-# either list to handle similar artifacts from other models / providers.
-RECOVERABLE_INFERENCE_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"not in request\.tools"),
-]
-
-# HTTP status codes that TensorZero may use when wrapping a provider-side
-# validation failure.  ``400`` is the direct passthrough; ``502`` is what
-# v2026.4.0 returns when an upstream provider (e.g. Groq) rejects the
-# request with 400 — the gateway classifies the whole request as
-# "upstream failed" and responds with a gateway-level Bad Gateway.
-# ``503`` is intentionally excluded: Service Unavailable is a
-# rate-limit / outage signal, not a format issue.
-RECOVERABLE_INFERENCE_STATUS_CODES: frozenset[int] = frozenset({400, 502})
-
-
 def has_tool_calls(content_blocks: list[Any]) -> bool:
     """Return ``True`` if any content block in ``content_blocks`` is a ``ToolCall``.
 
@@ -95,19 +103,6 @@ def has_tool_calls(content_blocks: list[Any]) -> bool:
     through as ``False`` here because they aren't ``ToolCall`` instances.
     """
     return any(isinstance(b, ToolCall) for b in content_blocks)
-
-
-def _strip_thoughts(content_blocks: list[Any]) -> list[Any]:
-    """Return ``content_blocks`` without any ``Thought`` blocks.
-
-    Applied to the assistant turn before it is appended to the replay
-    ``messages``: TensorZero rejects input thought blocks for thought-less
-    providers (e.g. groq) and drops them with a WARN, so replaying them is
-    never useful. Mirrors the cross-conversation strip-on-replay rule in
-    ``t0_agents.memory.tensorzero`` (``_to_native_message`` /
-    ``_output_to_content_blocks``).
-    """
-    return [b for b in content_blocks if not isinstance(b, Thought)]
 
 
 async def _execute_single_tool_call(
@@ -283,6 +278,7 @@ async def run_agent(
     system: str | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
     prior_messages: list[Message] | None = None,
+    progress_callback: ProgressCallback | None = None,
     model_name: str | None = None,
     variant_name: str | None = None,
     params: dict[str, Any] | None = None,
@@ -373,6 +369,11 @@ async def run_agent(
             from ``response.usage.cost`` so ``max_cost`` can abort the
             run at the next tool call. ``None`` (the default) is a no-op
             that preserves today's behaviour byte-for-byte.
+        progress_callback: Optional :data:`ProgressCallback` forwarded to
+            the tool executors on every dispatch turn, so server-side
+            ``ctx.report_progress(...)`` notifications reach
+            non-streaming callers tagged with the emitting block's id.
+            ``None`` (the default) keeps the quiet behaviour.
         prior_messages: Optional TensorZero-native message history to
             seed the loop with.  Used by the ``messages`` memory
             strategy (``Agent`` with ``memory_strategy="messages"`` and a
@@ -410,31 +411,21 @@ async def run_agent(
             empty-string defaults (those defaults exist only as a
             Python-syntax workaround for the optional ``tool_provider``).
     """
-    if system is not None and system_arguments is not None:
-        raise ValueError(
-            "Pass either `system` (raw string for input.system) or "
-            "`system_arguments` (dict for template variables), not both."
-        )
-    if system_arguments is not None and model_name is not None:
-        raise ValueError(
-            "system_arguments requires a tensorzero.toml function with a "
-            "system template; model_name routes via the functionless "
-            "passthrough, which has none. Pass system= (a raw prompt "
-            "string), or declare the function and use function_name=."
-        )
-    if not user_message or not (function_name or model_name):
-        raise ValueError(
-            "`run_agent` requires non-empty `user_message` and a routing "
-            "target: `function_name` or `model_name`. The `\"\"` defaults "
-            "exist only as a Python-syntax workaround so `tool_provider` "
-            "can default to `None` at position 2."
-        )
+    validate_run_inputs(
+        user_message=user_message,
+        function_name=function_name,
+        model_name=model_name,
+        system=system,
+        system_arguments=system_arguments,
+        entry_point="run_agent",
+    )
 
     mcp_tools = await tool_provider.list_tools() if tool_provider is not None else []
     t0_tools = convert_tools(mcp_tools)
-    messages: list[Message] = list(prior_messages) if prior_messages else []
-    messages.append(Message(role="user", content=user_message))
-    inference_ids: list[str] = []
+    state = TurnState(
+        messages=seed_messages(prior_messages, user_message),
+        episode_id=episode_id,
+    )
     executor = execute_tool_calls_parallel if parallel_tools else execute_tool_calls
 
     logger.info(
@@ -447,46 +438,32 @@ async def run_agent(
         # from <|channel|> artifacts) and inject a corrective user message so
         # the LLM can retry on the next turn.
         try:
-            input_dict: dict[str, Any] = {"messages": messages}
-            if system is not None:
-                input_dict["system"] = system
-            elif system_arguments is not None:
-                input_dict["system"] = system_arguments
             raw = await t0.inference(
-                function_name=function_name or None,
-                model_name=model_name,
-                variant_name=variant_name,
-                episode_id=episode_id,
-                input=input_dict,
-                additional_tools=t0_tools,
-                dryrun=dryrun,
-                tool_choice=tool_choice,
-                tags=tags,
-                namespace=namespace,
-                params=params,
-                cache_options=cache_options,
+                **build_inference_kwargs(
+                    function_name=function_name,
+                    model_name=model_name,
+                    variant_name=variant_name,
+                    episode_id=state.episode_id,
+                    messages=state.messages,
+                    t0_tools=t0_tools,
+                    dryrun=dryrun,
+                    tool_choice=tool_choice,
+                    tags=tags,
+                    namespace=namespace,
+                    system=system,
+                    system_arguments=system_arguments,
+                    params=params,
+                    cache_options=cache_options,
+                )
             )
         except TensorZeroError as e:
-            if (
-                e.status_code in RECOVERABLE_INFERENCE_STATUS_CODES
-                and e.text
-                and any(p.search(e.text) for p in RECOVERABLE_INFERENCE_PATTERNS)
-            ):
-                logger.warning(
-                    "Turn %d: recoverable TensorZeroError caught: %s",
-                    turn + 1, e.text,
+            if is_recoverable(e):
+                assistant_turn, correction, sentinel = corrective_retry(
+                    e.text, t0_tools, turn
                 )
-                tool_names_available = [t["name"] for t in t0_tools]
-                correction = (
-                    f"The previous response contained an invalid tool call "
-                    f"that was rejected: {e.text}\n"
-                    f"Available tools: {tool_names_available}. "
-                    f"Please retry with a valid tool name, stripping any "
-                    f"special tokens."
-                )
-                messages.append(Message(role="assistant", content=[]))
-                messages.append(Message(role="user", content=correction))
-                inference_ids.append(f"error-recoverable-turn-{turn + 1}")
+                state.messages.append(assistant_turn)
+                state.messages.append(correction)
+                state.inference_ids.append(sentinel)
                 continue
             raise
         # Chat-only loop: inference() returns Union[InferenceResponse,
@@ -495,21 +472,18 @@ async def run_agent(
         # We cannot isinstance-check here because unit tests use duck-typed fakes.
         response = cast(ChatInferenceResponse, raw)
 
-        # Post-inference observability hook.  Fires BEFORE tool execution
-        # so guardrails like ``max_cost`` can block the next tool call
-        # based on cumulative usage from this turn.
-        if on_inference is not None:
-            await on_inference(response)
-
-        episode_id = str(response.episode_id)
-        inference_ids.append(str(response.inference_id))
-        messages.append(Message(role="assistant", content=_strip_thoughts(response.content)))
+        await complete_assistant_turn(
+            state,
+            content_blocks=response.content,
+            response=response,
+            on_inference=on_inference,
+        )
 
         # Content-type breakdown per turn.
         content_types = [type(b).__name__ for b in response.content]
         logger.info(
             "Turn %d: inference_id=%s, episode_id=%s, content_types=%s",
-            turn + 1, response.inference_id, episode_id, content_types,
+            turn + 1, response.inference_id, state.episode_id, content_types,
         )
 
         if not has_tool_calls(response.content):
@@ -518,46 +492,18 @@ async def run_agent(
                 if isinstance(b, Thought) and b.text:
                     logger.debug("Thought content: %.500s", b.text)
 
-            text = "\n".join(
-                b.text for b in response.content
-                if isinstance(b, Text) and b.text
-            )
-            # Thought-only fallback: if no Text blocks produced content,
-            # extract from Thought blocks and flag the source.  ``Thought``
-            # carries reasoning via either ``text`` (raw) or ``summary``
-            # (a list of ``ThoughtSummaryBlock``, e.g. gpt-oss harmony's
-            # analysis channel or OpenAI o-series reasoning summaries) —
-            # both are mined so summary-only providers don't yield empty
-            # responses.
-            response_source: Literal["text", "thought"] = "text"
-            if not text:
-                thought_texts: list[str] = []
-                for b in response.content:
-                    if not isinstance(b, Thought):
-                        continue
-                    if b.text:
-                        thought_texts.append(b.text)
-                    if b.summary:
-                        thought_texts.extend(
-                            s.text for s in b.summary if s.text
-                        )
-                if thought_texts:
-                    text = "\n".join(thought_texts)
-                    response_source = "thought"
-                    logger.info(
-                        "Turn %d: thought-only response used as fallback",
-                        turn + 1,
-                    )
+            text, response_source = mine_final_text(response.content)
+            if response_source == "thought":
+                logger.info(
+                    "Turn %d: thought-only response used as fallback",
+                    turn + 1,
+                )
             logger.info(
                 "Agent loop completed: turns=%d, episode_id=%s",
-                turn + 1, episode_id,
+                turn + 1, state.episode_id,
             )
-            return AgentResult(
-                response=text,
-                episode_id=episode_id,
-                inference_ids=inference_ids,
-                turns=turn + 1,
-                response_source=response_source,
+            return build_agent_result(
+                text, response_source, state=state, turns=turn + 1
             )
 
         # Log tool names in dispatch.
@@ -571,17 +517,14 @@ async def run_agent(
         )
 
         if tool_provider is None:
-            raise T0AgentsFatalError(
-                "Agent loop received tool calls from the LLM but no "
-                "`tool_provider` was configured. Pass a connected "
-                "`fastmcp.Client` to `run_agent(..., tool_provider=...)` "
-                "if your agent is expected to dispatch tools."
-            )
-        tool_results = await executor(tool_provider, response.content, tool_timeout)
+            raise_missing_tool_provider(entry_point="run_agent")
+        tool_results = await executor(
+            tool_provider,
+            response.content,
+            tool_timeout,
+            progress_callback=progress_callback,
+        )
         # N tool results MUST go into a single user message, not N.
-        messages.append(Message(role="user", content=tool_results))
+        state.messages.append(Message(role="user", content=tool_results))
 
-    logger.warning(
-        "Agent loop exceeded max_turns=%d, episode_id=%s", max_turns, episode_id,
-    )
-    raise MaxTurnsExceededError(max_turns)
+    raise_max_turns(max_turns, state.episode_id)

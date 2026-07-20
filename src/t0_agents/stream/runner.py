@@ -11,8 +11,9 @@ The runner reuses:
 * ``convert_tools`` / ``build_tool_result`` from :mod:`t0_agents.mcp.adapter`.
 * ``execute_tool_calls`` / ``execute_tool_calls_parallel`` from
   :mod:`t0_agents.mcp.loop`.
-* ``RECOVERABLE_INFERENCE_PATTERNS`` / ``RECOVERABLE_INFERENCE_STATUS_CODES``
-  for parity with :func:`run_agent`'s corrective-retry contract.
+* every acquisition-independent piece of turn logic from
+  :mod:`t0_agents.core.turn_engine` — the same engine :func:`run_agent`
+  drives, so the two loops cannot drift apart again.
 
 Memory / guardrail scaffolding stays in :meth:`Agent.invoke` so the runner
 itself is agnostic of those subsystems — identical responsibility layering
@@ -23,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from fastmcp import Client
 from tensorzero import (
@@ -41,14 +42,22 @@ from tensorzero.types import (
     TensorZeroError,
 )
 
-from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
-from t0_agents.core.types import AgentResult
+from t0_agents.core.turn_engine import (
+    TurnState,
+    build_agent_result,
+    build_inference_kwargs,
+    complete_assistant_turn,
+    corrective_retry,
+    is_recoverable,
+    mine_final_text,
+    raise_max_turns,
+    raise_missing_tool_provider,
+    seed_messages,
+    validate_run_inputs,
+)
 from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
-    RECOVERABLE_INFERENCE_PATTERNS,
-    RECOVERABLE_INFERENCE_STATUS_CODES,
     ProgressCallback,
-    _strip_thoughts,
     execute_tool_calls,
     execute_tool_calls_parallel,
 )
@@ -137,33 +146,23 @@ class StreamingAgentLoop:
         yield point to ride.  ``Agent`` passes the Run's buffer ``put``
         so progress interleaves into the ordinary event stream.
         """
-        if system is not None and system_arguments is not None:
-            raise ValueError(
-                "Pass either `system` (raw string for input.system) or "
-                "`system_arguments` (dict for template variables), not both."
-            )
-        if system_arguments is not None and model_name is not None:
-            raise ValueError(
-                "system_arguments requires a tensorzero.toml function with "
-                "a system template; model_name routes via the functionless "
-                "passthrough, which has none. Pass system= (a raw prompt "
-                "string), or declare the function and use function_name=."
-            )
-        if not user_message or not (function_name or model_name):
-            raise ValueError(
-                "`StreamingAgentLoop.stream` requires non-empty "
-                "`user_message` and a routing target: `function_name` or "
-                "`model_name`. The `\"\"` defaults exist only as a "
-                "Python-syntax workaround so `tool_provider` can default "
-                "to `None` at position 2."
-            )
+        validate_run_inputs(
+            user_message=user_message,
+            function_name=function_name,
+            model_name=model_name,
+            system=system,
+            system_arguments=system_arguments,
+            entry_point="StreamingAgentLoop.stream",
+        )
         mcp_tools = (
             await tool_provider.list_tools() if tool_provider is not None else []
         )
         t0_tools = convert_tools(mcp_tools)
-        messages: list[Message] = list(prior_messages) if prior_messages else []
-        messages.append(Message(role="user", content=user_message))
-        inference_ids: list[str] = []
+        known_tool_names = frozenset(t["name"] for t in t0_tools)
+        state = TurnState(
+            messages=seed_messages(prior_messages, user_message),
+            episode_id=episode_id,
+        )
         executor = (
             execute_tool_calls_parallel if parallel_tools else execute_tool_calls
         )
@@ -197,54 +196,43 @@ class StreamingAgentLoop:
 
         for turn in range(max_turns):
             chunks, err = await self._open_stream(
-                t0=t0,
-                function_name=function_name,
-                model_name=model_name,
-                variant_name=variant_name,
-                episode_id=episode_id,
-                messages=messages,
-                t0_tools=t0_tools,
-                dryrun=dryrun,
-                tool_choice=tool_choice,
-                tags=tags,
-                namespace=namespace,
-                system_arguments=system_arguments,
-                system=system,
-                params=params,
-                cache_options=cache_options,
+                t0,
+                build_inference_kwargs(
+                    function_name=function_name,
+                    model_name=model_name,
+                    variant_name=variant_name,
+                    episode_id=state.episode_id,
+                    messages=state.messages,
+                    t0_tools=t0_tools,
+                    dryrun=dryrun,
+                    tool_choice=tool_choice,
+                    tags=tags,
+                    namespace=namespace,
+                    system=system,
+                    system_arguments=system_arguments,
+                    params=params,
+                    cache_options=cache_options,
+                ),
             )
             if err is not None:
-                if self._is_recoverable(err):
-                    logger.warning(
-                        "Turn %d: recoverable TensorZeroError caught: %s",
-                        turn + 1,
-                        err.text,
-                    )
-                    tool_names_available = [t["name"] for t in t0_tools]
-                    correction = (
-                        f"The previous response contained an invalid tool call "
-                        f"that was rejected: {err.text}\n"
-                        f"Available tools: {tool_names_available}. "
-                        f"Please retry with a valid tool name, stripping any "
-                        f"special tokens."
+                if is_recoverable(err):
+                    assistant_turn, correction, sentinel = corrective_retry(
+                        err.text, t0_tools, turn
                     )
                     yield ErrorEvent(
                         message="recoverable TensorZeroError; retrying",
                         detail={"text": err.text or ""},
                     )
-                    messages.append(Message(role="assistant", content=[]))
-                    messages.append(Message(role="user", content=correction))
-                    inference_ids.append(f"error-recoverable-turn-{turn + 1}")
+                    state.messages.append(assistant_turn)
+                    state.messages.append(correction)
+                    state.inference_ids.append(sentinel)
                     yield TurnEndEvent(turn=turn + 1)
                     continue
                 raise err
 
             assert chunks is not None  # recoverable branch returned above
             assembler = TurnStreamAssembler()
-            assistant_blocks: list[Any] = []
             tool_calls_collected: list[ToolCallEvent] = []
-            turn_episode_id: str | None = None
-            turn_inference_id: str | None = None
             last_chunk_ref: list[ChatChunk | None] = [None]
 
             tap = self._tap_final_chunk(chunks, last_chunk_ref)
@@ -254,42 +242,41 @@ class StreamingAgentLoop:
                 yield event
 
             final_usage_chunk = last_chunk_ref[0]
-
-            if final_usage_chunk is not None:
-                turn_episode_id = str(final_usage_chunk.episode_id)
-                turn_inference_id = str(final_usage_chunk.inference_id)
-
-            if turn_episode_id is not None:
-                episode_id = turn_episode_id
-            if turn_inference_id is not None:
-                inference_ids.append(turn_inference_id)
-
             assistant_blocks = self._build_assistant_blocks(
                 assembler=assembler,
                 tool_calls=tool_calls_collected,
-            )
-            messages.append(
-                Message(role="assistant", content=_strip_thoughts(assistant_blocks))
+                known_tool_names=known_tool_names,
             )
 
-            # Fire the observability hook with a synthesised ChatInferenceResponse
-            # mirror so guardrails (``max_cost``) can accumulate usage exactly
-            # as they do for ``run_agent``.
-            if on_inference is not None and final_usage_chunk is not None:
-                synthetic = _SyntheticChatResponse(
-                    content=assistant_blocks,
-                    episode_id=final_usage_chunk.episode_id,
-                    inference_id=final_usage_chunk.inference_id,
-                    usage=final_usage_chunk.usage,
+            # The engine drives the post-inference sequence off a synthesised
+            # ChatInferenceResponse mirror so guardrails (``max_cost``)
+            # accumulate usage exactly as they do for ``run_agent``.  ``None``
+            # (a stream that ended without a usage chunk) appends the
+            # assistant turn without capturing ids or firing the hook.
+            synthetic: ChatInferenceResponse | None = None
+            if final_usage_chunk is not None:
+                synthetic = cast(
+                    ChatInferenceResponse,
+                    _SyntheticChatResponse(
+                        content=assistant_blocks,
+                        episode_id=final_usage_chunk.episode_id,
+                        inference_id=final_usage_chunk.inference_id,
+                        usage=final_usage_chunk.usage,
+                    ),
                 )
-                await on_inference(cast(ChatInferenceResponse, synthetic))
+            await complete_assistant_turn(
+                state,
+                content_blocks=assistant_blocks,
+                response=synthetic,
+                on_inference=on_inference,
+            )
 
             logger.info(
                 "Stream turn %d: inference_id=%s, episode_id=%s, "
                 "blocks=%d, tool_calls=%d",
                 turn + 1,
-                turn_inference_id,
-                turn_episode_id,
+                str(final_usage_chunk.inference_id) if final_usage_chunk else None,
+                str(final_usage_chunk.episode_id) if final_usage_chunk else None,
                 len(assistant_blocks),
                 len(tool_calls_collected),
             )
@@ -297,15 +284,12 @@ class StreamingAgentLoop:
             yield TurnEndEvent(turn=turn + 1)
 
             if not tool_calls_collected:
-                text, response_source = _final_text(assistant_blocks)
-                result: AgentResult[str] = AgentResult(
-                    value=text,
-                    episode_id=episode_id,
-                    inference_ids=list(inference_ids),
-                    turns=turn + 1,
-                    response_source=response_source,
+                text, response_source = mine_final_text(assistant_blocks)
+                yield DoneEvent(
+                    result=build_agent_result(
+                        text, response_source, state=state, turns=turn + 1
+                    )
                 )
-                yield DoneEvent(result=result)
                 return
 
             # Dispatch tool calls via the existing executor (reuses the
@@ -314,12 +298,8 @@ class StreamingAgentLoop:
                 b for b in assistant_blocks if isinstance(b, ToolCall)
             ]
             if tool_provider is None:
-                raise T0AgentsFatalError(
-                    "Agent loop received tool calls from the LLM but no "
-                    "`tool_provider` was configured. Pass a connected "
-                    "`fastmcp.Client` to "
-                    "`StreamingAgentLoop.stream(..., tool_provider=...)` "
-                    "if your agent is expected to dispatch tools."
+                raise_missing_tool_provider(
+                    entry_point="StreamingAgentLoop.stream"
                 )
             tool_results = await executor(
                 tool_provider,
@@ -335,14 +315,9 @@ class StreamingAgentLoop:
                     result=str(tr.result),
                     is_error=is_error,
                 )
-            messages.append(Message(role="user", content=tool_results))
+            state.messages.append(Message(role="user", content=tool_results))
 
-        logger.warning(
-            "Streaming loop exceeded max_turns=%d, episode_id=%s",
-            max_turns,
-            episode_id,
-        )
-        raise MaxTurnsExceededError(max_turns)
+        raise_max_turns(max_turns, state.episode_id)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -350,57 +325,22 @@ class StreamingAgentLoop:
 
     async def _open_stream(
         self,
-        *,
         t0: AsyncTensorZeroGateway,
-        function_name: str | None,
-        model_name: str | None,
-        variant_name: str | None,
-        episode_id: str | None,
-        messages: list[Message],
-        t0_tools: list[dict[str, Any]],
-        dryrun: bool,
-        tool_choice: ToolChoice | None,
-        tags: dict[str, str] | None,
-        namespace: str | None,
-        system_arguments: dict[str, Any] | None,
-        system: str | None,
-        params: dict[str, Any] | None,
-        cache_options: dict[str, Any] | None,
+        inference_kwargs: dict[str, Any],
     ) -> tuple[AsyncIterator[InferenceChunk] | None, TensorZeroError | None]:
-        """Issue ``t0.inference(stream=True)`` — return the iterator or the error."""
-        input_dict: dict[str, Any] = {"messages": messages}
-        if system is not None:
-            input_dict["system"] = system
-        elif system_arguments is not None:
-            input_dict["system"] = system_arguments
+        """Issue ``t0.inference(stream=True)`` — return the iterator or the error.
+
+        ``inference_kwargs`` is the engine-assembled kwargs dict
+        (:func:`~t0_agents.core.turn_engine.build_inference_kwargs`);
+        this helper only adds ``stream=True`` and folds the gateway
+        error into the return value so the caller's generator can yield
+        the recoverable-retry events.
+        """
         try:
-            raw = await t0.inference(
-                function_name=function_name or None,
-                model_name=model_name,
-                variant_name=variant_name,
-                episode_id=episode_id,
-                input=input_dict,
-                additional_tools=t0_tools,
-                dryrun=dryrun,
-                tool_choice=tool_choice,
-                tags=tags,
-                namespace=namespace,
-                stream=True,
-                params=params,
-                cache_options=cache_options,
-            )
+            raw = await t0.inference(**inference_kwargs, stream=True)
         except TensorZeroError as err:
             return None, err
         return cast(AsyncIterator[InferenceChunk], raw), None
-
-    def _is_recoverable(self, err: TensorZeroError) -> bool:
-        status = err.status_code
-        text = err.text
-        if status not in RECOVERABLE_INFERENCE_STATUS_CODES:
-            return False
-        if not text:
-            return False
-        return any(p.search(text) for p in RECOVERABLE_INFERENCE_PATTERNS)
 
     # ---- Final-chunk tap ---------------------------------------------
 
@@ -428,6 +368,7 @@ class StreamingAgentLoop:
         *,
         assembler: TurnStreamAssembler,
         tool_calls: list[ToolCallEvent],
+        known_tool_names: frozenset[str],
     ) -> list[Any]:
         """Reconstruct the assistant turn's full ``content`` list.
 
@@ -437,6 +378,13 @@ class StreamingAgentLoop:
         caller strips ``Thought`` before appending to the replay ``messages``
         (parity with ``run_agent``: TensorZero rejects input thought blocks for
         thought-less providers such as groq).
+
+        The rebuild mirrors the two zeroings TensorZero applies on the
+        non-streaming path but not on chunks: a name outside
+        ``known_tool_names`` becomes ``name=None`` and arguments that
+        failed JSON parsing become ``arguments=None`` — both route
+        dispatch through ``_execute_single_tool_call``'s no-dispatch
+        error branches, keeping the two loops' contracts identical.
         """
         blocks: list[Any] = []
         for _tid, text in assembler.text_blocks.items():
@@ -444,11 +392,25 @@ class StreamingAgentLoop:
         for _tid, thought in assembler.thought_blocks.items():
             blocks.append(Thought(type="thought", text=thought))
         for tc in tool_calls:
+            name = tc.name if tc.name in known_tool_names else None
+            invalid_raw = assembler.invalid_tool_args.get(tc.id)
+            if invalid_raw is not None:
+                blocks.append(
+                    ToolCall(
+                        type="tool_call",
+                        id=tc.id,
+                        name=name,
+                        raw_name=tc.name,
+                        arguments=None,
+                        raw_arguments=invalid_raw,
+                    )
+                )
+                continue
             blocks.append(
                 ToolCall(
                     type="tool_call",
                     id=tc.id,
-                    name=tc.name,
+                    name=name,
                     raw_name=tc.name,
                     arguments=tc.arguments,
                     raw_arguments=(
@@ -485,34 +447,8 @@ class _SyntheticChatResponse:
         self.usage = usage
 
 
-def _final_text(
-    blocks: list[Any],
-) -> tuple[str, Literal["text", "thought"]]:
-    """Join ``Text`` blocks; fall back to thought content (parity with ``run_agent``).
-
-    When no ``Text`` block carries content, mine the turn's ``Thought``
-    blocks so a thought-only final turn never yields an empty response.
-    Reasoning models surface the answer via either ``Thought.text`` (raw)
-    or ``Thought.summary[*].text`` (provider summary, e.g. gpt-oss
-    harmony's analysis channel); both are mined, mirroring the
-    non-streaming :func:`t0_agents.mcp.loop.run_agent` fallback. The
-    source is flagged ``"thought"`` so consumers branch on provenance,
-    not on model name.
-    """
-    text = "\n".join(b.text for b in blocks if isinstance(b, Text) and b.text)
-    if text:
-        return text, "text"
-    thought_texts: list[str] = []
-    for b in blocks:
-        if not isinstance(b, Thought):
-            continue
-        if b.text:
-            thought_texts.append(b.text)
-        if b.summary:
-            thought_texts.extend(s.text for s in b.summary if s.text)
-    if thought_texts:
-        return "\n".join(thought_texts), "thought"
-    return "", "text"
+# Historical import path — the engine owns the helper since v2.2.0.
+_final_text = mine_final_text
 
 
 def _json_dumps(value: Any) -> str:

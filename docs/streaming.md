@@ -184,7 +184,8 @@ async def chat(query: str) -> None:
    `AgentResult` and yields `DoneEvent(result=...)`.
 
 `Agent.invoke()`'s non-streaming path goes through the same turn shape —
-the streaming loop is an additive layer, not a replacement.
+both loops drive the shared turn engine (`core/turn_engine.py`), so the
+streaming loop is an additive layer, not a replacement.
 
 ## Concepts
 
@@ -209,10 +210,11 @@ the streaming loop is an additive layer, not a replacement.
 ```
 
 `stream/` has zero new third-party dependencies on top of the rest of
-the library.  It composes `core/` (for `AgentResult` and
-`MaxTurnsExceededError`) and `mcp/` (for `convert_tools`,
-`execute_tool_calls`, and the recoverable-retry patterns) — and
-nothing else.
+the library.  It composes `core/` (for `AgentResult` and the shared
+turn engine, `core/turn_engine.py` — validation, inference kwargs,
+corrective retry, the post-inference sequence, final-text mining, the
+max-turns guard) and `mcp/` (for `convert_tools` and
+`execute_tool_calls`) — and nothing else.
 
 ### Event taxonomy
 
@@ -640,7 +642,7 @@ The streaming surface encodes three tiers of error:
 
 | Kind | Surface | Examples |
 |---|---|---|
-| Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
+| Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable; the call is **not** dispatched — the model receives the same `ERROR: invalid JSON arguments...` result as on the non-streaming path); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
 | Fatal, default | Raised out of the async iterator (`on_error="raise"`) | `MaxTurnsExceededError`, `GuardrailBlockedError`, non-recoverable `TensorZeroError`, or any `T0AgentsFatalError` subclass |
 | Fatal, terminal-event | One terminal `RunErrorEvent` ends the stream (`on_error="event"`) | the same failures, converted: `error_type` carries the exception class name, `detail` carries structured extras (`{"max_turns": 20}`), `exception` carries the original for in-process consumers.  **Invariant: exactly one `DoneEvent \| RunErrorEvent` per stream.**  Cancellation always raises. |
 
@@ -649,7 +651,8 @@ raise mid-iteration); core keeps `"raise"` for backward compatibility.
 
 The recoverable-retry contract is shared with `run_agent` — when the
 gateway returns a 4xx status whose body matches one of the
-`RECOVERABLE_INFERENCE_PATTERNS` (imported from `mcp.loop`), the
+`RECOVERABLE_INFERENCE_PATTERNS` (owned by `core.turn_engine`,
+re-exported from `mcp.loop`), the
 streaming loop appends a corrective-message turn and keeps going, and
 the consumer sees an `ErrorEvent` announcing the retry followed by
 the next turn's events.
