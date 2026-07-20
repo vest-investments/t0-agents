@@ -33,13 +33,16 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from tensorzero import Message, Text, Thought, ToolChoice
-from tensorzero.types import ChatInferenceResponse, TensorZeroError
+from tensorzero import Message, Text, Thought
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
 from t0_agents.core.types import AgentResult
+
+if TYPE_CHECKING:
+    from tensorzero import ToolChoice
+    from tensorzero.types import ChatInferenceResponse, TensorZeroError
 
 logger = logging.getLogger(__name__)
 
