@@ -155,6 +155,7 @@ GOLDEN_B = {
             "name": "add",
             "result": "3",
             "is_error": False,
+            "structured": None,
             "type": "tool_result",
         },
         {
@@ -163,6 +164,7 @@ GOLDEN_B = {
             "name": "greet",
             "result": "Hello, x!",
             "is_error": False,
+            "structured": None,
             "type": "tool_result",
         },
         {
