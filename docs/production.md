@@ -193,6 +193,34 @@ async def agent_endpoint(query: str) -> dict:
     return {"response": result.response, "turns": result.turns}
 ```
 
+## Embedding t0-agents inside a larger application
+
+`t0_agents` imports `fastmcp`, and importing FastMCP has process-global
+side effects an embedding host inherits. None are bugs — they surprise
+apps that assume a library import is inert.
+
+- **Configuration from the environment and `.env`.** FastMCP settings
+  read `FASTMCP_*` environment variables and an env file — by default
+  `.env` in the process working directory (override the path with
+  `FASTMCP_ENV_FILE`). In a deployment where a stray `.env` must not leak
+  in, set the `FASTMCP_*` values explicitly.
+- **A dedicated, non-propagating logger.** FastMCP logs through a
+  `"fastmcp"` logger with `propagate=False` (and a Rich handler when it
+  configures logging), so its records do **not** reach your root logger
+  by default. To capture them, attach a handler to `"fastmcp"` (or set
+  `logging.getLogger("fastmcp").propagate = True`).
+- **A warnings-filter entry.** `import fastmcp` runs
+  `warnings.simplefilter("default", FastMCPDeprecationWarning)`, adding a
+  process-global filter entry. A host that froze the warnings filter (or
+  runs under `-W error`) should set its own filter **after** the first
+  t0-agents / FastMCP import.
+- **OpenTelemetry trace propagation.** When an OTel tracer is active,
+  FastMCP injects a `traceparent` into each tool call's `_meta` so the
+  MCP server can continue the trace. Inert if you do not run OTel.
+
+These are FastMCP behaviors, not t0-agents policy — t0-agents neither
+suppresses nor re-exposes them.
+
 ## Rate limits and quotas
 
 t0-agents intentionally does **not** auto-retry on `HTTP 429` from the
