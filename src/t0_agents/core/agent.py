@@ -541,31 +541,27 @@ class Agent:
         # provider, which an override does not change.
         json_mode = _resolve_json_mode(ctx.output)
         if json_mode == "tool":
+
+            async def _reject_tool_advertising(
+                provider: ToolProvider | None,
+            ) -> None:
+                if provider is None:
+                    return
+                advertised_tools = await provider.list_tools()
+                if advertised_tools:
+                    raise ConfigurationError(
+                        "output=JsonOutput(json_mode='tool') is "
+                        "incompatible with a tool_provider that "
+                        "advertises tools (TensorZero guide §11.1).  "
+                        "Either switch to json_mode='strict'/'on'/'off' "
+                        "or use an empty tool_provider."
+                    )
+
             if ctx.tool_provider_overridden:
-                if ctx.tool_provider is not None:
-                    advertised_tools = await ctx.tool_provider.list_tools()
-                    if advertised_tools:
-                        raise ConfigurationError(
-                            "output=JsonOutput(json_mode='tool') is "
-                            "incompatible with a tool_provider that "
-                            "advertises tools (TensorZero guide §11.1).  "
-                            "Either switch to json_mode='strict'/'on'/'off' "
-                            "or use an empty tool_provider."
-                        )
+                await _reject_tool_advertising(ctx.tool_provider)
             elif not self._tool_provider_verified_empty:
-                if self._tool_provider is None:
-                    self._tool_provider_verified_empty = True
-                else:
-                    advertised_tools = await self._tool_provider.list_tools()
-                    if advertised_tools:
-                        raise ConfigurationError(
-                            "output=JsonOutput(json_mode='tool') is "
-                            "incompatible with a tool_provider that "
-                            "advertises tools (TensorZero guide §11.1).  "
-                            "Either switch to json_mode='strict'/'on'/'off' "
-                            "or use an empty tool_provider."
-                        )
-                    self._tool_provider_verified_empty = True
+                await _reject_tool_advertising(self._tool_provider)
+                self._tool_provider_verified_empty = True
 
         # --- 1. Build the inference request ---
         messages: list[Mapping[str, Any]] = []
