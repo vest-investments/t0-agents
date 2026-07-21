@@ -41,9 +41,11 @@ rolled/expired server session is rebuilt transparently with at most one
 safe re-send of the rejected call.  Duplicate final tool names across
 mounts fail loud at build time.
 
-Every glow agent on a given `App` sees every mounted server — per-agent
-MCP subsets are a [known limitation](limitations.md#no-per-agent-mcp-subsets);
-spin up multiple `App` instances for strict isolation.
+Every glow agent on a given `App` sees every mounted server by default.
+Narrow the visible tools per agent with `@app.agent(tools=[...])`, or per
+conversation with `conversation(tools=[...])` (see
+[Multi-tenant apps](multi-tenant.md)); spin up multiple `App` instances
+when you need strict process-level isolation.
 
 Runnable demo:
 [`examples/glow/08_mcp_typing.py`](../../examples/glow/08_mcp_typing.py).

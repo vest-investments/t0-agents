@@ -68,8 +68,7 @@ companions live under [`examples/glow/`](../../examples/glow/).
    pool, `elicits=True` routing, credential rotation, and the
    migration from one-App-per-tenant.
 8. **[Known limitations](limitations.md)** — what's deferred to
-   v1.1: streaming JSON, per-agent MCP subsets, AsyncIterator tools,
-   sync API.
+   v1.1: streaming JSON, AsyncIterator tools, sync API.
 
 ## Drop down to Agent anytime
 

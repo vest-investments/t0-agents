@@ -292,5 +292,5 @@ sub-agent injection for `@app.agent` — is documented in
   `wrapper._agent` is the v1.0 `Agent` the decorator built, plus
   `app.lifespan()` / `build()` / `shutdown()` for explicit lifecycle.
 - **[Known limitations](limitations.md)** — what's deferred to v1.1
-  (streaming JSON, per-agent MCP subsets, AsyncIterator tools, sync API).
+  (streaming JSON, AsyncIterator tools, sync API).
 - **[v1.0 docs](../index.md)** — the underlying primitives glow compiles to.

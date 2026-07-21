@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.2.0] — 2026-07-21
+
+The fastmcp vertical: mounting MCP servers on a glow `App` is now Pythonic
+and efficient for many concurrent conversations in one process. The
+composite-proxy remote path is replaced by a native multi-server runtime
+(one warm connection per server); identity becomes a per-conversation
+dimension over a single long-lived App; the two agent loops share one turn
+engine; and timeout truth, structured content, testing DX, and tool-call
+observability round it out. Additive over 2.1.2 — the only behavior changes
+are the `tool_timeout=None` fix, the streaming no-dispatch parity fixes, and
+non-text tool content no longer being dropped (all flagged below). Validated
+against fastmcp 3.2.4.
 
 ### Added
 
@@ -94,6 +105,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   memory provider — the injection seam conversation identity rides, usable
   from the base API too.  `MCPRuntime` gains `for_conversation(...)` views,
   `client_counts()`, and `pool_idle_ttl=` / `pool_max_size=` knobs.
+- **`MCPServer(timeout=…)` — per-server transport read timeout.**  Pins the
+  httpx read window (maximum silent gap between bytes; any SSE frame the
+  server emits resets it) on a `url` mount's connections, replacing the
+  previously unreachable SDK default of 300 s.  Size it above an
+  elicitation-capable server's elicit wait.  Url-only, like
+  `headers=`/`auth=`; validated eagerly.
+- **Docs: the timeout stack.**  `error-handling.md` now maps all four timeout
+  layers (per-call deadline, session default, httpx read window, proxy inner
+  hop), including the source-verified SDK hang mode (a dead request stream
+  without a per-call deadline never resolves) and heartbeat guidance.
+
+### Changed
+
+- **Duplicate final tool names across mounts now fail loud.**  Two
+  mounts producing the same prefixed name raise `ConfigurationError` at
+  build/refresh; the composite silently forwarded duplicates to
+  inference.  Value-identical specs registered twice (e.g. `servers=`
+  plus a parameter annotation) still fold into one mount, as before.
+- The public glow surface is unchanged; `create_proxy` is no longer
+  used anywhere in the library.
 
 ### Fixed
 
@@ -137,29 +168,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *successful* result that happened to render as `"ERROR: …"`.  It now comes
   from the executor's typed outcome (the dispatch error branch or
   `CallToolResult.is_error`).  The model-visible `result` string is unchanged.
-
-### Added
-
-- **`MCPServer(timeout=…)` — per-server transport read timeout.**  Pins the
-  httpx read window (maximum silent gap between bytes; any SSE frame the
-  server emits resets it) on a `url` mount's connections, replacing the
-  previously unreachable SDK default of 300 s.  Size it above an
-  elicitation-capable server's elicit wait.  Url-only, like
-  `headers=`/`auth=`; validated eagerly.
-- **Docs: the timeout stack.**  `error-handling.md` now maps all four timeout
-  layers (per-call deadline, session default, httpx read window, proxy inner
-  hop), including the source-verified SDK hang mode (a dead request stream
-  without a per-call deadline never resolves) and heartbeat guidance.
-
-### Changed
-
-- **Duplicate final tool names across mounts now fail loud.**  Two
-  mounts producing the same prefixed name raise `ConfigurationError` at
-  build/refresh; the composite silently forwarded duplicates to
-  inference.  Value-identical specs registered twice (e.g. `servers=`
-  plus a parameter annotation) still fold into one mount, as before.
-- The public glow surface is unchanged; `create_proxy` is no longer
-  used anywhere in the library.
 
 ## [2.1.2] — 2026-07-17
 

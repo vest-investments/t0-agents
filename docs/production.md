@@ -7,7 +7,7 @@ FastMCP supports multiple transports. Choose based on your deployment model.
 | Transport | Use case | Code | Elicitation | Notes |
 |-----------|----------|------|-------------|-------|
 | In-memory | Development, testing | `Client(mcp_instance)` | Yes | No network overhead. Server runs in-process. |
-| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | No | Stateless HTTP breaks bidirectional elicitation sessions. |
+| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | Yes | Needs a **stateful** server session; `stateless_http=True` breaks bidirectional elicitation. |
 | SSE | Production, legacy | `Client("http://host:8000/sse")` | Yes | Stateful session supports elicitation. |
 | stdio | Subprocess model | `Client(StdioTransport("python", "server.py"))` | Yes | Server runs as child process. |
 
@@ -192,6 +192,55 @@ async def agent_endpoint(query: str) -> dict:
     result = await run_agent(app.state.t0, app.state.client, query, "agent")
     return {"response": result.response, "turns": result.turns}
 ```
+
+## Embedding t0-agents inside a larger application
+
+`t0_agents` imports `fastmcp`, and importing FastMCP has process-global
+side effects an embedding host inherits. None are bugs — they surprise
+apps that assume a library import is inert.
+
+- **Configuration from the environment and `.env`.** FastMCP settings
+  read `FASTMCP_*` environment variables and an env file — by default
+  `.env` in the process working directory (override the path with
+  `FASTMCP_ENV_FILE`). In a deployment where a stray `.env` must not leak
+  in, set the `FASTMCP_*` values explicitly.
+- **A dedicated, non-propagating logger.** FastMCP logs through a
+  `"fastmcp"` logger with `propagate=False` (and a Rich handler when it
+  configures logging), so its records do **not** reach your root logger
+  by default. To capture them, attach a handler to `"fastmcp"` (or set
+  `logging.getLogger("fastmcp").propagate = True`).
+- **A warnings-filter entry.** `import fastmcp` runs
+  `warnings.simplefilter("default", FastMCPDeprecationWarning)`, adding a
+  process-global filter entry. A host that froze the warnings filter (or
+  runs under `-W error`) should set its own filter **after** the first
+  t0-agents / FastMCP import.
+- **OpenTelemetry trace propagation.** When an OTel tracer is active,
+  FastMCP injects a `traceparent` into each tool call's `_meta` so the
+  MCP server can continue the trace. Inert if you do not run OTel.
+
+These are FastMCP behaviors, not t0-agents policy — t0-agents neither
+suppresses nor re-exposes them.
+
+## fastmcp version compatibility
+
+t0-agents declares `fastmcp>=3.2.3` and **locks 3.2.4** (`uv.lock`) — the
+version vest-ai runs in production, so CI exercises exactly what prod does.
+The tested range is **3.2.3–3.2.4**; the two are equivalent for every
+FastMCP / MCP surface t0-agents depends on (client concurrency, transport
+factories, the elicitation and task-notification wiring, `call_tool` /
+`list_tools`, session-termination handling).
+
+The `>=3.2.3` floor is a floor, not an endorsement of every later release.
+FastMCP's versioning allows **breaking changes in minor releases**, so a
+`3.3` / `3.4` bump can move surfaces t0-agents relies on. Treat those
+minors as unvetted until audited against the installed source and this test
+suite; the committed lock is the version t0-agents is validated against,
+and `uv sync` installs it regardless of what the floor would otherwise
+resolve.
+
+`fastmcp.server.auth` is documented upstream as unstable even across patch
+releases; t0-agents does not import it, so its churn does not affect this
+library.
 
 ## Rate limits and quotas
 

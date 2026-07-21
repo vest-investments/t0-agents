@@ -57,10 +57,14 @@ async def main() -> None:
             print(await tutor("Say hi"))
 ```
 
-Without `lifespan()` (or an explicit `build()`/`shutdown()` pair), the
-first agent invocation reaches an unentered Client and the FastMCP
-transport raises.  Build is idempotent; `lifespan()` is re-entrant in
-the sense that consecutive calls construct and tear down cleanly.
+Without an explicit `lifespan()` / `build()`, the first agent
+consumption **auto-builds** the App — a one-time full boot (gateway
+resolution, MCP mounts, client connection, `tools=` filter resolution),
+logged once at INFO — so a forgotten lifespan no longer dead-ends on an
+unentered Client.  `async with app:` is the explicit boot bracket
+(byte-equivalent to `async with app.lifespan():`); prefer it in
+long-lived processes so teardown is deterministic.  Build is idempotent;
+consecutive `lifespan()` calls construct and tear down cleanly.
 
 Forward-ref failures, duplicate agent names, and mis-shaped `Depends`
 declarations all surface at `build()` time rather than at the first
