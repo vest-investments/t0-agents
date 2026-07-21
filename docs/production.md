@@ -7,7 +7,7 @@ FastMCP supports multiple transports. Choose based on your deployment model.
 | Transport | Use case | Code | Elicitation | Notes |
 |-----------|----------|------|-------------|-------|
 | In-memory | Development, testing | `Client(mcp_instance)` | Yes | No network overhead. Server runs in-process. |
-| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | No | Stateless HTTP breaks bidirectional elicitation sessions. |
+| HTTP Streamable | Production | `Client("https://host:8000/mcp")` | Yes | Needs a **stateful** server session; `stateless_http=True` breaks bidirectional elicitation. |
 | SSE | Production, legacy | `Client("http://host:8000/sse")` | Yes | Stateful session supports elicitation. |
 | stdio | Subprocess model | `Client(StdioTransport("python", "server.py"))` | Yes | Server runs as child process. |
 
