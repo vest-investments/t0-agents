@@ -32,7 +32,7 @@ live under [`examples/glow/`](../examples/glow/).
 3. **[Depends and tools](glow/depends-and-tools.md)** — value-style injection inside `@app.tool`, sub-agent injection inside `@app.agent`, and `app.dependency_overrides` for tests.
 4. **[Typed MCP and guardrails](glow/typed-mcp-and-guardrails.md)** — class-based `MCPServer` declarations, the `Annotated[...]` override, and the `Annotated[T, guardrail(...)]` metadata pattern.
 5. **[Escape hatch](glow/escape-hatch.md)** — `wrapper._agent` IS the v1.0 `Agent`; lifespan / build / shutdown; drop-down recipes for middleware, custom `OutputMode`, hand-rolled event handling, and `cancel()` / `fork()` / `replay()`.
-6. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, per-agent MCP subsets, AsyncIterator tools, sync API).
+6. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, AsyncIterator tools, sync API).
 
 ### Agent — the canonical, fully-typed surface
 
