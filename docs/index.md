@@ -32,7 +32,9 @@ live under [`examples/glow/`](../examples/glow/).
 3. **[Depends and tools](glow/depends-and-tools.md)** — value-style injection inside `@app.tool`, sub-agent injection inside `@app.agent`, and `app.dependency_overrides` for tests.
 4. **[Typed MCP and guardrails](glow/typed-mcp-and-guardrails.md)** — class-based `MCPServer` declarations, the `Annotated[...]` override, and the `Annotated[T, guardrail(...)]` metadata pattern.
 5. **[Escape hatch](glow/escape-hatch.md)** — `wrapper._agent` IS the v1.0 `Agent`; lifespan / build / shutdown; drop-down recipes for middleware, custom `OutputMode`, hand-rolled event handling, and `cancel()` / `fork()` / `replay()`.
-6. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, AsyncIterator tools, sync API).
+6. **[Conversations](glow/conversations.md)** — a second turn: `agent.conversation()` / `send()`, the pinned `conv.id == episode_id`, memory-strategy-aware history, `hydrate=` resume, and `app.conversations(...)` listing.
+7. **[Multi-tenant apps](glow/multi-tenant.md)** — identity per conversation over ONE long-lived App: `conversation(auth= / elicitation_handler= / memory= / tools=)`, the `(server, identity)` client pool, `elicits=True` routing, and the one-App-per-tenant migration.
+8. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, AsyncIterator tools, sync API).
 
 ### Agent — the canonical, fully-typed surface
 
