@@ -362,3 +362,108 @@ class TestObservedHandlerEvents:
             observed("Confirm?", None, None, None), timeout=1.0
         )
         assert result == {"ok": True}
+
+
+class TestConversationToolScoping:
+    def _app_with_tools(self) -> tuple[App, Any]:
+        from fastmcp import FastMCP
+
+        server: FastMCP[Any] = FastMCP("svc")
+
+        @server.tool
+        async def read_thing() -> str:
+            """Read."""
+            return "read"
+
+        @server.tool
+        async def write_thing() -> str:
+            """Write."""
+            return "write"
+
+        app = App(
+            t0=_fake_t0(), servers=[MCPServer(server=server, namespace="svc")]
+        )
+
+        @app.agent("chat")
+        async def chat(q: str) -> str:
+            """A plain agent."""
+
+        return app, chat
+
+    async def test_tools_narrow_visibility_and_block_forged_calls(self) -> None:
+        from t0_agents.core.exceptions import T0AgentsError
+
+        app, chat = self._app_with_tools()
+        async with app.lifespan():
+            conv = chat.conversation(tools=["svc_read_*"])
+            await conv._prepare_send()
+            provider = conv._conversation_tool_provider()
+            assert provider is not None
+            names = {tool.name for tool in await provider.list_tools()}
+            assert names == {"svc_read_thing"}
+            with pytest.raises(T0AgentsError, match="not permitted"):
+                await provider.call_tool("svc_write_thing", {})
+
+    async def test_conversation_filter_intersects_the_agent_filter(self) -> None:
+        from fastmcp import FastMCP
+
+        server: FastMCP[Any] = FastMCP("svc")
+
+        @server.tool
+        async def alpha() -> str:
+            """A."""
+            return "a"
+
+        @server.tool
+        async def beta() -> str:
+            """B."""
+            return "b"
+
+        @server.tool
+        async def gamma() -> str:
+            """C."""
+            return "c"
+
+        app = App(
+            t0=_fake_t0(), servers=[MCPServer(server=server, namespace="svc")]
+        )
+
+        @app.agent("chat", tools=["svc_alpha", "svc_beta"])
+        async def chat(q: str) -> str:
+            """A filtered agent."""
+
+        async with app.lifespan():
+            conv = chat.conversation(tools=["svc_beta", "svc_gamma"])
+            await conv._prepare_send()
+            provider = conv._conversation_tool_provider()
+            assert provider is not None
+            names = {tool.name for tool in await provider.list_tools()}
+            assert names == {"svc_beta"}
+
+    async def test_empty_tools_is_a_toolless_conversation(self) -> None:
+        app, chat = self._app_with_tools()
+        async with app.lifespan():
+            conv = chat.conversation(tools=[])
+            await conv._prepare_send()
+            provider = conv._conversation_tool_provider()
+            assert provider is not None
+            assert await provider.list_tools() == []
+
+    async def test_dead_pattern_warns_at_resolution(self) -> None:
+        app, chat = self._app_with_tools()
+        async with app.lifespan():
+            conv = chat.conversation(tools=["nope_*"])
+            with pytest.warns(UserWarning, match="matched no available tool"):
+                await conv._prepare_send()
+
+    async def test_tools_without_mcp_surface_fails_loud(self) -> None:
+        app = App(t0=_fake_t0())
+
+        @app.agent("chat")
+        async def chat(q: str) -> str:
+            """A plain agent."""
+
+        async with app.lifespan():
+            conv = chat.conversation(tools=["anything"])
+            with pytest.raises(ConfigurationError, match="nothing to filter"):
+                await conv._prepare_send()

@@ -126,6 +126,7 @@ class Conversation(Generic[R]):
         auth: dict[str, ServerCredentials] | None = None,
         elicitation: ElicitationForwarder | ElicitationHandler | None = None,
         memory: MemoryProvider | None = None,
+        tools: list[Any] | None = None,
     ) -> None:
         self._app = app
         self._spec = spec
@@ -148,6 +149,11 @@ class Conversation(Generic[R]):
             ElicitationForwarder | ElicitationHandler | None
         ) = elicitation
         self._memory = memory
+        # Per-conversation tool visibility (``@app.agent(tools=)``
+        # grammar); resolved against the live tool list on the first
+        # send, then intersected with the agent-level filter.
+        self._tools = tools
+        self._resolved_tools: set[str] | None = None
         # Boundary-pair display transcript; also the prior_messages seed for
         # non-"messages" agents.
         self._transcript: list[dict[str, str]] = []
@@ -207,7 +213,7 @@ class Conversation(Generic[R]):
                 tags=self._tags,
                 prior_messages=prior,
                 on_result=lambda result: self._record(message, result),
-                extra_prepare=self._maybe_hydrate,
+                extra_prepare=self._prepare_send,
                 tool_provider_factory=self._conversation_tool_provider,
                 memory=self._memory,
             ),
@@ -232,18 +238,50 @@ class Conversation(Generic[R]):
     # Internals — identity legs
     # ------------------------------------------------------------------
 
+    async def _prepare_send(self) -> None:
+        """Per-send prepare hook: hydration plus tool-filter resolution.
+
+        Runs inside glow's auto-build prepare (after the App is booted),
+        so the runtime exists when the ``tools=`` grammar is resolved
+        against the live tool list.  Both halves are once-latched.
+        """
+        await self._maybe_hydrate()
+        await self._resolve_conversation_tools()
+
+    async def _resolve_conversation_tools(self) -> None:
+        if self._tools is None or self._resolved_tools is not None:
+            return
+        runtime = self._app._owned_client
+        if runtime is None:
+            raise ConfigurationError(
+                f"conversation(tools=...) on agent {self._spec.name!r}: "
+                f"the App mounts no MCP servers or @app.tool functions, "
+                f"so there is nothing to filter."
+            )
+        from t0_agents.glow.app import _resolve_tool_filter
+
+        live_names = {tool.name for tool in await runtime.list_tools()}
+        self._resolved_tools = _resolve_tool_filter(
+            self._spec.name, self._tools, live_names
+        )
+
     def _conversation_tool_provider(self) -> ToolProvider | None:
         """The per-send provider override, or ``None`` on the degenerate path.
 
         A conversation carrying no identity (no ``auth=``, no
-        conversation-level elicitation handler) changes nothing: the run
-        uses the agent's own provider exactly as before.  With identity,
-        every send gets a runtime view binding this conversation's
-        overlays and (current) elicitation handler; the agent-level
-        ``tools=`` filter is re-applied on top so the override never
-        widens the agent's tool surface.
+        conversation-level elicitation handler, no ``tools=``) changes
+        nothing: the run uses the agent's own provider exactly as before.
+        With identity, every send gets a runtime view binding this
+        conversation's overlays and (current) elicitation handler; the
+        agent-level ``tools=`` filter — intersected with the
+        conversation's own, when set — is re-applied on top so the
+        override never widens the agent's tool surface.
         """
-        if not self._auth and self.elicitation_handler is None:
+        if (
+            not self._auth
+            and self.elicitation_handler is None
+            and self._tools is None
+        ):
             return None
         runtime = self._app._owned_client
         if runtime is None:
@@ -259,10 +297,19 @@ class Conversation(Generic[R]):
             overlays=self._auth,
             elicitation_factory=self._current_elicitation_handler,
         )
-        if self._spec.resolved_tools is not None:
-            provider = FilteredToolProvider(
-                provider, self._spec.resolved_tools
+        allow: set[str] | None = (
+            set(self._spec.resolved_tools)
+            if self._spec.resolved_tools is not None
+            else None
+        )
+        if self._resolved_tools is not None:
+            allow = (
+                self._resolved_tools
+                if allow is None
+                else allow & self._resolved_tools
             )
+        if allow is not None:
+            provider = FilteredToolProvider(provider, allow)
         return provider
 
     def _current_elicitation_handler(self) -> ElicitationHandler | None:

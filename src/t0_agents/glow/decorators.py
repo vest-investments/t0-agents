@@ -180,6 +180,7 @@ class _AgentWrapper(Generic[P, R]):
         | ElicitationHandler
         | None = None,
         memory: MemoryProvider | None = None,
+        tools: list[Any] | None = None,
     ) -> Conversation[R]:
         """Open a multi-turn conversation with this agent.
 
@@ -208,8 +209,14 @@ class _AgentWrapper(Generic[P, R]):
         rebindable attribute on the returned conversation.  ``memory=``
         swaps the memory provider for every send of this conversation
         (per-tenant ``tag_filter`` scoping on a shared agent declaration);
-        the agent itself must already be memory-enabled.  Omit all three
-        and the conversation behaves exactly as before.
+        the agent itself must already be memory-enabled.  ``tools=``
+        narrows THIS conversation's tool visibility with the same grammar
+        as ``@app.agent(tools=)`` (``@app.tool`` callables, ``MCPServer``
+        classes/instances, glob strings), intersected with the agent's
+        own filter — per-conversation arming of sensitive tools instead
+        of per-process configuration; ``tools=[]`` is an explicitly
+        toolless conversation.  Omit all four and the conversation
+        behaves exactly as before.
         """
         if hydrate and id is None:
             raise ConfigurationError(
@@ -242,6 +249,7 @@ class _AgentWrapper(Generic[P, R]):
                 auth=_normalize_credential_overlays(auth),
                 elicitation=elicitation_handler,
                 memory=memory,
+                tools=list(tools) if tools is not None else None,
             ),
         )
 
