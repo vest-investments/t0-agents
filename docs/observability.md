@@ -11,6 +11,81 @@ Every call to `run_agent` captures tracking data in the returned `AgentResult`:
 | `turns` | `int` | Number of inference turns consumed. |
 | `response_source` | `"text" \| "thought"` | Whether the final response came from `Text` or `Thought` blocks. |
 
+## Glow: tool-call observability via `run.events()`
+
+Glow agents stream typed events, and `run.events(<selector>)` is the per-tool
+observability surface. It is streaming-only by construction: `await run` /
+`run.result()` drives the non-streaming loop, which has no per-tool event
+channel. Import selectors from `t0_agents.glow`.
+
+### Per-tool-call signals on `ToolResultEvent`
+
+Each executed tool call yields a `ToolResultEvent`. The signals are computed
+once in the shared executor, so both agent loops produce them identically:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `is_error` | `bool` | Typed error flag — from the dispatch error branch or `CallToolResult.is_error`, not a sniff of `result` for an `"ERROR:"` prefix. |
+| `duration_ms` | `float \| None` | Wall-clock of the `call_tool` round-trip. `None` when the call never dispatched (hallucinated name / invalid JSON arguments). |
+| `server` | `str \| None` | Namespace of the owning mounted server. `None` for an unprefixed (`prefix=False`) or single local mount — the same attribution rule `statuses()` uses. |
+| `structured` | `dict \| None` | The tool's raw `structured_content`, when it returned one. |
+
+```python
+from t0_agents.glow import ToolResult
+
+async for tr in agent("...").events(ToolResult):
+    print(tr.name, tr.server, tr.duration_ms, tr.is_error)
+
+# Narrow with .where(...), or project with .map(...):
+async for tr in agent("...").events(ToolResult.where(lambda r: r.is_error)):
+    log.warning("tool %s failed: %s", tr.name, tr.result)
+```
+
+### A minimal per-call observer
+
+No middleware framework needed — the events already carry name, server,
+duration, and the typed error flag. A short consumer logs every call:
+
+```python
+import logging
+
+from t0_agents.glow import ToolResult
+
+log = logging.getLogger("tool_calls")
+
+async def observe(run) -> None:
+    async for tr in run.events(ToolResult):
+        log.info(
+            "tool=%s server=%s duration_ms=%s error=%s",
+            tr.name, tr.server, tr.duration_ms, tr.is_error,
+        )
+```
+
+### Elicitation events
+
+`ElicitationRequestedEvent` / `ElicitationResolvedEvent` are in the
+`AgentEvent` union (selectors `ElicitationRequested` / `ElicitationResolved`),
+carry a shared correlation `id`, and project onto the public wire's
+`elicitation_request` / `elicitation_resolved` frames. They coexist with the
+out-of-band elicitation forwarder: a consumer wiring both must render the
+prompt from **one** path. Automatic in-stream *emission* of these events lands
+with per-conversation elicitation clients (a later release); until then the
+events are defined and projectable, and the out-of-band forwarder is the path
+that fires.
+
+### Public tool inventory
+
+`await app.tools()` returns the merged, namespace-prefixed inventory — the
+public replacement for reaching into `app._owned_client`.
+`app.tools(refresh=True)` drops the per-server TTL caches and re-lists.
+
+### Status hints and the `server=None` caveat
+
+`run.statuses()` interleaves opaque `Status(text, server, tool)` hints,
+decomposing each tool name against the App's mounted namespaces. A tool from a
+`prefix=False` mount has no namespace prefix to decompose, so its `server` is
+`None` — the same caveat as `ToolResultEvent.server`.
+
 ## Structured logging
 
 The agent loop logs to the `t0_agents.mcp.loop` logger using Python's standard `logging` module.
