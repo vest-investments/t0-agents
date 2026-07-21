@@ -187,3 +187,144 @@ class _FakeParams:
             "type": "object",
             "properties": {"value": {"type": "integer"}},
         }
+
+
+# ---------------------------------------------------------------------------
+# Observer seam
+# ---------------------------------------------------------------------------
+
+
+class _RecordingObserver:
+    def __init__(self) -> None:
+        self.requests: list[RequestEnvelope] = []
+        self.resolutions: list[tuple[str, str]] = []
+
+    async def requested(self, envelope: RequestEnvelope) -> None:
+        self.requests.append(envelope)
+
+    async def resolved(self, elicitation_id: str, action: str) -> None:
+        self.resolutions.append((elicitation_id, action))
+
+
+async def test_observer_sees_the_real_elicitation_id_on_accept() -> None:
+    """requested/resolved fire with the SAME id the remote resolver used —
+    the in-stream event/out-of-band unification contract."""
+    received: list[RequestEnvelope] = []
+
+    async def on_request(env: RequestEnvelope) -> None:
+        received.append(env)
+
+    observer = _RecordingObserver()
+    forwarder = ElicitationForwarder(on_request=on_request, observer=observer)
+
+    async def resolve_soon() -> None:
+        while not received:
+            await asyncio.sleep(0)
+        await forwarder.resolve(
+            received[0]["elicitation_id"], {"action": "accept", "content": {}}
+        )
+
+    resolver = asyncio.create_task(resolve_soon())
+    try:
+        result = await forwarder.handler("ok?", None, None, None)
+    finally:
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
+
+    assert result.action == "accept"
+    assert [env["elicitation_id"] for env in observer.requests] == [
+        received[0]["elicitation_id"]
+    ]
+    assert observer.resolutions == [
+        (received[0]["elicitation_id"], "accept")
+    ]
+
+
+async def test_observer_sees_decline_on_timeout() -> None:
+    async def on_request(env: RequestEnvelope) -> None:
+        return None
+
+    observer = _RecordingObserver()
+    forwarder = ElicitationForwarder(
+        on_request=on_request, default_timeout=0.01, observer=observer
+    )
+    result = await forwarder.handler("ok?", None, None, None)
+    assert result.action == "decline"
+    assert len(observer.requests) == 1
+    (eid, action), = observer.resolutions
+    assert eid == observer.requests[0]["elicitation_id"]
+    assert action == "decline"
+
+
+async def test_observer_sees_decline_when_on_request_fails() -> None:
+    async def on_request(env: RequestEnvelope) -> None:
+        raise RuntimeError("bus down")
+
+    observer = _RecordingObserver()
+    forwarder = ElicitationForwarder(on_request=on_request, observer=observer)
+    result = await forwarder.handler("ok?", None, None, None)
+    assert result.action == "decline"
+    assert len(observer.requests) == 1
+    assert observer.resolutions == [
+        (observer.requests[0]["elicitation_id"], "decline")
+    ]
+
+
+async def test_observer_not_fired_on_the_no_resolver_path() -> None:
+    """The auto-decline (no on_request) path mints no envelope/id, so the
+    observer has nothing to correlate — it stays silent by design."""
+    observer = _RecordingObserver()
+    forwarder = ElicitationForwarder(observer=observer)
+    result = await forwarder.handler("ok?", None, None, None)
+    assert result.action == "decline"
+    assert observer.requests == []
+    assert observer.resolutions == []
+
+
+async def test_raising_observer_never_breaks_the_elicitation() -> None:
+    received: list[RequestEnvelope] = []
+
+    async def on_request(env: RequestEnvelope) -> None:
+        received.append(env)
+
+    class _BrokenObserver:
+        async def requested(self, envelope: RequestEnvelope) -> None:
+            raise RuntimeError("boom")
+
+        async def resolved(self, elicitation_id: str, action: str) -> None:
+            raise RuntimeError("boom")
+
+    forwarder = ElicitationForwarder(
+        on_request=on_request, observer=_BrokenObserver()
+    )
+
+    async def resolve_soon() -> None:
+        while not received:
+            await asyncio.sleep(0)
+        await forwarder.resolve(
+            received[0]["elicitation_id"],
+            {"action": "accept", "content": {"v": 1}},
+        )
+
+    resolver = asyncio.create_task(resolve_soon())
+    try:
+        result = await forwarder.handler("ok?", None, None, None)
+    finally:
+        resolver.cancel()
+        with suppress(asyncio.CancelledError):
+            await resolver
+
+    assert result.action == "accept"
+    assert result.content == {"v": 1}
+
+
+async def test_observer_rebindable_after_construction() -> None:
+    async def on_request(env: RequestEnvelope) -> None:
+        return None
+
+    forwarder = ElicitationForwarder(on_request=on_request, default_timeout=0.01)
+    late = _RecordingObserver()
+    forwarder.observer = late
+    await forwarder.handler("ok?", None, None, None)
+    assert len(late.requests) == 1
