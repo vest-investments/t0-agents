@@ -152,6 +152,44 @@ def test_non_positive_timeout_raises_configuration_error() -> None:
 
 
 # ---------------------------------------------------------------------------
+# elicits= capability declaration
+# ---------------------------------------------------------------------------
+
+
+def test_subclass_with_elicits_records_spec() -> None:
+    class HitlMCP(MCPServer, url="https://example.com/mcp", elicits=True): ...
+
+    assert HitlMCP._mcp_spec.elicits is True
+
+
+def test_elicits_defaults_to_false() -> None:
+    class PlainMCP(MCPServer, url="https://example.com/mcp"): ...
+
+    assert PlainMCP._mcp_spec.elicits is False
+    assert MCPServer(url="https://example.com/mcp")._to_spec().elicits is False
+
+
+def test_instance_elicits_reaches_spec() -> None:
+    meta = MCPServer(url="https://example.com/mcp", elicits=True)
+    assert meta._to_spec().elicits is True
+
+
+def test_elicits_valid_on_in_memory_server_mount() -> None:
+    """In-memory servers elicit through the same client machinery as
+    remotes, so the declaration is legal on a ``server=`` mount."""
+    server: FastMCP[Any] = FastMCP("hitl-server")
+    assert MCPServer(server=server, elicits=True)._to_spec().elicits is True
+
+
+def test_elicits_participates_in_spec_identity() -> None:
+    """Two otherwise-identical specs differing only in ``elicits`` are
+    distinct — the runtime's value-identical dedupe must not fold them."""
+    plain = MCPServer(url="https://example.com/mcp")._to_spec()
+    hitl = MCPServer(url="https://example.com/mcp", elicits=True)._to_spec()
+    assert plain != hitl
+
+
+# ---------------------------------------------------------------------------
 # _extract_mcp_specs / _is_mcp_parameter
 # ---------------------------------------------------------------------------
 

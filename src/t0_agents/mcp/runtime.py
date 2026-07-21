@@ -123,6 +123,9 @@ class MCPServerSpecLike(Protocol):
     @property
     def timeout(self) -> float | None: ...
 
+    @property
+    def elicits(self) -> bool: ...
+
 
 def _read_timeout_client_factory(read_timeout: float) -> McpHttpClientFactory:
     """Build an httpx-client factory pinning the read timeout to ``read_timeout``.

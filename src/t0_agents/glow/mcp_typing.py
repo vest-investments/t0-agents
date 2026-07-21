@@ -90,6 +90,18 @@ class MCPServerSpec:
     read).  Like ``headers``/``auth`` it is meaningless on an in-memory
     ``server`` mount (validation error), and setting it makes the mount
     ride an explicit ``transport`` like the authed path.
+
+    ``elicits`` declares that this server's tools may call
+    ``ctx.elicit(...)``.  The MCP protocol has no server-side "I elicit"
+    capability, so the consumer declares it here; the declaration is what
+    lets the runtime give the server **per-conversation** clients — the
+    only scoping that routes a human-in-the-loop prompt to the right
+    conversation, because the SDK discards the elicit↔call correlation
+    id.  Valid for both ``url`` and in-memory ``server`` mounts (elicits
+    ride the same client machinery either way).  Leave ``False`` (the
+    default) for servers that never elicit: their calls share warm
+    clients across conversations, and a surprise elicit fails loud
+    instead of misrouting.
     """
 
     url: str | None = None
@@ -100,6 +112,7 @@ class MCPServerSpec:
     auth: httpx.Auth | None = None
     prefix: bool = True
     timeout: float | None = None
+    elicits: bool = False
 
 
 class MCPServer:
@@ -140,6 +153,7 @@ class MCPServer:
         auth: httpx.Auth | None = None,
         prefix: bool = True,
         timeout: float | None = None,
+        elicits: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init_subclass__(**kwargs)
@@ -153,6 +167,7 @@ class MCPServer:
             auth=auth,
             prefix=prefix,
             timeout=timeout,
+            elicits=elicits,
         )
 
     def __init__(
@@ -166,6 +181,7 @@ class MCPServer:
         auth: httpx.Auth | None = None,
         prefix: bool = True,
         timeout: float | None = None,
+        elicits: bool = False,
     ) -> None:
         _validate_spec("MCPServer", url, server, headers, auth, timeout)
         self.url = url
@@ -176,6 +192,7 @@ class MCPServer:
         self.auth = auth
         self.prefix = prefix
         self.timeout = timeout
+        self.elicits = elicits
 
     def _to_spec(self) -> MCPServerSpec:
         """Project the Annotated-instance fields to an :class:`MCPServerSpec`.
@@ -194,6 +211,7 @@ class MCPServer:
             auth=self.auth,
             prefix=self.prefix,
             timeout=self.timeout,
+            elicits=self.elicits,
         )
 
 
