@@ -419,3 +419,41 @@ async def test_explicit_t0_never_entered_nor_closed(
     await app.shutdown()
     assert fake_builders["http"] == [] and fake_builders["embedded"] == []
     assert app._t0 is sentinel
+
+
+# --- App.tools() public inventory (M7) -------------------------------------
+
+
+async def test_tools_boots_on_first_call_and_lists_mounted_inventory() -> None:
+    app = App(t0=cast(AsyncTensorZeroGateway, object()))
+
+    @app.tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    try:
+        names = sorted(t.name for t in await app.tools())
+    finally:
+        await app.shutdown()
+    assert names == ["ping"]
+
+
+async def test_tools_refresh_relists_the_inventory() -> None:
+    app = App(t0=cast(AsyncTensorZeroGateway, object()))
+
+    @app.tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    async with app.lifespan():
+        cached = [t.name for t in await app.tools()]
+        refreshed = [t.name for t in await app.tools(refresh=True)]
+    assert cached == refreshed == ["ping"]
+
+
+async def test_tools_is_empty_without_an_mcp_surface() -> None:
+    app = App(t0=cast(AsyncTensorZeroGateway, object()))
+    async with app.lifespan():
+        assert await app.tools() == []

@@ -36,6 +36,8 @@ from typing import Any, Generic, TypeVar
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -49,6 +51,8 @@ from t0_agents.stream.events import (
 
 __all__ = [
     "Done",
+    "ElicitationRequested",
+    "ElicitationResolved",
     "Error",
     "RunError",
     "Selector",
@@ -151,3 +155,9 @@ TurnEnd: Selector[TurnEndEvent, TurnEndEvent] = Selector(TurnEndEvent)
 Done: Selector[DoneEvent, DoneEvent] = Selector(DoneEvent)
 Error: Selector[ErrorEvent, ErrorEvent] = Selector(ErrorEvent)
 RunError: Selector[RunErrorEvent, RunErrorEvent] = Selector(RunErrorEvent)
+ElicitationRequested: Selector[ElicitationRequestedEvent, ElicitationRequestedEvent] = (
+    Selector(ElicitationRequestedEvent)
+)
+ElicitationResolved: Selector[ElicitationResolvedEvent, ElicitationResolvedEvent] = (
+    Selector(ElicitationResolvedEvent)
+)

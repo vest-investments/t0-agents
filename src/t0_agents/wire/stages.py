@@ -30,6 +30,8 @@ from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -197,6 +199,15 @@ async def project(events: AsyncIterator[AgentEvent]) -> AsyncIterator[WireFrame]
                 yield ErrorFrame(message=event.message, detail=event.detail)
             case RunErrorEvent():
                 yield _error_frame(event.error_type, event.message, event.detail)
+            case ElicitationRequestedEvent():
+                yield ElicitationRequestFrame(
+                    id=event.id,
+                    message=event.message,
+                    response_type=event.response_type,
+                    schema_json=event.schema_json,
+                )
+            case ElicitationResolvedEvent():
+                yield ElicitationResolvedFrame(id=event.id, action=event.action)
             case _:
                 assert_never(event)
 

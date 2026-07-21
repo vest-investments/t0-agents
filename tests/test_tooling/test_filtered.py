@@ -58,3 +58,19 @@ async def test_allow_accepts_any_iterable() -> None:
     first = {tool.name for tool in await filtered.list_tools()}
     second = {tool.name for tool in await filtered.list_tools()}
     assert first == second == {"get_weather"}
+
+
+def test_server_for_delegates_to_attributing_inner() -> None:
+    class _Attributing(MockToolProvider):
+        def server_for(self, name: str) -> str | None:
+            return name.split("_", 1)[0] if "_" in name else None
+
+    filtered = FilteredToolProvider(
+        _Attributing({"svc_x": lambda _a: "ok"}), {"svc_x"}
+    )
+    assert filtered.server_for("svc_x") == "svc"
+
+
+def test_server_for_none_when_inner_cannot_attribute() -> None:
+    filtered = FilteredToolProvider(_provider(), {"get_weather"})
+    assert filtered.server_for("get_weather") is None

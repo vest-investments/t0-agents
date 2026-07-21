@@ -308,13 +308,14 @@ class StreamingAgentLoop:
             for tc_event, outcome in zip(
                 tool_calls_collected, outcomes, strict=True
             ):
-                result_str = str(outcome.result.result)
                 yield ToolResultEvent(
                     id=tc_event.id,
                     name=tc_event.name,
-                    result=result_str,
-                    is_error=result_str.startswith("ERROR:"),
+                    result=str(outcome.result.result),
+                    is_error=outcome.is_error,
                     structured=outcome.structured,
+                    duration_ms=outcome.duration_ms,
+                    server=outcome.server,
                 )
             state.messages.append(Message(role="user", content=tool_results))
 

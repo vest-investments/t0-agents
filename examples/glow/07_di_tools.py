@@ -54,12 +54,11 @@ async def main() -> None:
         return db.orders.get(order_id, f"<no order: {order_id}>")
 
     async with app:
-        # The MCP Client lets us probe the tool surface directly.
-        # In real deployments the LLM would call this tool inside
-        # the agent loop; here we exercise the round-trip in
-        # isolation to highlight the Depends injection / override
-        # mechanic.
-        tools = await app._owned_client.list_tools()
+        # `app.tools()` is the public inventory; `app._owned_client.call_tool`
+        # (glow-internal) exercises the round-trip in isolation below to
+        # highlight the Depends injection / override mechanic — in real
+        # deployments the LLM calls the tool inside the agent loop.
+        tools = await app.tools()
         advertised_params = sorted(
             tools[0].inputSchema.get("properties", {}).keys()
         )

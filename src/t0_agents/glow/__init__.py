@@ -22,6 +22,8 @@ from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import MCPServer
 from t0_agents.glow.selectors import (
     Done,
+    ElicitationRequested,
+    ElicitationResolved,
     Error,
     RunError,
     Selector,
@@ -42,6 +44,8 @@ __all__ = [
     "ConversationSummary",
     "Depends",
     "Done",
+    "ElicitationRequested",
+    "ElicitationResolved",
     "Error",
     "FluentRun",
     "MCPServer",

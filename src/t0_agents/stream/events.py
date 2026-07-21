@@ -67,11 +67,17 @@ class ToolCallEvent:
 class ToolResultEvent:
     """Result of executing the :class:`ToolCallEvent` with matching ``id``.
 
-    ``result`` is the model-visible serialized string; ``structured`` is the
-    tool's raw ``CallToolResult.structured_content`` (a plain dict) when it
-    returned one, else ``None``. It is an additive channel: consumers get the
-    structured payload without re-parsing ``result``, and the serialized string
-    stays the source of truth for the model.
+    ``result`` is the model-visible serialized string and stays the source of
+    truth for the model.  The rest is additive observability:
+
+    * ``is_error`` — typed error flag from the executor (the dispatch error
+      branch or ``CallToolResult.is_error``), not a sniff of ``result``.
+    * ``structured`` — the tool's raw ``CallToolResult.structured_content``
+      (a plain dict) when it returned one, else ``None``.
+    * ``duration_ms`` — the ``call_tool`` round-trip in milliseconds; ``None``
+      when the call never dispatched (hallucinated name / invalid JSON args).
+    * ``server`` — namespace of the owning mounted server, or ``None`` for an
+      unprefixed / single-server mount (the ``statuses()`` attribution rule).
     """
 
     id: str
@@ -79,6 +85,8 @@ class ToolResultEvent:
     result: str
     is_error: bool = False
     structured: dict[str, Any] | None = None
+    duration_ms: float | None = None
+    server: str | None = None
     type: Literal["tool_result"] = "tool_result"
 
 
@@ -174,6 +182,39 @@ class RunErrorEvent:
     type: Literal["run_error"] = "run_error"
 
 
+@dataclass(slots=True)
+class ElicitationRequestedEvent:
+    """A human-in-the-loop prompt an MCP tool raised via ``ctx.elicit(...)``.
+
+    Emitted in-stream when glow owns the elicitation handler
+    (``App(elicitation_handler=...)``), additive to — and coexisting with —
+    the out-of-band forwarder path.  ``id`` correlates the request with its
+    :class:`ElicitationResolvedEvent`.  ``response_type`` mirrors MCP's wire
+    form: ``None`` for binary approval, else the requested scalar type name
+    (``"bool"``, ``"str"``, …).  ``schema_json`` is the raw requested-schema
+    JSON so clients render by schema introspection, never by class name.
+    """
+
+    id: str
+    message: str
+    response_type: str | None = None
+    schema_json: str = ""
+    type: Literal["elicitation_requested"] = "elicitation_requested"
+
+
+@dataclass(slots=True)
+class ElicitationResolvedEvent:
+    """Resolution of the :class:`ElicitationRequestedEvent` with matching ``id``.
+
+    ``action`` is the settled outcome — ``"accept"``, ``"decline"`` or
+    ``"cancel"`` — mirroring the MCP elicitation result the handler returned.
+    """
+
+    id: str
+    action: Literal["accept", "decline", "cancel"]
+    type: Literal["elicitation_resolved"] = "elicitation_resolved"
+
+
 AgentEvent = (
     TextDeltaEvent
     | TextEndEvent
@@ -187,4 +228,6 @@ AgentEvent = (
     | DoneEvent
     | ErrorEvent
     | RunErrorEvent
+    | ElicitationRequestedEvent
+    | ElicitationResolvedEvent
 )

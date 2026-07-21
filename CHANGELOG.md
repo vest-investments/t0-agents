@@ -42,6 +42,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `ToolCall` content block from the name and keyword arguments in place of
   the five-field literal.  Documented in the new "Glow MCP servers" chapter
   of `docs/testing.md`.
+- **Per-tool-call observability on `ToolResultEvent`.**  Streaming tool-result
+  events gain additive `duration_ms: float | None` (the `call_tool`
+  round-trip; `None` when the call never dispatched) and `server: str | None`
+  (the owning mounted server's namespace; `None` for an unprefixed / single
+  local mount) — both computed once in the shared executor so the two agent
+  loops agree, observable via `run.events(ToolResult)`.  Additive through the
+  codec, no version bump.
+- **In-stream elicitation events.**  `ElicitationRequestedEvent` /
+  `ElicitationResolvedEvent` join the `AgentEvent` union (selectors
+  `ElicitationRequested` / `ElicitationResolved`), carry a shared correlation
+  `id`, and project onto the public wire's existing `elicitation_request` /
+  `elicitation_resolved` frames — making a human-in-the-loop prompt observable
+  in-stream, coexisting with the out-of-band forwarder.  Automatic emission of
+  these events lands with per-conversation elicitation clients; the events,
+  codec, selectors, and wire projection are in place now.
+- **`App.tools()` — the public tool inventory.**  Returns the merged,
+  namespace-prefixed inventory of mounted tools (booting the MCP infrastructure
+  on first call; `[]` when the App mounts none), replacing the private
+  `app._owned_client.list_tools()` idiom.  `refresh=True` drops the per-server
+  TTL caches and re-lists.
 
 ### Fixed
 
@@ -80,6 +100,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the omitted content (with a ``WARNING`` log); mixed text+non-text keeps the
   text and appends a note.  **Behavior change** for tools returning non-text
   content; all-text, ``.data``, and error results stay byte-identical.
+- **Streaming `ToolResultEvent.is_error` is typed, not string-sniffed.**  The
+  flag came from `result.startswith("ERROR:")`, which mis-flagged a
+  *successful* result that happened to render as `"ERROR: …"`.  It now comes
+  from the executor's typed outcome (the dispatch error branch or
+  `CallToolResult.is_error`).  The model-visible `result` string is unchanged.
 
 ### Added
 

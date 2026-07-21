@@ -36,6 +36,7 @@ from mcp.types import Tool as MCPTool
 
 from t0_agents.core.exceptions import SubAgentError, T0AgentsFatalError
 from t0_agents.core.types import (
+    SupportsServerAttribution,
     ToolProgressHandler,
     ToolProvider,
     encode_usage_meta,
@@ -196,6 +197,19 @@ class SubAgentToolProvider:
             data=None,
             is_error=False,
         )
+
+    def server_for(self, name: str) -> str | None:
+        """Attribute a server only for fall-through inner tools.
+
+        Sub-agent tools are synthesised here and have no MCP server, so a
+        sub-agent name returns ``None``; names owned by ``inner`` delegate
+        to its own attribution.
+        """
+        if name not in self._by_tool_name and isinstance(
+            self._inner, SupportsServerAttribution
+        ):
+            return self._inner.server_for(name)
+        return None
 
 
 def _error_result(message: str) -> CallToolResult:

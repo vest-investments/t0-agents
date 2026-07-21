@@ -6,7 +6,8 @@ Public surface:
   ``TextEndEvent``, ``ToolCallDeltaEvent``, ``ToolCallEvent``,
   ``ToolResultEvent``, ``ToolProgressEvent``, ``ThoughtDeltaEvent``,
   ``ThoughtEvent``, ``TurnEndEvent``, ``DoneEvent``, ``ErrorEvent``,
-  ``RunErrorEvent``).
+  ``RunErrorEvent``, ``ElicitationRequestedEvent``,
+  ``ElicitationResolvedEvent``).
 * :class:`StreamingAgentLoop` — streaming analogue of
   :func:`t0_agents.mcp.loop.run_agent`.
 * :class:`TurnStreamAssembler` — folds T0 chunks into ``AgentEvent`` s.
@@ -23,6 +24,8 @@ from t0_agents.stream.codec import CODEC_VERSION, event_from_dict, event_to_dict
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -42,6 +45,8 @@ __all__ = [
     "CODEC_VERSION",
     "AgentEvent",
     "DoneEvent",
+    "ElicitationRequestedEvent",
+    "ElicitationResolvedEvent",
     "ErrorEvent",
     "RunErrorEvent",
     "Status",

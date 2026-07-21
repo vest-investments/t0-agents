@@ -35,6 +35,8 @@ from t0_agents.core.types import AgentResult, GuardrailLogEntry
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -66,6 +68,8 @@ _EVENT_TYPES: dict[str, Callable[..., AgentEvent]] = {
     "done": DoneEvent,
     "error": ErrorEvent,
     "run_error": RunErrorEvent,
+    "elicitation_requested": ElicitationRequestedEvent,
+    "elicitation_resolved": ElicitationResolvedEvent,
 }
 
 

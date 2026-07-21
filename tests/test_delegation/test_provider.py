@@ -134,6 +134,25 @@ class TestConstruction:
         assert provider._inner is inner
 
 
+class TestServerAttribution:
+    def test_sub_agent_tool_has_no_server(self) -> None:
+        provider = SubAgentToolProvider([_build_sub_agent("researcher")])
+        assert provider.server_for("researcher_ask") is None
+
+    def test_inner_names_delegate_to_inner_attribution(self) -> None:
+        class _Attributing(_StubInnerProvider):
+            def server_for(self, name: str) -> str | None:
+                return "svc"
+
+        provider = SubAgentToolProvider(
+            [_build_sub_agent("researcher")],
+            inner=cast(ToolProvider, _Attributing()),
+        )
+        assert provider.server_for("svc_tool") == "svc"
+        # A sub-agent name is answered here, never handed to inner.
+        assert provider.server_for("researcher_ask") is None
+
+
 # ---------------------------------------------------------------------------
 # list_tools — synthesis
 # ---------------------------------------------------------------------------

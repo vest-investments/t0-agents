@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from fastmcp.client.elicitation import ElicitationHandler
+    from mcp.types import Tool
     from tensorzero import ToolChoice
 
     from t0_agents.core.conversation import ConversationIndex, ConversationSummary
@@ -882,6 +883,30 @@ class App:
             await self._start()
             for agent_spec in self._agent_registry.values():
                 self._lookup_or_build(agent_spec)
+
+    async def tools(self, *, refresh: bool = False) -> list[Tool]:
+        """Return the merged, namespace-prefixed inventory of mounted tools.
+
+        The public inventory surface — use it instead of reaching into the
+        private App-owned runtime.  Boots the App's MCP infrastructure on
+        first call (idempotent; the same ``_start`` path :meth:`build` and
+        consumption use) without constructing agents or requiring a gateway.
+        An App with no ``@app.tool`` and no :class:`MCPServer` spec has no
+        runtime and returns ``[]``.
+
+        ``refresh=False`` (default) serves the runtime's cached inventory —
+        the in-memory ``@app.tool`` server is always live, remote servers
+        cache per the runtime's TTL with ``tools/list_changed``
+        invalidation.  ``refresh=True`` drops those caches and re-lists.
+        """
+        async with self._boot_lock:
+            if not self._started:
+                await self._start()
+        if self._owned_client is None:
+            return []
+        if refresh:
+            return await self._owned_client.refresh()
+        return await self._owned_client.list_tools()
 
     async def _start(self) -> None:
         """Boot the App infrastructure — everything except agent construction.

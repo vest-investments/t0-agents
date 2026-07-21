@@ -26,6 +26,8 @@ from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow import (
     Done,
+    ElicitationRequested,
+    ElicitationResolved,
     Error,
     FluentRun,
     RunError,
@@ -41,6 +43,8 @@ from t0_agents.glow.selectors import Selector
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
+    ElicitationRequestedEvent,
+    ElicitationResolvedEvent,
     ErrorEvent,
     RunErrorEvent,
     TextDeltaEvent,
@@ -124,6 +128,44 @@ async def test_tool_call_selector_picks_tool_call_events_only() -> None:
     fr = _make_fluent_run([_TEXT_END, _TOOL_CALL, _THOUGHT_FOO])
     out = [e async for e in fr.events(ToolCall)]
     assert out == [_TOOL_CALL]
+
+
+async def test_tool_result_selector_filters_and_maps_observability() -> None:
+    ok = ToolResultEvent(
+        id="c1", name="add", result="3", duration_ms=5.0, server="math"
+    )
+    err = ToolResultEvent(id="c2", name="div", result="ERROR: boom", is_error=True)
+    errors = [
+        e
+        async for e in _make_fluent_run([ok, err]).events(
+            ToolResult.where(lambda r: r.is_error)
+        )
+    ]
+    assert errors == [err]
+    servers = [
+        s
+        async for s in _make_fluent_run([ok, err]).events(
+            ToolResult.map(lambda r: r.server)
+        )
+    ]
+    assert servers == ["math", None]
+
+
+async def test_elicitation_selectors_pick_their_events_only() -> None:
+    req = ElicitationRequestedEvent(id="e1", message="Approve?")
+    res = ElicitationResolvedEvent(id="e1", action="accept")
+    requested = [
+        e async for e in _make_fluent_run([req, _TOOL_CALL, res]).events(
+            ElicitationRequested
+        )
+    ]
+    assert requested == [req]
+    resolved = [
+        e async for e in _make_fluent_run([req, _TOOL_CALL, res]).events(
+            ElicitationResolved
+        )
+    ]
+    assert resolved == [res]
 
 
 async def test_text_selector_picks_text_delta_events_only() -> None:

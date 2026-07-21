@@ -480,6 +480,21 @@ class MCPRuntime:
             handle.invalidate()
         return await self.list_tools()
 
+    def server_for(self, name: str) -> str | None:
+        """Namespace of the server owning ``name`` for observability, or ``None``.
+
+        Longest-prefix match over the prefixed handles (the same rule as
+        :meth:`_route`'s prefix arm), returning the owning namespace.
+        Unprefixed names — a ``prefix=False`` mount or the local
+        ``@app.tool`` server — have no namespace to report and return
+        ``None``.  A pure name lookup with no inventory I/O, so it is safe
+        to call synchronously while building an event.
+        """
+        for namespace, _handle in self._prefix_routes:
+            if name.startswith(f"{namespace}_"):
+                return namespace
+        return None
+
     async def _route(self, name: str) -> tuple[_ServerHandle, str] | None:
         for namespace, handle in self._prefix_routes:
             if name.startswith(f"{namespace}_"):

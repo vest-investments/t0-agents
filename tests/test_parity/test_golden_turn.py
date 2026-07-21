@@ -156,6 +156,8 @@ GOLDEN_B = {
             "result": "3",
             "is_error": False,
             "structured": None,
+            "duration_ms": "<ms>",
+            "server": None,
             "type": "tool_result",
         },
         {
@@ -165,6 +167,8 @@ GOLDEN_B = {
             "result": "Hello, x!",
             "is_error": False,
             "structured": None,
+            "duration_ms": "<ms>",
+            "server": None,
             "type": "tool_result",
         },
         {
@@ -209,6 +213,22 @@ async def test_golden_run_agent() -> None:
     assert actual == GOLDEN_A
 
 
+def _freeze_durations(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize the wall-clock ``duration_ms`` so the golden stays deterministic.
+
+    A tool_result's ``duration_ms`` is a real ``call_tool`` timing — its
+    presence and type are frozen, its value is runtime.  Each is asserted to
+    be a non-negative float, then replaced with the ``"<ms>"`` sentinel the
+    golden carries.
+    """
+    for event in events:
+        if event.get("type") == "tool_result":
+            duration = event["duration_ms"]
+            assert isinstance(duration, float) and duration >= 0.0
+            event["duration_ms"] = "<ms>"
+    return events
+
+
 async def test_golden_streaming_loop() -> None:
     """StreamingAgentLoop reproduces the frozen event sequence + request evolution."""
     t0 = FakeT0(responses=make_streaming_responses())
@@ -220,7 +240,7 @@ async def test_golden_streaming_loop() -> None:
         )
     ]
     actual = {
-        "events": [event_to_dict(e) for e in events],
+        "events": _freeze_durations([event_to_dict(e) for e in events]),
         "calls": [call_to_dict(c) for c in t0.calls],
     }
     assert actual == GOLDEN_B
