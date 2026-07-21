@@ -6,8 +6,8 @@ the same conversation shape — validate inputs, seed messages, call
 ``t0.inference``, recover from recoverable gateway errors, append the
 assistant turn, dispatch tools, terminate on a tool-free turn — and
 historically duplicated that logic block for block.  The duplication
-produced real bugs fixed twice (the thought-strip on replay: v2.1.1 in
-the loop, v2.1.2 in the runner) and three behavioral divergences.  This
+produced real bugs fixed twice (the thought-strip on replay, fixed
+independently in each loop) and three behavioral divergences.  This
 module is the single home for every piece of turn logic that does not
 depend on how the inference response is acquired.
 
