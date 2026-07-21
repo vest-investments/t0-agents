@@ -916,3 +916,178 @@ class MCPRuntime:
             identity=len(self._pool) - conversation,
             conversation=conversation,
         )
+
+    def for_conversation(
+        self,
+        conversation_key: str,
+        *,
+        overlays: Mapping[str, ServerCredentials] | None = None,
+        elicitation_factory: Callable[[], ElicitationHandler | None]
+        | None = None,
+    ) -> _ConversationView:
+        """A :class:`~t0_agents.core.types.ToolProvider` view binding one
+        conversation's identity onto this runtime.
+
+        ``overlays`` maps server **namespaces** to per-conversation
+        credentials; a key naming no mounted namespace fails loud here —
+        credentials silently not applied would be a security bug, not an
+        inconvenience.  ``elicitation_factory`` resolves the
+        conversation's *current* elicitation handler at elicit time
+        (never a frozen closure), so a consumer can rewire the handler
+        between turns.
+
+        Calls route exactly like :meth:`call_tool`, then pick their
+        client by scope: an ``elicits=True`` server gets this
+        conversation's private client (the only scoping that keeps HITL
+        prompts on the right conversation — the SDK discards the
+        elicit↔call correlation id); an overlaid server shares the
+        identity-pool entry for those credentials, handler-less so a
+        surprise elicit fails loud instead of misrouting; everything
+        else rides the shared base handle, byte-identical to the static
+        path.  ``list_tools`` serves the shared inventory — never
+        re-listed per conversation.
+        """
+        resolved = dict(overlays or {})
+        if resolved:
+            known = {
+                handle.namespace
+                for handle in self._handles
+                if handle.namespace is not None
+            }
+            unknown = sorted(set(resolved) - known)
+            if unknown:
+                raise ConfigurationError(
+                    f"ServerCredentials for unknown server namespace(s) "
+                    f"{unknown!r} — mounted namespaces: {sorted(known)!r}. "
+                    f"Credentials that silently apply to nothing are a "
+                    f"security bug, so this fails loud."
+                )
+        return _ConversationView(
+            self,
+            conversation_key,
+            overlays=resolved,
+            elicitation_factory=elicitation_factory,
+        )
+
+
+
+class _ConversationView:
+    """One conversation's :class:`~t0_agents.core.types.ToolProvider` facade.
+
+    Built by :meth:`MCPRuntime.for_conversation`.  Holds no clients of
+    its own — every call leases from the runtime's pool (or rides the
+    shared base handle), so an abandoned view costs nothing and its
+    conversation's clients idle out via the pool TTL.  Implements
+    ``SupportsServerAttribution`` by delegation so per-call
+    observability keeps working through the view (the M7 contract).
+    """
+
+    def __init__(
+        self,
+        runtime: MCPRuntime,
+        conversation_key: str,
+        *,
+        overlays: dict[str, ServerCredentials],
+        elicitation_factory: Callable[[], ElicitationHandler | None] | None,
+    ) -> None:
+        self._runtime = runtime
+        self._conversation_key = conversation_key
+        self._overlays = overlays
+        self._elicitation_factory = elicitation_factory
+
+    async def list_tools(self) -> list[mcp.types.Tool]:
+        return await self._runtime.list_tools()
+
+    def server_for(self, name: str) -> str | None:
+        return self._runtime.server_for(name)
+
+    async def _trampoline(
+        self,
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> Any:
+        """Resolve the conversation's CURRENT handler and delegate.
+
+        Installed on this conversation's private elicit clients.  The
+        factory is consulted per elicitation — never captured — so
+        rewiring the handler between turns takes effect immediately.  No
+        resolvable handler is a loud error: silently declining (or worse,
+        falling back to some other conversation's handler) would misroute
+        a human-in-the-loop confirmation.
+        """
+        factory = self._elicitation_factory
+        handler = factory() if factory is not None else None
+        if handler is None:
+            raise RuntimeError(
+                f"A tool elicited in conversation "
+                f"{self._conversation_key!r} but the conversation has no "
+                f"elicitation handler.  Pass elicitation_handler= when "
+                f"opening the conversation (or set an App-level handler)."
+            )
+        return await handler(message, response_type, params, context)
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        timeout: float | None = None,
+        progress_handler: ToolProgressHandler | None = None,
+    ) -> Any:
+        routed = await self._runtime._route(name)
+        if routed is None:
+            raise ToolError(f"Unknown tool: {name!r}")
+        handle, bare_name = routed
+        overlay = (
+            self._overlays.get(handle.namespace)
+            if handle.namespace is not None
+            else None
+        )
+        elicits = handle.spec.elicits if handle.spec is not None else False
+        if not elicits and overlay is None:
+            return await handle.call(
+                bare_name,
+                arguments,
+                timeout=timeout,
+                progress_handler=progress_handler,
+            )
+        if elicits:
+            identity_key = f"conv:{self._conversation_key}"
+            handler: ElicitationHandler | None = cast(
+                "ElicitationHandler", self._trampoline
+            )
+            conversation_scoped = True
+        else:
+            assert overlay is not None  # the double-None case returned above
+            identity_key = overlay.identity_key()
+            handler = None
+            conversation_scoped = False
+        entry = await self._runtime._acquire_entry(
+            handle,
+            identity_key,
+            overlay=overlay,
+            elicitation_handler=handler,
+            conversation_scoped=conversation_scoped,
+        )
+        try:
+            try:
+                await entry.handle.connect()
+            except Exception:
+                # A client that cannot even connect (bad credentials, dead
+                # endpoint) must not wedge its pool slot — drop the entry
+                # so the next call re-resolves and re-mints.
+                self._runtime._discard_entry(
+                    (handle.key, identity_key), entry
+                )
+                raise
+            return await entry.handle.call(
+                bare_name,
+                arguments,
+                timeout=timeout,
+                progress_handler=progress_handler,
+            )
+        finally:
+            self._runtime._release_entry(entry)
+

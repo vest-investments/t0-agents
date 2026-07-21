@@ -964,3 +964,221 @@ class TestIdentityPool:
             MCPRuntime([], pool_idle_ttl=0.0)
         with pytest.raises(ConfigurationError, match="pool_max_size"):
             MCPRuntime([], pool_max_size=0)
+
+
+# ---------------------------------------------------------------------------
+# for_conversation views — scope routing, trampoline, fail-loud
+# ---------------------------------------------------------------------------
+
+
+def _approve_handler(name: str, log: list[str]) -> Any:
+    async def handler(
+        message: str, response_type: Any, params: Any, context: Any
+    ) -> Any:
+        log.append(name)
+        from fastmcp.client.elicitation import ElicitResult
+
+        return ElicitResult(action="accept")
+
+    return handler
+
+
+class TestConversationView:
+    async def test_static_server_rides_the_base_handle(self) -> None:
+        async with MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")]
+        ) as runtime:
+            view = runtime.for_conversation("c-1")
+            result = await view.call_tool("svc_ping", {})
+            assert result.data == "svc:ping"
+            counts = runtime.client_counts()
+            assert (counts.identity, counts.conversation) == (0, 0)
+
+    async def test_list_tools_serves_the_shared_inventory(self) -> None:
+        async with MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")]
+        ) as runtime:
+            view = runtime.for_conversation("c-1")
+            assert {tool.name for tool in await view.list_tools()} == {
+                "svc_ping"
+            }
+            assert runtime.client_counts().conversation == 0
+
+    async def test_server_for_delegates_to_the_runtime(self) -> None:
+        async with MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")]
+        ) as runtime:
+            view = runtime.for_conversation("c-1")
+            assert view.server_for("svc_ping") == "svc"
+            assert view.server_for("nope") is None
+
+    async def test_elicit_server_gets_private_per_conversation_clients(
+        self,
+    ) -> None:
+        """Two conversations on one elicits=True server: each elicit lands
+        on its own conversation's handler, never the other's."""
+        spec = _spec(_elicit_server(), namespace="svc", elicits=True)
+        async with MCPRuntime([spec]) as runtime:
+            log_a: list[str] = []
+            log_b: list[str] = []
+            view_a = runtime.for_conversation(
+                "conv-a", elicitation_factory=lambda: _approve_handler("a", log_a)
+            )
+            view_b = runtime.for_conversation(
+                "conv-b", elicitation_factory=lambda: _approve_handler("b", log_b)
+            )
+
+            results = await asyncio.gather(
+                view_a.call_tool("svc_order", {}),
+                view_b.call_tool("svc_order", {}),
+            )
+            assert [r.data for r in results] == ["placed", "placed"]
+            assert log_a == ["a"]
+            assert log_b == ["b"]
+            counts = runtime.client_counts()
+            assert counts.conversation == 2
+            assert counts.identity == 0
+
+    async def test_same_conversation_reuses_its_elicit_client(self) -> None:
+        spec = _spec(_elicit_server(), namespace="svc", elicits=True)
+        async with MCPRuntime([spec]) as runtime:
+            log: list[str] = []
+            view = runtime.for_conversation(
+                "conv-a", elicitation_factory=lambda: _approve_handler("a", log)
+            )
+            await view.call_tool("svc_order", {})
+            await view.call_tool("svc_order", {})
+            assert runtime.client_counts().conversation == 1
+            assert log == ["a", "a"]
+
+    async def test_trampoline_resolves_the_current_handler_per_elicit(
+        self,
+    ) -> None:
+        """The factory is consulted at elicit time — a handler swapped in
+        between calls takes effect (never a frozen closure)."""
+        spec = _spec(_elicit_server(), namespace="svc", elicits=True)
+        async with MCPRuntime([spec]) as runtime:
+            log: list[str] = []
+            current: dict[str, Any] = {
+                "handler": _approve_handler("first", log)
+            }
+            view = runtime.for_conversation(
+                "conv-a", elicitation_factory=lambda: current["handler"]
+            )
+            await view.call_tool("svc_order", {})
+            current["handler"] = _approve_handler("second", log)
+            await view.call_tool("svc_order", {})
+            assert log == ["first", "second"]
+
+    async def test_elicit_without_handler_fails_loud(self) -> None:
+        spec = _spec(_elicit_server(), namespace="svc", elicits=True)
+        async with MCPRuntime([spec]) as runtime:
+            view = runtime.for_conversation("conv-a")
+            with pytest.raises(ToolError):
+                await view.call_tool("svc_order", {})
+
+    async def test_surprise_elicit_on_handlerless_pooled_client_fails_loud(
+        self,
+    ) -> None:
+        """An identity-pooled clone carries no elicitation handler, so a
+        server that elicits without declaring ``elicits=True`` fails loud
+        (the client never advertises the capability) instead of
+        misrouting the prompt to another conversation's handler."""
+        spec = _spec(_elicit_server(), namespace="svc")  # NOT elicits=True
+        async with MCPRuntime([spec]) as runtime:
+            base = runtime._handles[0]
+            entry = await runtime._acquire_entry(
+                base, "key:a", overlay=None, elicitation_handler=None
+            )
+            try:
+                with pytest.raises(ToolError):
+                    await entry.handle.call(
+                        "order", {}, timeout=None, progress_handler=None
+                    )
+            finally:
+                runtime._release_entry(entry)
+
+    async def test_unknown_overlay_namespace_fails_loud(self) -> None:
+        async with MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")]
+        ) as runtime:
+            with pytest.raises(ConfigurationError, match="unknown server"):
+                runtime.for_conversation(
+                    "c-1",
+                    overlays={"nope": ServerCredentials(headers={"X": "y"})},
+                )
+
+    async def test_unknown_tool_error_contract_preserved(self) -> None:
+        async with MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")]
+        ) as runtime:
+            view = runtime.for_conversation("c-1")
+            with pytest.raises(ToolError, match="Unknown tool: 'nope'"):
+                await view.call_tool("nope", {})
+
+    async def test_overlay_headers_reach_the_wire_per_identity(self) -> None:
+        """Two conversations with distinct credentials on one mounted
+        server: each call carries its own identity header, from two
+        distinct pooled clients."""
+        seen: list[str] = []
+
+        def capture(app: Any) -> Any:
+            async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+                if scope["type"] == "http" and scope["method"] == "POST":
+                    headers = dict(scope.get("headers") or [])
+                    value = headers.get(b"x-user")
+                    if value is not None:
+                        seen.append(value.decode())
+                await app(scope, receive, send)
+
+            return wrapper
+
+        async with _ephemeral_http_server(
+            _named_server("rsrv", "hello"), wrap_asgi=capture
+        ) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec]) as runtime:
+                view_a = runtime.for_conversation(
+                    "c-a",
+                    overlays={
+                        "svc": ServerCredentials(headers={"X-User": "u-a"})
+                    },
+                )
+                view_b = runtime.for_conversation(
+                    "c-b",
+                    overlays={
+                        "svc": ServerCredentials(headers={"X-User": "u-b"})
+                    },
+                )
+                result_a = await view_a.call_tool("svc_hello", {})
+                result_b = await view_b.call_tool("svc_hello", {})
+                assert result_a.data == "rsrv:hello"
+                assert result_b.data == "rsrv:hello"
+                counts = runtime.client_counts()
+                assert counts.identity == 2
+                assert counts.conversation == 0
+        assert "u-a" in seen and "u-b" in seen
+
+    async def test_same_credentials_share_one_pooled_client(self) -> None:
+        async with _ephemeral_http_server(_named_server("rsrv", "hello")) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec]) as runtime:
+                cred = ServerCredentials(headers={"X-User": "u-1"})
+                view_a = runtime.for_conversation("c-a", overlays={"svc": cred})
+                view_b = runtime.for_conversation("c-b", overlays={"svc": cred})
+                await view_a.call_tool("svc_hello", {})
+                await view_b.call_tool("svc_hello", {})
+                assert runtime.client_counts().identity == 1
+
+    async def test_connect_failure_discards_the_pool_entry(self) -> None:
+        spec = MCPServer(
+            url="http://127.0.0.1:9/mcp", namespace="svc"
+        )._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            view = runtime.for_conversation(
+                "c-a",
+                overlays={"svc": ServerCredentials(headers={"X-User": "u"})},
+            )
+            with pytest.raises(Exception):
+                await view.call_tool("svc_hello", {})
+            assert runtime.client_counts().identity == 0
