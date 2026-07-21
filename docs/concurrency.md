@@ -33,10 +33,16 @@ Tool inventories are likewise per-server, not per-conversation: remote
 `tools/list_changed` notifications), so per-turn tool listing does not
 multiply with conversation count.  In-memory servers stay live-linked.
 
-Identity is App-scoped in this model — every conversation rides the
-same per-server `headers=`/`auth=`.  Per-conversation identity over one
-long-lived App is a separate seam (in progress); until it lands,
-per-user credentials mean one App per identity.
+Identity is a **conversation dimension** on top of this model:
+`conversation(auth=...)` pools additional warm clients by
+`(server, identity)` — same credentials share one client across
+conversations — and `elicits=True` servers get one client per
+conversation (the only scoping that routes a HITL prompt correctly).
+Connections scale with `identities x overlaid servers +
+conversations-that-elicit`, never `conversations x servers`; identity
+pool entries idle out on a TTL.  Conversations without identity ride
+the shared per-server clients exactly as described above.  See
+[Multi-tenant apps](glow/multi-tenant.md).
 
 ## L1: Intra-turn parallel tool execution
 

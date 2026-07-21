@@ -32,6 +32,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     Generic,
@@ -43,19 +44,30 @@ from typing import (
     get_type_hints,
 )
 
+import httpx
 from tensorzero.util import uuid7
 
 from t0_agents.core.agent import Agent
+from t0_agents.core.elicitation_forwarder import ElicitationForwarder
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow._spec import _AgentSpec
 from t0_agents.glow._typing import _is_list_of_pydantic
 from t0_agents.glow.app import App
-from t0_agents.glow.conversation import Conversation
+from t0_agents.glow.conversation import (
+    Conversation,
+    _normalize_credential_overlays,
+)
 from t0_agents.glow.di import _Depends
 from t0_agents.glow.guardrails_typing import _extract_guardrails
 from t0_agents.glow.handle import FluentRun
 from t0_agents.glow.mcp_typing import _extract_mcp_specs, _is_mcp_parameter
 from t0_agents.glow.output_inference import output_mode_from_return_type
+from t0_agents.mcp.runtime import ServerCredentials
+
+if TYPE_CHECKING:
+    from fastmcp.client.elicitation import ElicitationHandler
+
+    from t0_agents.core.types import MemoryProvider
 
 __all__ = ["_AgentWrapper", "_make_tool_decorator"]
 
@@ -160,6 +172,15 @@ class _AgentWrapper(Generic[P, R]):
         hydrate: bool = False,
         user: str | None = None,
         tags: Mapping[str, str] | None = None,
+        auth: Mapping[
+            str, ServerCredentials | Mapping[str, str] | httpx.Auth
+        ]
+        | None = None,
+        elicitation_handler: ElicitationForwarder
+        | ElicitationHandler
+        | None = None,
+        memory: MemoryProvider | None = None,
+        tools: list[Any] | None = None,
     ) -> Conversation[R]:
         """Open a multi-turn conversation with this agent.
 
@@ -172,6 +193,30 @@ class _AgentWrapper(Generic[P, R]):
         requires ``id=``.  ``user=`` is sugar for ``tags={"user": ...}`` — it
         scopes both the tags stamped on every send and the read filter used to
         hydrate / list, keeping the two aligned; pass ``tags=`` for other keys.
+
+        The identity dimension — how ONE long-lived App serves many users:
+
+        ``auth=`` maps mounted server **namespaces** to this conversation's
+        credentials (a headers mapping, an ``httpx.Auth``, or
+        :class:`~t0_agents.glow.ServerCredentials` for both).  Calls to
+        those servers ride identity-pooled clients — same credentials
+        share a warm client across conversations; rotated credentials
+        mint a fresh one.  ``elicitation_handler=`` routes
+        ``elicits=True`` servers' HITL prompts to THIS conversation
+        (accepts an :class:`~t0_agents.core.elicitation_forwarder.ElicitationForwarder`
+        — recommended: in-stream elicitation events then carry the
+        forwarder's own resolvable id — or any bare handler); it is a
+        rebindable attribute on the returned conversation.  ``memory=``
+        swaps the memory provider for every send of this conversation
+        (per-tenant ``tag_filter`` scoping on a shared agent declaration);
+        the agent itself must already be memory-enabled.  ``tools=``
+        narrows THIS conversation's tool visibility with the same grammar
+        as ``@app.agent(tools=)`` (``@app.tool`` callables, ``MCPServer``
+        classes/instances, glob strings), intersected with the agent's
+        own filter — per-conversation arming of sensitive tools instead
+        of per-process configuration; ``tools=[]`` is an explicitly
+        toolless conversation.  Omit all four and the conversation
+        behaves exactly as before.
         """
         if hydrate and id is None:
             raise ConfigurationError(
@@ -183,6 +228,14 @@ class _AgentWrapper(Generic[P, R]):
             merged["user"] = user
         resolved = self._app._resolve_config_overrides(self._spec_ref)
         memory_strategy = str(resolved.get("memory_strategy", "auto"))
+        if memory is not None and resolved.get("memory") is None:
+            raise ConfigurationError(
+                f"conversation(memory=...) on agent "
+                f"{self._spec_ref.name!r}: the agent is not memory-enabled "
+                f"(no memory= on @app.agent).  The per-conversation "
+                f"override swaps the provider; it never enables a memory "
+                f"pipeline that was not configured."
+            )
         episode_id = id if id is not None else str(uuid7())
         return cast(
             Conversation[R],
@@ -193,6 +246,10 @@ class _AgentWrapper(Generic[P, R]):
                 tags=merged,
                 memory_strategy=memory_strategy,
                 needs_hydration=hydrate,
+                auth=_normalize_credential_overlays(auth),
+                elicitation=elicitation_handler,
+                memory=memory,
+                tools=list(tools) if tools is not None else None,
             ),
         )
 

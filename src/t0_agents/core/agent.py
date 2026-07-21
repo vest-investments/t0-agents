@@ -36,6 +36,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# Sentinel distinguishing "caller omitted this per-run override" from an
+# explicit ``None`` — ``invoke(tool_provider=None)`` is a meaningful
+# override (a toolless run), so ``None`` cannot double as the default.
+_UNSET: Any = object()
+
 
 class Agent:
     """Declarative wrapper around :func:`run_agent`.
@@ -119,30 +124,15 @@ class Agent:
             )
         self._config = config
         self._t0 = t0
-        self._tool_provider: ToolProvider | None = tool_provider
+        self._tool_provider: ToolProvider | None = self._wrap_tool_provider(
+            tool_provider
+        )
         logger.debug(
             "Agent %r created: function=%s, max_turns=%d",
             config.name,
             config.function_name,
             config.max_turns,
         )
-
-        # Wrap the tool provider with SubAgentToolProvider when
-        # ``config.sub_agents`` is non-empty: the provider synthesises a
-        # tool surface from the sub-agent list and dispatches matching
-        # names inline, replacing the legacy server-side ``add_tool``
-        # registration + middleware-side ``_OrchestrationToolProvider``
-        # wrap.  No-op when ``config.sub_agents`` is empty, so
-        # single-agent constructions pay no cost.  ``inner=tool_provider``
-        # preserves any real MCP tools the orchestrator also wants; the
-        # synthetic delegation tools are appended after the inner list.
-        if config.sub_agents:
-            from t0_agents.delegation.provider import SubAgentToolProvider
-
-            self._tool_provider = SubAgentToolProvider(
-                config.sub_agents,
-                inner=tool_provider,
-            )
 
         # JSON-mode safety state.  ``_tool_provider_verified_empty`` is
         # a positive latch — set to ``True`` after the first successful
@@ -156,6 +146,29 @@ class Agent:
         # Anthropic extended-thinking compatibility warning (TZ guide §11.4).
         self._tool_provider_verified_empty = False
         self._warned_anthropic_combination = False
+
+    def _wrap_tool_provider(
+        self, provider: ToolProvider | None
+    ) -> ToolProvider | None:
+        """Apply the construction-time provider wrapping to ``provider``.
+
+        Wraps with :class:`SubAgentToolProvider` when ``config.sub_agents``
+        is non-empty: the provider synthesises a tool surface from the
+        sub-agent list and dispatches matching names inline.  No-op when
+        ``config.sub_agents`` is empty, so single-agent constructions pay
+        no cost.  ``inner=provider`` preserves any real MCP tools the
+        orchestrator also wants; the synthetic delegation tools are
+        appended after the inner list.
+
+        Shared by ``__init__`` and the per-run ``invoke(tool_provider=…)``
+        override so an override keeps the agent's delegation surface
+        instead of silently dropping it.
+        """
+        if self._config.sub_agents:
+            from t0_agents.delegation.provider import SubAgentToolProvider
+
+            return SubAgentToolProvider(self._config.sub_agents, inner=provider)
+        return provider
 
     @property
     def config(self) -> AgentConfig:
@@ -199,6 +212,8 @@ class Agent:
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
+        tool_provider: ToolProvider | None = ...,
+        memory: MemoryProvider = ...,
     ) -> Run[T]: ...
 
     @overload
@@ -215,6 +230,8 @@ class Agent:
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
+        tool_provider: ToolProvider | None = ...,
+        memory: MemoryProvider = ...,
     ) -> Run[Any]: ...
 
     def invoke(
@@ -230,6 +247,8 @@ class Agent:
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
+        tool_provider: ToolProvider | None = _UNSET,
+        memory: MemoryProvider = _UNSET,
     ) -> Run[Any]:
         """v1.0 canonical entry point — returns a :class:`Run` handle.
 
@@ -243,11 +262,48 @@ class Agent:
         is an explicit "no middleware" override (drops cost tracking
         too — see :doc:`run`).
 
+        ``tool_provider=`` swaps the provider for THIS run only (an
+        explicit ``None`` makes the run toolless); the agent's
+        delegation surface is preserved — the override is re-wrapped
+        with the same :class:`SubAgentToolProvider` layer construction
+        applies.  ``memory=`` swaps the memory provider for this run;
+        it requires a memory-enabled agent (``config.memory`` set) —
+        the override replaces the provider, it never enables a memory
+        pipeline that was not configured.  Both are the injection seam
+        for conversation-scoped identity (see
+        :meth:`t0_agents.glow.decorators._AgentWrapper.conversation`).
+
         See :doc:`run` for the full surface, lifecycle, and recipes.
         """
         effective_output: OutputMode[Any] = (
             output if output is not None else self._config.output
         )
+
+        if (
+            tool_provider is not _UNSET
+            and tool_provider is not None
+            and not isinstance(tool_provider, ToolProvider)
+        ):
+            raise ConfigurationError(
+                f"invoke(tool_provider=...) must implement the ToolProvider "
+                f"protocol (list_tools + call_tool), got "
+                f"{type(tool_provider).__name__}"
+            )
+        if memory is not _UNSET:
+            if not isinstance(memory, MemoryProvider):
+                raise ConfigurationError(
+                    f"invoke(memory=...) must implement the MemoryProvider "
+                    f"protocol (load + save + search), got "
+                    f"{type(memory).__name__} — per-run memory disabling is "
+                    f"not supported."
+                )
+            if self._config.memory is None:
+                raise ConfigurationError(
+                    "invoke(memory=...) requires a memory-enabled agent "
+                    "(config.memory set): the per-run override swaps the "
+                    "provider, it never enables a memory pipeline that was "
+                    "not configured."
+                )
 
         # Sync pre-flight so the synchronous-call surface stays
         # byte-identical with v0.12.
@@ -283,6 +339,11 @@ class Agent:
             eager=eager,
             context=context,
             middleware=middleware,
+            tool_provider_override=(
+                None if tool_provider is _UNSET else tool_provider
+            ),
+            tool_provider_overridden=tool_provider is not _UNSET,
+            memory_override=None if memory is _UNSET else memory,
         )
 
     # ------------------------------------------------------------------
@@ -474,24 +535,32 @@ class Agent:
         # --- json_mode='tool' safety check (latched once per Agent) ---
         # Replicates the v0.12 _json_terminal step-0 check: a tool-mode
         # JSON inference combined with a tool-advertising provider is
-        # incompatible (TZ guide §11.1).
+        # incompatible (TZ guide §11.1).  A per-run override
+        # (``invoke(tool_provider=…)``) is checked without touching the
+        # per-Agent latch — the latch caches a fact about the agent's own
+        # provider, which an override does not change.
         json_mode = _resolve_json_mode(ctx.output)
-        if (
-            json_mode == "tool"
-            and not self._tool_provider_verified_empty
-        ):
-            if self._tool_provider is None:
-                self._tool_provider_verified_empty = True
-            else:
-                advertised_tools = await self._tool_provider.list_tools()
+        if json_mode == "tool":
+
+            async def _reject_tool_advertising(
+                provider: ToolProvider | None,
+            ) -> None:
+                if provider is None:
+                    return
+                advertised_tools = await provider.list_tools()
                 if advertised_tools:
                     raise ConfigurationError(
-                        "output=JsonOutput(json_mode='tool') is incompatible "
-                        "with a tool_provider that advertises tools "
-                        "(TensorZero guide §11.1).  Either switch to "
-                        "json_mode='strict'/'on'/'off' or use an empty "
-                        "tool_provider."
+                        "output=JsonOutput(json_mode='tool') is "
+                        "incompatible with a tool_provider that "
+                        "advertises tools (TensorZero guide §11.1).  "
+                        "Either switch to json_mode='strict'/'on'/'off' "
+                        "or use an empty tool_provider."
                     )
+
+            if ctx.tool_provider_overridden:
+                await _reject_tool_advertising(ctx.tool_provider)
+            elif not self._tool_provider_verified_empty:
+                await _reject_tool_advertising(self._tool_provider)
                 self._tool_provider_verified_empty = True
 
         # --- 1. Build the inference request ---
@@ -696,6 +765,7 @@ class Agent:
         records: list[MemoryRecord],
         *,
         episode_id: str | None,
+        provider: MemoryProvider | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Build the effective user message and extra kwargs for run_agent.
 
@@ -708,6 +778,10 @@ class Agent:
         retrieve a TZ-native ``list[Message]`` and returns it under the
         ``prior_messages`` key in *extra_kwargs*.
 
+        ``provider`` is the effective memory provider for this run —
+        a per-run override threaded by :class:`MemoryMiddleware` — and
+        falls back to ``config.memory`` when ``None``.
+
         Returns:
             A ``(effective_message, extra_kwargs)`` tuple.  *extra_kwargs*
             is empty for the ``"prepended_message"`` strategy, contains
@@ -715,12 +789,13 @@ class Agent:
             and contains ``prior_messages`` for the ``"messages"`` strategy.
         """
         strategy = self._resolve_memory_strategy()
+        memory = provider if provider is not None else self._config.memory
 
         if strategy == "messages":
-            if self._config.memory is None or episode_id is None:
+            if memory is None or episode_id is None:
                 return user_message, {}
             try:
-                history = await self._config.memory.load_history(  # type: ignore[attr-defined]
+                history = await memory.load_history(  # type: ignore[attr-defined]
                     episode_id,
                 )
             except Exception:

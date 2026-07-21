@@ -17,9 +17,13 @@ An :class:`ElicitationForwarder` can run in two modes:
   future by calling :meth:`~ElicitationForwarder.resolve` with the
   incoming response payload.
 
-The public surface is four methods:
+The public surface is four methods plus an observer seam:
 
-* ``__init__(*, on_request=None, default_timeout=300.0)``.
+* ``__init__(*, on_request=None, default_timeout=300.0, observer=None)``.
+  ``observer`` (rebindable via the ``observer`` attribute) witnesses the
+  request/resolve lifecycle with the real ``elicitation_id`` — the seam
+  glow uses to emit in-stream elicitation events whose id a remote
+  resolver can answer.
 * ``handler(message, response_type, params, context)`` — the FastMCP-side
   entry point.
 * ``resolve(elicitation_id, payload)`` — drain one Future when the remote
@@ -39,12 +43,33 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from fastmcp.client.elicitation import ElicitResult
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class ElicitationObserver(Protocol):
+    """Read-only witness of a forwarder's elicitation lifecycle.
+
+    ``requested`` fires with the exact envelope handed to ``on_request``
+    (so the observer sees the real ``elicitation_id`` — the id a remote
+    resolver answers with); ``resolved`` fires once per elicitation with
+    the settled action (``"accept"`` / ``"decline"`` / ``"cancel"``),
+    on every path — remote resolution, timeout, cancellation, and
+    ``on_request`` failure alike.  Both are awaited on the elicitation
+    path (they typically push onto an event buffer).  Observers must not
+    raise; an exception is logged and the elicitation proceeds — a
+    broken observability hook must never break a human-in-the-loop
+    confirm.
+    """
+
+    async def requested(self, envelope: RequestEnvelope) -> None: ...
+
+    async def resolved(self, elicitation_id: str, action: str) -> None: ...
 
 RequestEnvelope = dict[str, Any]
 """Shape handed to ``on_request``:
@@ -134,6 +159,7 @@ class ElicitationForwarder:
         *,
         on_request: OnRequest | None = None,
         default_timeout: float = 300.0,
+        observer: ElicitationObserver | None = None,
     ) -> None:
         if default_timeout <= 0:
             raise ValueError(
@@ -142,6 +168,12 @@ class ElicitationForwarder:
         self._pending: dict[str, ElicitationRequest] = {}
         self._on_request = on_request
         self._default_timeout = default_timeout
+        # Public and rebindable: glow binds an observer when a forwarder
+        # is attached to a conversation, so in-stream elicitation events
+        # carry the SAME id a remote resolver answers with.  One observer
+        # per forwarder — a forwarder shared across conversations keeps
+        # only the last binding (matching its one-channel contract).
+        self.observer: ElicitationObserver | None = observer
 
     @property
     def pending(self) -> dict[str, ElicitationRequest]:
@@ -189,6 +221,8 @@ class ElicitationForwarder:
             "response_type": _response_type_from_schema(schema, response_type),
         }
 
+        await self._notify_requested(envelope)
+
         try:
             await self._on_request(envelope)
         except Exception:
@@ -197,10 +231,14 @@ class ElicitationForwarder:
                 elicitation_id,
             )
             self._pending.pop(elicitation_id, None)
+            await self._notify_resolved(elicitation_id, "decline")
             return ElicitResult(action="decline")
 
+        action = "decline"
         try:
-            return await asyncio.wait_for(fut, timeout=self._default_timeout)
+            result = await asyncio.wait_for(fut, timeout=self._default_timeout)
+            action = result.action
+            return result
         except TimeoutError:
             logger.warning(
                 "Elicitation %s timed out after %.1fs; declining",
@@ -216,6 +254,33 @@ class ElicitationForwarder:
             return ElicitResult(action="decline")
         finally:
             self._pending.pop(elicitation_id, None)
+            await self._notify_resolved(elicitation_id, action)
+
+    async def _notify_requested(self, envelope: RequestEnvelope) -> None:
+        if self.observer is None:
+            return
+        try:
+            await self.observer.requested(envelope)
+        except (Exception, asyncio.CancelledError):
+            # CancelledError included: ``handler`` swallows cancellation by
+            # contract (returns a decline), so a cancelled notification in
+            # its ``finally`` must not resurrect the cancellation — the
+            # event is best-effort on that path.
+            logger.warning(
+                "elicitation observer.requested raised; continuing",
+                exc_info=True,
+            )
+
+    async def _notify_resolved(self, elicitation_id: str, action: str) -> None:
+        if self.observer is None:
+            return
+        try:
+            await self.observer.resolved(elicitation_id, action)
+        except (Exception, asyncio.CancelledError):
+            logger.warning(
+                "elicitation observer.resolved raised; continuing",
+                exc_info=True,
+            )
 
     async def resolve(
         self, elicitation_id: str, payload: dict[str, Any]

@@ -35,7 +35,13 @@ from t0_agents.core.exceptions import (
 )
 from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
-from t0_agents.core.types import AgentResult, RunUsage, Usage
+from t0_agents.core.types import (
+    AgentResult,
+    MemoryProvider,
+    RunUsage,
+    ToolProvider,
+    Usage,
+)
 from t0_agents.stream.events import (
     AgentEvent,
     DoneEvent,
@@ -135,6 +141,9 @@ class Run(Generic[T]):
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
         middleware: Sequence[Any] | None = None,
+        tool_provider_override: ToolProvider | None = None,
+        tool_provider_overridden: bool = False,
+        memory_override: MemoryProvider | None = None,
     ) -> None:
         # ``agent=None`` is supported for third-party Run-subclass
         # authors whose ``_drive()`` implementation does not touch
@@ -147,6 +156,13 @@ class Run(Generic[T]):
         self._output: OutputMode[Any] = output
         self._context: dict[str, Any] = dict(context) if context else {}
         self._middleware: Sequence[Any] | None = middleware
+        # Per-run provider/memory overrides threaded from
+        # ``Agent.invoke(tool_provider=…, memory=…)``.  The boolean keeps
+        # an explicit ``tool_provider=None`` (a toolless run) distinct
+        # from "not overridden".
+        self._tool_provider_override: ToolProvider | None = tool_provider_override
+        self._tool_provider_overridden: bool = tool_provider_overridden
+        self._memory_override: MemoryProvider | None = memory_override
         self._state: RunState = "pending"
         self._buffer = EventBuffer()
         self._result: AgentResult[Any] | None = None
@@ -298,6 +314,15 @@ class Run(Generic[T]):
         middleware may want to know the drive mode at chain build time.
         """
         del is_streaming  # not used today; future middleware may key on it.
+        # A per-run override goes through the same construction-time
+        # wrapping the agent's own provider got (SubAgentToolProvider when
+        # sub-agents are configured) so overriding never silently drops
+        # the delegation surface.
+        tool_provider = (
+            agent._wrap_tool_provider(self._tool_provider_override)
+            if self._tool_provider_overridden
+            else agent._tool_provider
+        )
         return RunContext(
             config=agent.config,
             user_message=self._input.user_message,
@@ -307,7 +332,9 @@ class Run(Generic[T]):
             system_arguments=self._dict_or_none(self._input.system_arguments),
             output=self._output,
             t0=agent._t0,
-            tool_provider=agent._tool_provider,
+            tool_provider=tool_provider,
+            tool_provider_overridden=self._tool_provider_overridden,
+            memory_override=self._memory_override,
             prior_messages=(
                 list(self._input.prior_messages)
                 if self._input.prior_messages

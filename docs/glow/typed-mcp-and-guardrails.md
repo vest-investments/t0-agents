@@ -130,6 +130,18 @@ stack](../error-handling.md#the-timeout-stack) for how this layer
 composes with `tool_timeout` and why a dead stream without a per-call
 deadline hangs rather than errors.
 
+### Elicit capability — `elicits=`
+
+`elicits=True` declares that the server's tools may call
+`ctx.elicit(...)`.  The MCP protocol carries no server-side "I elicit"
+capability, so the consumer declares it — and the declaration is what
+lets one long-lived App route each conversation's HITL prompts to that
+conversation's own handler (per-conversation clients; see
+[Multi-tenant apps](multi-tenant.md)).  Valid on both `url` and
+in-memory `server=` mounts.  Servers left at the default share warm
+clients across conversations, and a surprise elicit from one fails loud
+instead of misrouting.
+
 Like `headers=`/`auth=`, `timeout=` forces the explicit transport chosen
 by `transport=` and is a configuration error on an in-memory `server=`
 mount (there is no HTTP hop to configure).
@@ -174,11 +186,16 @@ await forwarder.resolve(elicitation_id, {"action": "accept", "content": {...}})
 [`ElicitationHandler`](https://gofastmcp.com/clients/elicitation).
 `ElicitationForwarder` is the batteries-included one: it bridges an
 in-process `ctx.elicit` to an out-of-process channel (a WebSocket, or an
-SSE + POST pair) and blocks until the human answers.  A `fastmcp.Client`
-binds exactly one handler and the App owns one Client, so this is one
-resolver per App — construct one App per session/tenant for isolated HITL
-(the "one App per drive" shape the rest of glow assumes).  With no handler
-the default is unchanged: elicitation is unsupported.
+SSE + POST pair) and blocks until the human answers.  The App-level
+handler is App-scoped — one resolver for every conversation — which fits
+single-tenant apps.  For one long-lived App serving many users, declare
+`elicits=True` on the mount and pass a handler per conversation
+(`conversation(elicitation_handler=...)`): each conversation then gets
+its own elicitation client, and prompts route to that conversation's
+resolver by construction — see
+[Multi-tenant apps](multi-tenant.md).  With no handler anywhere the
+default is unchanged: elicitation is unsupported and a surprise elicit
+fails loud.
 
 ## Guardrails as type metadata
 

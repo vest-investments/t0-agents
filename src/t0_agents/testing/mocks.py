@@ -298,6 +298,7 @@ class MockGateway:
         # default — Agent._run_json reads ``structured.episode_id`` on
         # the first attempt and threads it into subsequent retries.
         self._sticky_episode_id: UUID | None = episode_id
+        self._episode_pinned: bool = episode_id is not None
         self.calls: list[dict[str, Any]] = []
         # Parallel to ``calls``: the response object the gateway returned
         # for each entry.  May be a chat or JSON response depending on
@@ -422,25 +423,49 @@ class MockGateway:
         self.calls.append(copy.deepcopy(kwargs))
         result = self._source(**kwargs)
         response: ChatInferenceResponse | JsonInferenceResponse
+        episode = self._episode_for(kwargs.get("episode_id"))
         if isinstance(result, ChatInferenceResponse | JsonInferenceResponse):
             response = result
         elif isinstance(result, dict):
             # JSON dict shape — materialise into a JsonInferenceResponse.
-            if self._sticky_episode_id is None:
-                self._sticky_episode_id = uuid4()
             response = _materialise_json_dict(
-                result, sticky_episode_id=self._sticky_episode_id
+                result, sticky_episode_id=episode
             )
         else:
-            # Content-block list (chat path) — wrap with a stable episode id.
-            if self._sticky_episode_id is None:
-                self._sticky_episode_id = uuid4()
+            # Content-block list (chat path).
             response = MockChatResponse(list(result)).to_response(
                 inference_id=uuid4(),
-                episode_id=self._sticky_episode_id,
+                episode_id=episode,
             )
         self.responses.append(response)
         return response
+
+    def _episode_for(self, caller_episode: Any) -> UUID:
+        """The episode id the response should carry, real-gateway style.
+
+        A construction-time ``episode_id=`` stays authoritative (tests
+        that pin it).  Otherwise a caller-supplied episode is echoed back
+        per call — the real gateway only ALLOCATES an id when the caller
+        sent none — so several conversations sharing one mock keep their
+        distinct identities across turns.  With neither, one id is
+        minted and latched, preserving the stable-across-turns contract
+        for ``invoke(episode_id=None)``.
+        """
+        if self._episode_pinned:
+            assert self._sticky_episode_id is not None
+            return self._sticky_episode_id
+        if caller_episode is not None:
+            if isinstance(caller_episode, UUID):
+                return caller_episode
+            try:
+                return UUID(str(caller_episode))
+            except ValueError:
+                # A non-UUID sentinel (tests asserting kwarg threading):
+                # nothing real to echo — fall through to the minted id.
+                pass
+        if self._sticky_episode_id is None:
+            self._sticky_episode_id = uuid4()
+        return self._sticky_episode_id
 
     async def feedback(self, **kwargs: Any) -> _MockFeedbackResponse:
         """Record a feedback call and return an ephemeral response."""

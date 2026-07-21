@@ -781,6 +781,8 @@ class App:
         prior_messages: Callable[[], Sequence[Mapping[str, Any]] | None] | None,
         on_result: Callable[[AgentResult[Any]], None],
         extra_prepare: Callable[[], Awaitable[None]] | None = None,
+        tool_provider_factory: Callable[[], ToolProvider | None] | None = None,
+        memory: MemoryProvider | None = None,
     ) -> FluentRun[Any]:
         """Build a :class:`FluentRun` for one turn of a :class:`Conversation`.
 
@@ -793,6 +795,13 @@ class App:
         ``setdefault`` so an explicit ``.with_(episode_id=...)`` still wins, and
         agent resolution stays deferred to first consumption (the M7 rule that
         a config error surfaces at consumption, never at call).
+
+        ``tool_provider_factory`` / ``memory`` carry the conversation's
+        identity legs: the factory resolves per consumption (after the
+        App is booted, so the runtime exists) and its non-``None`` result
+        rides the per-run ``invoke(tool_provider=…)`` override; ``memory``
+        rides ``invoke(memory=…)``.  Both seed via ``setdefault`` like
+        every other conversation seed.
         """
         system_prompt = spec.system_prompt
 
@@ -810,6 +819,12 @@ class App:
                 seeded = prior_messages()
                 if seeded:
                     call_kwargs.setdefault("prior_messages", seeded)
+            if tool_provider_factory is not None:
+                provider = tool_provider_factory()
+                if provider is not None:
+                    call_kwargs.setdefault("tool_provider", provider)
+            if memory is not None:
+                call_kwargs.setdefault("memory", memory)
             return self._agent_invoke(
                 agent,
                 message,

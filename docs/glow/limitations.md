@@ -63,6 +63,18 @@ the docstring (optionally with [`prompt_vars`
 placeholders](getting-started.md#client-side-prompt-templates--prompt_vars))
 or a raw `.with_(system=...)` string on the `model=` path.
 
+## MCP tool inventory is identity-independent
+
+`list_tools` is served by the shared per-server client and cached
+across conversations (the efficiency contract for N concurrent
+conversations) — `conversation(auth=...)` credentials are **not** used
+to list.  A server whose tool *list* itself requires per-user auth must
+carry spec-level credentials sufficient to list; per-conversation
+*visibility* is the client-side `tools=` filter.  Relatedly, local
+`@app.tool` functions have no spec to declare `elicits=True` on — mount
+an eliciting in-memory server via `MCPServer(server=..., elicits=True)`
+instead.  See [Multi-tenant apps](multi-tenant.md).
+
 ## No `AsyncIterator` tools
 
 The plan flagged `AsyncIterator[str]` tool returns as a future

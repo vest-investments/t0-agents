@@ -35,6 +35,7 @@ from t0_agents.glow.selectors import (
     ToolResult,
     TurnEnd,
 )
+from t0_agents.mcp.runtime import ServerCredentials
 
 __all__ = [
     "AgentHandle",
@@ -51,6 +52,7 @@ __all__ = [
     "MCPServer",
     "RunError",
     "Selector",
+    "ServerCredentials",
     "Text",
     "TextEnd",
     "Thought",

@@ -66,12 +66,15 @@ async def observe(run) -> None:
 `ElicitationRequestedEvent` / `ElicitationResolvedEvent` are in the
 `AgentEvent` union (selectors `ElicitationRequested` / `ElicitationResolved`),
 carry a shared correlation `id`, and project onto the public wire's
-`elicitation_request` / `elicitation_resolved` frames. They coexist with the
-out-of-band elicitation forwarder: a consumer wiring both must render the
-prompt from **one** path. Automatic in-stream *emission* of these events lands
-with per-conversation elicitation clients (a later release); until then the
-events are defined and projectable, and the out-of-band forwarder is the path
-that fires.
+`elicitation_request` / `elicitation_resolved` frames. They are emitted
+in-stream by conversation-scoped elicitation
+([Multi-tenant apps](glow/multi-tenant.md)): pass the conversation an
+`ElicitationForwarder` and the event `id` **is** the forwarder's
+`elicitation_id` — the same id an out-of-band resolver answers — so both
+paths describe one elicitation; a bare handler gets a glow-minted id.
+A consumer wiring both must still render the prompt from **one** path.
+App-scoped handlers (no conversation identity) do not emit — their
+elicitations stay out-of-band only.
 
 ### Public tool inventory
 

@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from t0_agents.core.config import AgentConfig
     from t0_agents.core.output import OutputMode
     from t0_agents.core.run import Run
-    from t0_agents.core.types import AgentResult, ToolProvider
+    from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +143,14 @@ class RunContext:
     on_inference: OnInferenceCallback | None = None
     prior_messages: list[Mapping[str, Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    # Per-run override state threaded from ``Agent.invoke``:
+    # ``tool_provider_overridden`` marks that ``tool_provider`` above came
+    # from ``invoke(tool_provider=…)`` rather than the agent (the JSON
+    # tool-mode safety check must then verify it un-latched);
+    # ``memory_override`` swaps the provider :class:`MemoryMiddleware`
+    # uses for this run only.
+    tool_provider_overridden: bool = False
+    memory_override: MemoryProvider | None = None
 
     # 4. Outputs
     result: AgentResult[Any] | None = None
