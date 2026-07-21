@@ -92,10 +92,9 @@ async def main() -> None:
         return llm()
 
     async with app:
-        # Verify the mounted tool is visible through the App-owned runtime.
-        # `app._owned_client` is glow-internal; a public `app.tools()`
-        # inventory API lands in a later release.
-        tools = await app._owned_client.list_tools()
+        # `app.tools()` is the public inventory of the mounted tool surface —
+        # what the LLM will be offered, namespace prefixes applied.
+        tools = await app.tools()
         tool_names = sorted(t.name for t in tools)
         print(f"Visible tools: {tool_names}")
         assert "math_add" in tool_names, (
