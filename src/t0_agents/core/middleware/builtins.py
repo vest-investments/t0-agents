@@ -139,6 +139,10 @@ class MemoryMiddleware:
             return await next_(ctx)
 
         strategy = agent._resolve_memory_strategy()
+        # ``ctx.memory_override`` (a per-run ``invoke(memory=…)`` swap —
+        # the conversation-identity seam) takes precedence over the
+        # provider this middleware was constructed with.
+        provider = ctx.memory_override or self._provider
 
         # --- 1. Load prior records ---
         # ``messages`` strategy uses load_history (called from
@@ -148,7 +152,7 @@ class MemoryMiddleware:
         memory_records: list[MemoryRecord] = []
         if ctx.episode_id is not None and strategy != "messages":
             try:
-                raw_records = await self._provider.load(ctx.episode_id)
+                raw_records = await provider.load(ctx.episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
             except Exception:
                 logger.warning(
@@ -162,7 +166,10 @@ class MemoryMiddleware:
         # tracks any future refinement to the strategy dispatch
         # without two places drifting apart.
         effective_message, extra_kwargs = await agent._prepare_memory_injection(
-            original_user_message, memory_records, episode_id=ctx.episode_id,
+            original_user_message,
+            memory_records,
+            episode_id=ctx.episode_id,
+            provider=provider,
         )
         ctx.user_message = effective_message
 
@@ -201,7 +208,7 @@ class MemoryMiddleware:
                     inference_ids=list(result.inference_ids),
                 )
                 try:
-                    await self._provider.save(record)
+                    await provider.save(record)
                 except Exception:
                     logger.warning(
                         "Memory save failed for episode %s; run result is still valid",

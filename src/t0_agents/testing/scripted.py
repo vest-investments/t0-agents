@@ -37,7 +37,7 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.run import Run, RunInput, build_run_input
-from t0_agents.core.types import AgentResult
+from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
 from t0_agents.stream.events import AgentEvent, DoneEvent
 
 __all__ = ["ScriptedAgent", "ScriptedRun"]
@@ -136,12 +136,15 @@ class ScriptedAgent(Agent):
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
+        tool_provider: ToolProvider | None = None,
+        memory: MemoryProvider | None = None,
     ) -> Run[Any]:
         """Return a :class:`ScriptedRun` replaying the configured script.
 
-        ``output`` and ``middleware`` are accepted for drop-in
-        compatibility with :meth:`Agent.invoke` and ignored — the fake
-        replays fixed events and result regardless of mode.
+        ``output``, ``middleware``, and the per-run ``tool_provider`` /
+        ``memory`` overrides are accepted for drop-in compatibility with
+        :meth:`Agent.invoke` and ignored — the fake replays fixed events
+        and result regardless of mode.
         """
         input_ = build_run_input(
             user_message=user_message,
