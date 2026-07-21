@@ -27,10 +27,12 @@ Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.27.0:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import httpx
@@ -51,11 +53,14 @@ if TYPE_CHECKING:
 
     from t0_agents.core.types import ToolProgressHandler
 
-__all__ = ["MCPRuntime"]
+__all__ = ["ClientCounts", "MCPRuntime", "ServerCredentials"]
 
 logger = logging.getLogger(__name__)
 
 _TOOL_LIST_TTL_SECONDS = 60.0
+
+_POOL_IDLE_TTL_SECONDS = 900.0
+_POOL_MAX_SIZE = 1024
 
 # The SDK maps a POST rejected with HTTP 404 (dead/rolled session) to a
 # JSON-RPC error with this positive literal code — mcp 1.27.0
@@ -125,6 +130,115 @@ class MCPServerSpecLike(Protocol):
 
     @property
     def elicits(self) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ServerCredentials:
+    """Per-identity credential overlay for one mounted server.
+
+    ``headers`` merge over the spec's static headers (overlay keys win),
+    ``auth`` replaces the spec's ``httpx.Auth`` when set.  ``key`` is an
+    optional explicit pool key; when omitted the pool fingerprints the
+    resolved credential material instead, so two conversations carrying
+    the same headers and the same ``auth`` *instance* share one warm
+    client, and a rotated token mints a fresh pool entry while the stale
+    one idles out.  ``httpx.Auth`` objects are additionally fresh per
+    request by construction (``auth_flow`` runs on every request), so an
+    auth object that reads a mutable token needs no pool churn at all.
+    """
+
+    headers: Mapping[str, str] | None = None
+    auth: httpx.Auth | None = None
+    key: str | None = None
+
+    def identity_key(self) -> str:
+        """Stable pool-key component for this overlay.
+
+        The fingerprint digests header items and the ``auth`` object's
+        identity — never returned to logs; the hex digest itself does not
+        reveal the credential material.
+        """
+        if self.key is not None:
+            return f"key:{self.key}"
+        digest = hashlib.sha256()
+        for name, value in sorted((self.headers or {}).items()):
+            digest.update(f"{name}\x00{value}\x00".encode())
+        if self.auth is not None:
+            digest.update(f"auth:{id(self.auth)}".encode())
+        return digest.hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class ClientCounts:
+    """Snapshot of the runtime's client population, for tests and ops.
+
+    ``static`` counts the base handles (the local ``@app.tool`` server
+    plus one per mounted spec); ``identity`` counts pooled per-identity
+    entries; ``conversation`` counts per-conversation entries (elicit
+    scoping).  The pool-model invariant: ``identity`` grows with
+    *identities x overlaid servers*, ``conversation`` only with
+    *conversations that touched an ``elicits=True`` server* — never with
+    ``conversations x servers``.
+    """
+
+    static: int
+    identity: int
+    conversation: int
+
+
+class _OverlaidSpec:
+    """A spec view merging an identity overlay onto a base spec.
+
+    Presents the :class:`MCPServerSpecLike` shape with ``headers`` merged
+    (overlay keys win) and ``auth`` replaced when the overlay carries one;
+    everything else — url, transport, namespace, prefix, timeout — comes
+    from the base, so per-server transport behaviour (M1's read-timeout
+    factory included) is identical across identities.
+    """
+
+    def __init__(
+        self, base: MCPServerSpecLike, overlay: ServerCredentials
+    ) -> None:
+        self._base = base
+        merged = {**(base.headers or {}), **dict(overlay.headers or {})}
+        self._headers: dict[str, str] | None = merged or None
+        self._auth = overlay.auth if overlay.auth is not None else base.auth
+
+    @property
+    def url(self) -> str | None:
+        return self._base.url
+
+    @property
+    def server(self) -> FastMCP[Any] | None:
+        return self._base.server
+
+    @property
+    def transport(self) -> str:
+        return self._base.transport
+
+    @property
+    def namespace(self) -> str | None:
+        return self._base.namespace
+
+    @property
+    def headers(self) -> dict[str, str] | None:
+        return self._headers
+
+    @property
+    def auth(self) -> httpx.Auth | None:
+        return self._auth
+
+    @property
+    def prefix(self) -> bool:
+        return self._base.prefix
+
+    @property
+    def timeout(self) -> float | None:
+        return self._base.timeout
+
+    @property
+    def elicits(self) -> bool:
+        return self._base.elicits
 
 
 def _read_timeout_client_factory(read_timeout: float) -> McpHttpClientFactory:
@@ -209,11 +323,19 @@ class _ServerHandle:
         prefix: bool,
         live_inventory: bool,
         client_factory: Callable[[Callable[[], None]], Client[Any]],
+        spec: MCPServerSpecLike | None = None,
+        server: FastMCP[Any] | None = None,
     ) -> None:
         self.key = key
         self.namespace = namespace
         self.prefix = prefix
         self.live_inventory = live_inventory
+        # The mount this handle was built from — ``spec`` for MCPServer
+        # mounts, ``server`` for the local ``@app.tool`` FastMCP.  The
+        # identity pool reads them to clone per-identity /
+        # per-conversation siblings of this handle.
+        self.spec = spec
+        self.server = server
         self._client_factory = client_factory
         self.client: Client[Any] = client_factory(self.invalidate)
         self._lock = asyncio.Lock()
@@ -346,15 +468,41 @@ class _ServerHandle:
                 )
 
 
+@dataclass
+class _PoolEntry:
+    """One pooled client: a cloned handle plus its lease bookkeeping.
+
+    ``active`` counts in-flight calls (an entry is only evictable at
+    zero — eviction must never close a client under a live call, which
+    on the HITL path is a human reading a confirmation prompt);
+    ``last_used`` drives idle-TTL eviction; ``conversation_scoped``
+    separates elicit-scoping entries from identity entries in
+    :meth:`MCPRuntime.client_counts`.
+    """
+
+    handle: _ServerHandle
+    last_used: float = field(default_factory=time.monotonic)
+    active: int = 0
+    conversation_scoped: bool = False
+
+
 class MCPRuntime:
     """Multi-server tool router implementing the ``ToolProvider`` protocol.
 
     Hosts the App-local ``@app.tool`` server as a routed handle; every
-    handle's client is constructed with the same App-scoped
-    ``elicitation_handler`` (per-conversation scoping is a later
-    milestone).  Enter the runtime as an async context manager (or call
-    :meth:`aclose`) so every warm client is closed asynchronously on
-    teardown.
+    base handle's client is constructed with the same App-scoped
+    ``elicitation_handler``.  Conversation-scoped identity rides a
+    side pool of cloned handles keyed ``(server, identity)`` — see
+    :meth:`for_conversation`.  Enter the runtime as an async context
+    manager (or call :meth:`aclose`) so every warm client is closed
+    asynchronously on teardown.
+
+    ``pool_idle_ttl`` / ``pool_max_size`` bound the identity pool:
+    entries idle longer than the TTL are evicted lazily on pool access
+    (async-closed off the lock), and at the size cap the oldest idle
+    entry is evicted to make room — if every entry has a call in
+    flight, acquisition fails loud rather than tearing a live client
+    down.
     """
 
     def __init__(
@@ -363,13 +511,38 @@ class MCPRuntime:
         *,
         local_server: FastMCP[Any] | None = None,
         elicitation_handler: ElicitationHandler | None = None,
+        pool_idle_ttl: float = _POOL_IDLE_TTL_SECONDS,
+        pool_max_size: int = _POOL_MAX_SIZE,
     ) -> None:
+        if pool_idle_ttl <= 0:
+            raise ConfigurationError(
+                f"MCPRuntime(pool_idle_ttl=...) must be positive, "
+                f"got {pool_idle_ttl}."
+            )
+        if pool_max_size < 1:
+            raise ConfigurationError(
+                f"MCPRuntime(pool_max_size=...) must be >= 1, "
+                f"got {pool_max_size}."
+            )
         self._elicitation_handler = elicitation_handler
+        self._pool_idle_ttl = pool_idle_ttl
+        self._pool_max_size = pool_max_size
+        self._pool: dict[tuple[str, str], _PoolEntry] = {}
+        self._pool_lock = asyncio.Lock()
+        # Evicted handles close in short-lived tracked tasks so a pool
+        # access never pays another identity's disconnect latency;
+        # :meth:`aclose` awaits any still in flight (the teardown-leak
+        # gate contract).
+        self._teardown_tasks: set[asyncio.Task[None]] = set()
         self._handles: list[_ServerHandle] = []
         if local_server is not None:
             self._handles.append(
                 self._in_memory_handle(
-                    "@app.tool", local_server, namespace=None, prefix=False
+                    "@app.tool",
+                    local_server,
+                    namespace=None,
+                    prefix=False,
+                    elicitation_handler=elicitation_handler,
                 )
             )
         # Value-identical specs fold into one handle — the composite path
@@ -413,10 +586,24 @@ class MCPRuntime:
         await self.aclose()
 
     async def aclose(self) -> None:
-        """Close every connected handle (LIFO), aggregating teardown errors."""
+        """Close every connected handle (LIFO), aggregating teardown errors.
+
+        Pool entries close before the base handles they were cloned
+        from, and any in-flight eviction teardown tasks are awaited so
+        no client session task survives the runtime (the teardown-leak
+        gate contract).
+        """
+        pool_entries = list(self._pool.values())
+        self._pool.clear()
         async with AsyncExitStack() as stack:
             for handle in reversed(self._handles):
                 stack.push_async_callback(handle.aclose)
+            for entry in reversed(pool_entries):
+                stack.push_async_callback(entry.handle.aclose)
+        if self._teardown_tasks:
+            await asyncio.gather(
+                *self._teardown_tasks, return_exceptions=True
+            )
 
     async def list_tools(self) -> list[mcp.types.Tool]:
         """Merged inventory with namespace prefixes applied runtime-side.
@@ -517,13 +704,26 @@ class MCPRuntime:
         if spec.server is not None:
             key = spec.namespace or f"server:{spec.server.name}"
             return self._in_memory_handle(
-                key, spec.server, namespace=spec.namespace, prefix=spec.prefix
+                key,
+                spec.server,
+                namespace=spec.namespace,
+                prefix=spec.prefix,
+                elicitation_handler=self._elicitation_handler,
+                spec=spec,
             )
-        return self._remote_handle(spec.namespace or spec.url or "remote", spec)
+        return self._remote_handle(
+            spec.namespace or spec.url or "remote",
+            spec,
+            elicitation_handler=self._elicitation_handler,
+        )
 
-    def _remote_handle(self, key: str, spec: MCPServerSpecLike) -> _ServerHandle:
-        elicitation_handler = self._elicitation_handler
-
+    def _remote_handle(
+        self,
+        key: str,
+        spec: MCPServerSpecLike,
+        *,
+        elicitation_handler: ElicitationHandler | None,
+    ) -> _ServerHandle:
         def factory(invalidate: Callable[[], None]) -> Client[Any]:
             handler = _InventoryMessageHandler(invalidate)
             client = Client(
@@ -540,6 +740,7 @@ class MCPRuntime:
             prefix=spec.prefix,
             live_inventory=False,
             client_factory=factory,
+            spec=spec,
         )
 
     def _in_memory_handle(
@@ -549,9 +750,9 @@ class MCPRuntime:
         *,
         namespace: str | None,
         prefix: bool,
+        elicitation_handler: ElicitationHandler | None,
+        spec: MCPServerSpecLike | None = None,
     ) -> _ServerHandle:
-        elicitation_handler = self._elicitation_handler
-
         def factory(_invalidate: Callable[[], None]) -> Client[Any]:
             return Client(server, elicitation_handler=elicitation_handler)
 
@@ -561,4 +762,157 @@ class MCPRuntime:
             prefix=prefix,
             live_inventory=True,
             client_factory=factory,
+            spec=spec,
+            server=server,
+        )
+
+    # ------------------------------------------------------------------
+    # Identity pool
+    # ------------------------------------------------------------------
+
+    def _clone_handle(
+        self,
+        base: _ServerHandle,
+        *,
+        overlay: ServerCredentials | None,
+        elicitation_handler: ElicitationHandler | None,
+        pool_suffix: str,
+    ) -> _ServerHandle:
+        """Build a sibling of ``base`` carrying an overlay and/or handler.
+
+        Remote handles ride an :class:`_OverlaidSpec` (headers merged,
+        auth swapped) through the same transport construction as the
+        base; in-memory handles reconnect to the same ``FastMCP``
+        instance.  An overlay on an in-memory mount is a caller bug —
+        headers/auth have no transport to ride — and fails loud.
+        """
+        key = f"{base.key}#{pool_suffix}"
+        if base.server is not None:
+            if overlay is not None:
+                raise ConfigurationError(
+                    f"ServerCredentials for {base.key!r}: an in-memory "
+                    f"server= mount has no HTTP transport to carry "
+                    f"headers/auth."
+                )
+            return self._in_memory_handle(
+                key,
+                base.server,
+                namespace=base.namespace,
+                prefix=base.prefix,
+                elicitation_handler=elicitation_handler,
+                spec=base.spec,
+            )
+        assert base.spec is not None, "remote handles always carry their spec"
+        spec = (
+            _OverlaidSpec(base.spec, overlay) if overlay is not None else base.spec
+        )
+        return self._remote_handle(
+            key, spec, elicitation_handler=elicitation_handler
+        )
+
+    async def _acquire_entry(
+        self,
+        base: _ServerHandle,
+        identity_key: str,
+        *,
+        overlay: ServerCredentials | None,
+        elicitation_handler: ElicitationHandler | None,
+        conversation_scoped: bool = False,
+    ) -> _PoolEntry:
+        """Lease the pool entry for ``(base, identity_key)``, minting it
+        on first use.
+
+        Pairs with :meth:`_release_entry` (call in a ``finally``).  Every
+        acquisition sweeps expired idle entries and enforces the size
+        cap; evicted handles close in tracked background tasks so no
+        caller pays a stranger's disconnect latency.
+        """
+        now = time.monotonic()
+        key = (base.key, identity_key)
+        async with self._pool_lock:
+            self._sweep_locked(now)
+            entry = self._pool.get(key)
+            if entry is None:
+                if len(self._pool) >= self._pool_max_size:
+                    self._evict_oldest_idle_locked()
+                handle = self._clone_handle(
+                    base,
+                    overlay=overlay,
+                    elicitation_handler=elicitation_handler,
+                    pool_suffix=identity_key,
+                )
+                entry = _PoolEntry(
+                    handle=handle, conversation_scoped=conversation_scoped
+                )
+                self._pool[key] = entry
+            entry.active += 1
+            entry.last_used = now
+        return entry
+
+    def _release_entry(self, entry: _PoolEntry) -> None:
+        entry.active -= 1
+        entry.last_used = time.monotonic()
+
+    def _discard_entry(self, key: tuple[str, str], entry: _PoolEntry) -> None:
+        """Drop ``entry`` from the pool (connect-failure eviction).
+
+        Only removes the mapping when it still points at this entry —
+        a concurrent re-mint under the same key must not be clobbered.
+        The dead handle closes off-path like every eviction.
+        """
+        if self._pool.get(key) is entry:
+            del self._pool[key]
+        self._schedule_close(entry.handle)
+
+    def _sweep_locked(self, now: float) -> None:
+        expired = [
+            key
+            for key, entry in self._pool.items()
+            if entry.active == 0 and now - entry.last_used > self._pool_idle_ttl
+        ]
+        for key in expired:
+            self._schedule_close(self._pool.pop(key).handle)
+
+    def _evict_oldest_idle_locked(self) -> None:
+        idle = [
+            (entry.last_used, key)
+            for key, entry in self._pool.items()
+            if entry.active == 0
+        ]
+        if not idle:
+            raise ConfigurationError(
+                f"MCP identity pool is full ({self._pool_max_size} clients, "
+                f"all with calls in flight).  Raise "
+                f"MCPRuntime(pool_max_size=...) or reduce concurrent "
+                f"identities."
+            )
+        _, oldest = min(idle)
+        self._schedule_close(self._pool.pop(oldest).handle)
+
+    def _schedule_close(self, handle: _ServerHandle) -> None:
+        """Close an evicted handle in a tracked short-lived task."""
+
+        async def close() -> None:
+            try:
+                await handle.aclose()
+            except Exception:
+                logger.debug(
+                    "closing evicted pool client %r failed",
+                    handle.key,
+                    exc_info=True,
+                )
+
+        task = asyncio.create_task(close())
+        self._teardown_tasks.add(task)
+        task.add_done_callback(self._teardown_tasks.discard)
+
+    def client_counts(self) -> ClientCounts:
+        """Current client population — the pool-model assertion surface."""
+        conversation = sum(
+            1 for entry in self._pool.values() if entry.conversation_scoped
+        )
+        return ClientCounts(
+            static=len(self._handles),
+            identity=len(self._pool) - conversation,
+            conversation=conversation,
         )

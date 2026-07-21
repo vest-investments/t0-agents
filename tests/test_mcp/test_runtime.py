@@ -26,7 +26,9 @@ from t0_agents.glow import MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler
 from t0_agents.mcp.runtime import (
     MCPRuntime,
+    ServerCredentials,
     _InventoryMessageHandler,
+    _OverlaidSpec,
     _remote_transport,
     _ServerHandle,
 )
@@ -692,3 +694,273 @@ async def test_warm_call_costs_exactly_one_post() -> None:
             await runtime.call_tool("svc_echo", {"value": "warm"})
             after = counter.posts
     assert after - before == 1
+
+
+# ---------------------------------------------------------------------------
+# Identity pool — ServerCredentials, overlays, pool mechanics
+# ---------------------------------------------------------------------------
+
+
+class _StaticAuth(httpx.Auth):
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(self, request: httpx.Request) -> Any:
+        request.headers["X-Token"] = self._token
+        yield request
+
+
+class TestServerCredentials:
+    def test_same_material_same_key(self) -> None:
+        auth = _StaticAuth("t")
+        a = ServerCredentials(headers={"X-User": "u1"}, auth=auth)
+        b = ServerCredentials(headers={"X-User": "u1"}, auth=auth)
+        assert a.identity_key() == b.identity_key()
+
+    def test_header_value_changes_the_key(self) -> None:
+        a = ServerCredentials(headers={"X-User": "u1"})
+        b = ServerCredentials(headers={"X-User": "u2"})
+        assert a.identity_key() != b.identity_key()
+
+    def test_auth_instance_identity_changes_the_key(self) -> None:
+        a = ServerCredentials(auth=_StaticAuth("t"))
+        b = ServerCredentials(auth=_StaticAuth("t"))
+        assert a.identity_key() != b.identity_key()
+
+    def test_explicit_key_wins_over_fingerprint(self) -> None:
+        a = ServerCredentials(headers={"X-User": "u1"}, key="tenant-1")
+        b = ServerCredentials(headers={"X-User": "other"}, key="tenant-1")
+        assert a.identity_key() == b.identity_key() == "key:tenant-1"
+
+    def test_key_never_contains_credential_material(self) -> None:
+        cred = ServerCredentials(headers={"X-Secret": "hunter2"})
+        assert "hunter2" not in cred.identity_key()
+
+
+class TestOverlaidSpec:
+    def test_headers_merge_overlay_wins(self) -> None:
+        base = MCPServer(
+            url="https://example.com/mcp",
+            namespace="svc",
+            headers={"X-Static": "s", "X-User": "base"},
+            timeout=17.0,
+            elicits=True,
+        )._to_spec()
+        overlaid = _OverlaidSpec(
+            base, ServerCredentials(headers={"X-User": "u1"})
+        )
+        assert overlaid.headers == {"X-Static": "s", "X-User": "u1"}
+        assert overlaid.url == base.url
+        assert overlaid.transport == base.transport
+        assert overlaid.namespace == "svc"
+        assert overlaid.prefix is True
+        assert overlaid.timeout == 17.0
+        assert overlaid.elicits is True
+
+    def test_overlay_auth_replaces_base_auth(self) -> None:
+        base_auth = _StaticAuth("base")
+        overlay_auth = _StaticAuth("overlay")
+        base = MCPServer(
+            url="https://example.com/mcp", namespace="svc", auth=base_auth
+        )._to_spec()
+        assert _OverlaidSpec(base, ServerCredentials()).auth is base_auth
+        assert (
+            _OverlaidSpec(base, ServerCredentials(auth=overlay_auth)).auth
+            is overlay_auth
+        )
+
+
+class TestIdentityPool:
+    async def test_acquire_mints_once_per_identity(self) -> None:
+        runtime = MCPRuntime([_spec(_named_server("svc", "ping"), namespace="svc")])
+        base = runtime._handles[0]
+        cred_a = ServerCredentials(key="a")
+        cred_b = ServerCredentials(key="b")
+
+        first = await runtime._acquire_entry(
+            base, cred_a.identity_key(), overlay=None, elicitation_handler=None
+        )
+        second = await runtime._acquire_entry(
+            base, cred_a.identity_key(), overlay=None, elicitation_handler=None
+        )
+        other = await runtime._acquire_entry(
+            base, cred_b.identity_key(), overlay=None, elicitation_handler=None
+        )
+        try:
+            assert first is second
+            assert other is not first
+            counts = runtime.client_counts()
+            assert counts.static == 1
+            assert counts.identity == 2
+            assert counts.conversation == 0
+        finally:
+            for entry in (first, second, other):
+                runtime._release_entry(entry)
+            await runtime.aclose()
+
+    async def test_conversation_scoped_entries_counted_separately(self) -> None:
+        runtime = MCPRuntime([_spec(_named_server("svc", "ping"), namespace="svc")])
+        base = runtime._handles[0]
+        entry = await runtime._acquire_entry(
+            base,
+            "conv:c-1",
+            overlay=None,
+            elicitation_handler=None,
+            conversation_scoped=True,
+        )
+        try:
+            counts = runtime.client_counts()
+            assert counts.identity == 0
+            assert counts.conversation == 1
+        finally:
+            runtime._release_entry(entry)
+            await runtime.aclose()
+
+    async def test_idle_ttl_evicts_on_next_access(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(
+            "t0_agents.mcp.runtime.time.monotonic", lambda: clock["now"]
+        )
+        runtime = MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")],
+            pool_idle_ttl=10.0,
+        )
+        base = runtime._handles[0]
+        entry = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        runtime._release_entry(entry)
+        assert runtime.client_counts().identity == 1
+
+        clock["now"] += 11.0
+        fresh = await runtime._acquire_entry(
+            base, "key:b", overlay=None, elicitation_handler=None
+        )
+        try:
+            assert runtime.client_counts().identity == 1
+            assert ("svc", "key:a") not in runtime._pool
+        finally:
+            runtime._release_entry(fresh)
+            await runtime.aclose()
+
+    async def test_active_entry_survives_ttl_sweep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(
+            "t0_agents.mcp.runtime.time.monotonic", lambda: clock["now"]
+        )
+        runtime = MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")],
+            pool_idle_ttl=10.0,
+        )
+        base = runtime._handles[0]
+        held = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        clock["now"] += 11.0
+        other = await runtime._acquire_entry(
+            base, "key:b", overlay=None, elicitation_handler=None
+        )
+        try:
+            assert ("svc", "key:a") in runtime._pool
+        finally:
+            runtime._release_entry(held)
+            runtime._release_entry(other)
+            await runtime.aclose()
+
+    async def test_max_size_evicts_oldest_idle(self) -> None:
+        runtime = MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")],
+            pool_max_size=1,
+        )
+        base = runtime._handles[0]
+        first = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        runtime._release_entry(first)
+        second = await runtime._acquire_entry(
+            base, "key:b", overlay=None, elicitation_handler=None
+        )
+        try:
+            assert ("svc", "key:a") not in runtime._pool
+            assert ("svc", "key:b") in runtime._pool
+        finally:
+            runtime._release_entry(second)
+            await runtime.aclose()
+
+    async def test_pool_of_active_entries_fails_loud(self) -> None:
+        runtime = MCPRuntime(
+            [_spec(_named_server("svc", "ping"), namespace="svc")],
+            pool_max_size=1,
+        )
+        base = runtime._handles[0]
+        held = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        try:
+            with pytest.raises(ConfigurationError, match="pool_max_size"):
+                await runtime._acquire_entry(
+                    base, "key:b", overlay=None, elicitation_handler=None
+                )
+        finally:
+            runtime._release_entry(held)
+            await runtime.aclose()
+
+    async def test_discard_entry_only_removes_same_object(self) -> None:
+        runtime = MCPRuntime([_spec(_named_server("svc", "ping"), namespace="svc")])
+        base = runtime._handles[0]
+        entry = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        runtime._release_entry(entry)
+        runtime._discard_entry(("svc", "key:a"), entry)
+        assert ("svc", "key:a") not in runtime._pool
+
+        fresh = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        runtime._release_entry(fresh)
+        runtime._discard_entry(("svc", "key:a"), entry)  # stale object
+        try:
+            assert runtime._pool[("svc", "key:a")] is fresh
+        finally:
+            await runtime.aclose()
+
+    async def test_overlay_on_in_memory_mount_fails_loud(self) -> None:
+        runtime = MCPRuntime([_spec(_named_server("svc", "ping"), namespace="svc")])
+        base = runtime._handles[0]
+        with pytest.raises(ConfigurationError, match="in-memory"):
+            await runtime._acquire_entry(
+                base,
+                "key:a",
+                overlay=ServerCredentials(headers={"X-User": "u"}),
+                elicitation_handler=None,
+            )
+        await runtime.aclose()
+
+    async def test_pooled_calls_work_and_close_without_task_leaks(self) -> None:
+        before = set(asyncio.all_tasks())
+        runtime = MCPRuntime([_spec(_named_server("svc", "ping"), namespace="svc")])
+        base = runtime._handles[0]
+        entry = await runtime._acquire_entry(
+            base, "key:a", overlay=None, elicitation_handler=None
+        )
+        try:
+            result = await entry.handle.call(
+                "ping", {}, timeout=None, progress_handler=None
+            )
+            assert result.data == "svc:ping"
+        finally:
+            runtime._release_entry(entry)
+            await runtime.aclose()
+        leaked = set(asyncio.all_tasks()) - before
+        assert leaked == set()
+
+    def test_pool_knob_validation(self) -> None:
+        with pytest.raises(ConfigurationError, match="pool_idle_ttl"):
+            MCPRuntime([], pool_idle_ttl=0.0)
+        with pytest.raises(ConfigurationError, match="pool_max_size"):
+            MCPRuntime([], pool_max_size=0)
