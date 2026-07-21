@@ -221,6 +221,27 @@ apps that assume a library import is inert.
 These are FastMCP behaviors, not t0-agents policy — t0-agents neither
 suppresses nor re-exposes them.
 
+## fastmcp version compatibility
+
+t0-agents declares `fastmcp>=3.2.3` and **locks 3.2.4** (`uv.lock`) — the
+version vest-ai runs in production, so CI exercises exactly what prod does.
+The tested range is **3.2.3–3.2.4**; the two are equivalent for every
+FastMCP / MCP surface t0-agents depends on (client concurrency, transport
+factories, the elicitation and task-notification wiring, `call_tool` /
+`list_tools`, session-termination handling).
+
+The `>=3.2.3` floor is a floor, not an endorsement of every later release.
+FastMCP's versioning allows **breaking changes in minor releases**, so a
+`3.3` / `3.4` bump can move surfaces t0-agents relies on. Treat those
+minors as unvetted until audited against the installed source and this test
+suite; the committed lock is the version t0-agents is validated against,
+and `uv sync` installs it regardless of what the floor would otherwise
+resolve.
+
+`fastmcp.server.auth` is documented upstream as unstable even across patch
+releases; t0-agents does not import it, so its churn does not affect this
+library.
+
 ## Rate limits and quotas
 
 t0-agents intentionally does **not** auto-retry on `HTTP 429` from the
