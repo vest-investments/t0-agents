@@ -62,7 +62,12 @@ companions live under [`examples/glow/`](../../examples/glow/).
    `agent.conversation()` / `send()`, the pinned `conv.id ==
    episode_id`, `conv.transcript`, memory-strategy-aware history,
    `hydrate=` resume, and `app.conversations(...)` listing.
-7. **[Known limitations](limitations.md)** — what's deferred to
+7. **[Multi-tenant apps](multi-tenant.md)** — identity per
+   conversation: `conversation(auth= / elicitation_handler= / memory=
+   / tools=)` over ONE long-lived App, the `(server, identity)` client
+   pool, `elicits=True` routing, credential rotation, and the
+   migration from one-App-per-tenant.
+8. **[Known limitations](limitations.md)** — what's deferred to
    v1.1: streaming JSON, per-agent MCP subsets, AsyncIterator tools,
    sync API.
 

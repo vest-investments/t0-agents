@@ -62,6 +62,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   on first call; `[]` when the App mounts none), replacing the private
   `app._owned_client.list_tools()` idiom.  `refresh=True` drops the per-server
   TTL caches and re-lists.
+- **Identity per conversation — multi-tenant apps over ONE long-lived App.**
+  `conversation()` gains the identity dimension: `auth=` maps mounted server
+  namespaces to per-conversation credentials (a headers mapping, an
+  `httpx.Auth`, or the new `ServerCredentials` — exported from
+  `t0_agents.glow`); `elicitation_handler=` (an `ElicitationForwarder` or any
+  bare handler; rebindable between turns) routes HITL prompts to THIS
+  conversation; `memory=` swaps the memory provider per conversation
+  (tenant `tag_filter` scoping, hydrate included); `tools=` narrows tool
+  visibility per conversation with the `@app.agent(tools=)` grammar,
+  intersected with the agent's own filter.  The runtime pools warm clients
+  by `(server, identity)` — fingerprinted credentials, idle-TTL eviction,
+  a size cap that never tears down an in-flight client — and `elicits=True`
+  mounts (new `MCPServer` field) get one private client per conversation,
+  the only scoping that cannot misroute a confirmation (the SDK discards
+  the elicit↔call correlation id).  A conversation passing none of these
+  behaves exactly as before.  Documented in the new
+  `docs/glow/multi-tenant.md` chapter (with the one-App-per-tenant
+  migration).
+- **In-stream elicitation emission is live for conversation-scoped HITL.**
+  Passing `conversation(elicitation_handler=<ElicitationForwarder>)` emits
+  `ElicitationRequestedEvent` / `ElicitationResolvedEvent` on the run's
+  stream with `id` equal to the forwarder's own `elicitation_id` — the id an
+  out-of-band resolver answers — via the new optional
+  `ElicitationForwarder(observer=...)` seam (rebindable; observers are
+  best-effort and can never break a confirm).  Bare handlers emit with a
+  glow-minted id.
+- **Per-run `Agent.invoke(tool_provider=…, memory=…)` overrides.**  A shared
+  `Agent` can run one invocation against a different tool provider (re-wrapped
+  with the agent's `SubAgentToolProvider` delegation layer) and a different
+  memory provider — the injection seam conversation identity rides, usable
+  from the base API too.  `MCPRuntime` gains `for_conversation(...)` views,
+  `client_counts()`, and `pool_idle_ttl=` / `pool_max_size=` knobs.
 
 ### Fixed
 
