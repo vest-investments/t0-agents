@@ -360,13 +360,25 @@ class _ServerHandle:
         return tool_name
 
     async def connect(self) -> None:
-        """Enter the client on first use; concurrent callers share one enter."""
+        """Enter the client on first use; concurrent callers share one enter.
+
+        An enter that fails — including one *cancelled* mid-handshake by
+        a caller's deadline — leaves the client half-entered, and fastmcp
+        clients must never be re-entered from that state (the next enter
+        wedges, turning a transient outage into a permanent one).  The
+        except arm re-mints while still holding the lock, so no queued
+        caller can ever observe the tainted client.
+        """
         if self._connected:
             return
         async with self._lock:
             if self._connected:
                 return
-            await self._stack.enter_async_context(self.client)
+            try:
+                await self._stack.enter_async_context(self.client)
+            except BaseException:
+                self._remint_locked()
+                raise
             self._connected = True
 
     async def aclose(self) -> None:
@@ -442,6 +454,21 @@ class _ServerHandle:
                 name, arguments, timeout=timeout, progress_handler=progress_handler
             )
 
+    def _remint_locked(self) -> tuple[bool, AsyncExitStack]:
+        """Swap in a factory-fresh client and stack; caller holds ``_lock``.
+
+        Returns ``(was_connected, stale_stack)`` so a caller that
+        replaced a live session can close the old stack outside the lock.
+        """
+        self._generation += 1
+        self._cache = None
+        was_connected = self._connected
+        self._connected = False
+        stale_stack = self._stack
+        self._stack = AsyncExitStack()
+        self.client = self._client_factory(self.invalidate)
+        return was_connected, stale_stack
+
     async def rebuild_if(self, generation: int) -> None:
         """Replace the client after a session-terminated error.
 
@@ -452,13 +479,7 @@ class _ServerHandle:
         async with self._lock:
             if self._generation != generation:
                 return
-            self._generation += 1
-            self._cache = None
-            was_connected = self._connected
-            self._connected = False
-            stale_stack = self._stack
-            self._stack = AsyncExitStack()
-            self.client = self._client_factory(self.invalidate)
+            was_connected, stale_stack = self._remint_locked()
         # The stale stack is independent of the rebuilt state — close it
         # outside the lock so a slow dead-session teardown (bounded by the
         # client disconnect timeout) never blocks connects to the fresh

@@ -594,6 +594,94 @@ async def test_refresh_surfaces_server_side_tool_additions() -> None:
     assert refreshed == {"svc_first", "svc_second"}
 
 
+# --- Inventory fan-out resilience --------------------------------------------
+
+
+class _WedgeableClient:
+    """Stub whose ``__aenter__`` can hang until cancelled, or raise."""
+
+    def __init__(
+        self, *, hang_enter: bool = False, enter_error: Exception | None = None
+    ) -> None:
+        self.hang_enter = hang_enter
+        self.enter_error = enter_error
+        self.enter_calls = 0
+
+    async def __aenter__(self) -> _WedgeableClient:
+        self.enter_calls += 1
+        if self.hang_enter:
+            await asyncio.Event().wait()
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def list_tools(self) -> list[mcp.types.Tool]:
+        return [mcp.types.Tool(name="stub_tool", inputSchema={"type": "object"})]
+
+
+class _MintPlan:
+    """Client factory handing out ``clients`` in order, recording mints."""
+
+    def __init__(self, *clients: _WedgeableClient) -> None:
+        self._pending = list(clients)
+        self.minted: list[_WedgeableClient] = []
+
+    def __call__(self, _invalidate: Callable[[], None]) -> Any:
+        client = self._pending.pop(0) if self._pending else _WedgeableClient()
+        self.minted.append(client)
+        return client
+
+
+def _planned_handle(plan: _MintPlan) -> _ServerHandle:
+    return _ServerHandle(
+        "wedge",
+        namespace=None,
+        prefix=False,
+        live_inventory=False,
+        client_factory=plan,  # type: ignore[arg-type]
+    )
+
+
+async def test_connect_remints_after_a_cancelled_enter() -> None:
+    """A deadline that cancels a wedged handshake must not leave the
+    half-entered client behind — the next caller would re-enter it and
+    turn a transient outage into a permanent wedge."""
+    wedged = _WedgeableClient(hang_enter=True)
+    plan = _MintPlan(wedged, _WedgeableClient())
+    handle = _planned_handle(plan)
+    generation = handle._generation
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(handle.connect(), timeout=0.1)
+
+    assert handle.client is not wedged
+    assert handle._generation == generation + 1
+    assert not handle._connected
+
+    await asyncio.wait_for(handle.connect(), timeout=1.0)
+    assert handle._connected
+    assert wedged.enter_calls == 1
+
+
+async def test_connect_remints_after_a_failed_enter() -> None:
+    failing = _WedgeableClient(enter_error=ConnectionError("refused"))
+    plan = _MintPlan(failing, _WedgeableClient())
+    handle = _planned_handle(plan)
+
+    with pytest.raises(ConnectionError):
+        await handle.connect()
+
+    assert handle.client is not failing
+    assert not handle._connected
+
+    await asyncio.wait_for(handle.connect(), timeout=1.0)
+    assert handle._connected
+    assert failing.enter_calls == 1
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 
