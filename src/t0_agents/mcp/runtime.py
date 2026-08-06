@@ -73,9 +73,20 @@ _POOL_MAX_SIZE = 1024
 # streamable_http.py `_send_session_terminated_error`.
 _SESSION_TERMINATED_CODE = 32600
 
+# A server whose SDK predates that mapping rejects an unknown session id
+# with a bare 400 instead.  Not an SDK contract but an observed server
+# behaviour (mcp-customers, staging and prod), and it never reaches the
+# JSON-RPC layer — the transport raises for status first, so this shape
+# arrives as `httpx.HTTPStatusError`.
+_SESSION_REJECTED_STATUS = 400
+
 
 def _is_session_terminated(error: McpError) -> bool:
     return error.error.code == _SESSION_TERMINATED_CODE
+
+
+def _is_session_rejected(error: httpx.HTTPStatusError) -> bool:
+    return error.response.status_code == _SESSION_REJECTED_STATUS
 
 
 class _InventoryMessageHandler(TaskNotificationHandler):
@@ -439,11 +450,20 @@ class _ServerHandle:
     ) -> Any:
         """Execute one call, resending it at most once on session loss.
 
-        A session-terminated error means the server rejected the POST at
-        the session layer — the request provably never dispatched, so one
-        re-send on a rebuilt client is safe even for non-idempotent
-        (order-write) tools.  Any other failure, including timeouts and
-        mid-call stream deaths, propagates: the call MAY have executed.
+        A session-*terminated* error is synthesised per rejected POST and
+        carries this request's own id, so the request provably never
+        dispatched and one re-send on a rebuilt client is safe even for
+        non-idempotent (order-write) tools.
+
+        A session-*rejection* carries no such attribution: the bare 400
+        tears the whole transport down, so every call in flight on this
+        handle raises it — including one the server already dispatched
+        and ran.  The two are indistinguishable from here, so the handle
+        is rebuilt (without it the dead client is reused and every later
+        call fails too) but the call is never resent.
+
+        Any other failure, including timeouts and mid-call stream deaths,
+        propagates: the call MAY have executed.
         """
         await self.connect()
         generation = self._generation
@@ -465,6 +485,18 @@ class _ServerHandle:
             return await self.client.call_tool(
                 name, arguments, timeout=timeout, progress_handler=progress_handler
             )
+        except httpx.HTTPStatusError as error:
+            if not _is_session_rejected(error):
+                raise
+            logger.warning(
+                "MCP session for %r rejected with HTTP %d; rebuilding "
+                "client without resending %r",
+                self.key,
+                error.response.status_code,
+                name,
+            )
+            await self.rebuild_if(generation)
+            raise
 
     def _remint_locked(self) -> tuple[bool, AsyncExitStack]:
         """Swap in a factory-fresh client and stack; caller holds ``_lock``.

@@ -519,6 +519,43 @@ class _SessionKiller:
         return wrapper
 
 
+class _SessionRejector:
+    """ASGI wrapper that answers the next N POSTs with a bare HTTP error.
+
+    At the default 400 this is the shape ``mcp-customers`` returns for an
+    unknown session id — its SDK predates the spec's 404 mapping, so the
+    rejection never reaches the JSON-RPC layer and arrives as an
+    ``httpx.HTTPStatusError`` instead.  (The 404 sibling, which the SDK
+    *does* map to code 32600, is :class:`_SessionKiller`.)
+    """
+
+    def __init__(self, status: int = 400) -> None:
+        self.status = status
+        self.reject_next_posts = 0
+
+    def wrap(self, app: Any) -> Any:
+        async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+            if (
+                scope["type"] == "http"
+                and scope["method"] == "POST"
+                and self.reject_next_posts > 0
+            ):
+                self.reject_next_posts -= 1
+                body = b"No valid session ID provided"
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": self.status,
+                        "headers": [(b"content-length", str(len(body)).encode())],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+            await app(scope, receive, send)
+
+        return wrapper
+
+
 def _counting_server(executions: list[str]) -> FastMCP[Any]:
     server: FastMCP[Any] = FastMCP("flaky")
 
@@ -577,6 +614,123 @@ async def test_non_session_errors_never_resend() -> None:
             await asyncio.sleep(1.5)
 
     assert executions == ["work", "slow"]
+    assert handle.client is client_before
+
+
+async def test_session_rejection_never_reaches_the_json_rpc_layer() -> None:
+    """A bare 400 dies in the transport, so the 32600 arm cannot see it.
+
+    ``mcp-customers`` rejects an unknown session id this way.  The
+    transport calls ``raise_for_status`` before anything is decoded as
+    JSON-RPC, so the caller gets an ``httpx.HTTPStatusError`` and never an
+    ``McpError`` — which is why the recovery keys on the status rather
+    than on a widened :func:`_is_session_terminated`.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        runtime = MCPRuntime([spec])
+        try:
+            await runtime.call_tool("svc_work", {})
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError) as excinfo:
+                await runtime.call_tool("svc_work", {})
+        finally:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert excinfo.value.response.status_code == 400
+    assert executions == ["work"]
+
+
+async def test_session_rejection_rebuilds_the_handle_and_unpoisons_it() -> None:
+    """The production symptom, in one test.
+
+    Without the rebuild the torn-down client is reused, so every later
+    call on this handle fails too — the pool entry heals only on its idle
+    TTL or a process restart.  The rejected call itself still raises: it
+    is not resent.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            original_client = handle.client
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError):
+                await runtime.call_tool("svc_work", {})
+
+            assert handle.client is not original_client
+            recovered = await runtime.call_tool("svc_work", {})
+
+    assert recovered.data == "done"
+    assert executions == ["work", "work"]
+
+
+async def test_a_dispatched_call_is_never_resent_on_rejection() -> None:
+    """The safety property behind the no-resend rule.
+
+    Tearing the transport down fails every request in flight, so a call
+    the server already dispatched raises the *same* 400 as the one that
+    was actually rejected.  Resending on this shape would re-run a tool
+    that already executed — for an order write, a duplicate trade.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+
+            dispatched = asyncio.create_task(runtime.call_tool("svc_slow", {}))
+            while "slow" not in executions:
+                await asyncio.sleep(0.02)
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError):
+                await runtime.call_tool("svc_work", {})
+            with pytest.raises(httpx.HTTPStatusError):
+                await dispatched
+            await asyncio.sleep(1.5)
+
+    assert executions == ["work", "slow"]
+
+
+async def test_non_400_http_errors_leave_the_handle_alone() -> None:
+    """Only the session-rejection status rebuilds.  A 503 in front of the
+    server is not a lost session: it propagates, handle untouched."""
+    executions: list[str] = []
+    rejector = _SessionRejector(status=503)
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        runtime = MCPRuntime([spec])
+        try:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            client_before = handle.client
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError) as excinfo:
+                await runtime.call_tool("svc_work", {})
+        finally:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert excinfo.value.response.status_code == 503
     assert handle.client is client_before
 
 
