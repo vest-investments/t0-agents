@@ -59,6 +59,12 @@ logger = logging.getLogger(__name__)
 
 _TOOL_LIST_TTL_SECONDS = 60.0
 
+# Per-handle deadline on the list_tools() fan-out.  Deliberately NOT
+# derived from ``spec.timeout`` — that is the per-server httpx read
+# window, sized for slow tool calls (2400 s where an elicit wait must
+# clear), which as an inventory deadline would be no deadline at all.
+_TOOL_LIST_TIMEOUT_SECONDS = 10.0
+
 _POOL_IDLE_TTL_SECONDS = 900.0
 _POOL_MAX_SIZE = 1024
 
@@ -503,6 +509,10 @@ class MCPRuntime:
     entry is evicted to make room — if every entry has a call in
     flight, acquisition fails loud rather than tearing a live client
     down.
+
+    ``tool_list_timeout`` bounds each handle's share of the
+    :meth:`list_tools` fan-out; see that method for the degradation
+    order when a server cannot answer within it.
     """
 
     def __init__(
@@ -513,6 +523,7 @@ class MCPRuntime:
         elicitation_handler: ElicitationHandler | None = None,
         pool_idle_ttl: float = _POOL_IDLE_TTL_SECONDS,
         pool_max_size: int = _POOL_MAX_SIZE,
+        tool_list_timeout: float = _TOOL_LIST_TIMEOUT_SECONDS,
     ) -> None:
         if pool_idle_ttl <= 0:
             raise ConfigurationError(
@@ -524,6 +535,12 @@ class MCPRuntime:
                 f"MCPRuntime(pool_max_size=...) must be >= 1, "
                 f"got {pool_max_size}."
             )
+        if tool_list_timeout <= 0:
+            raise ConfigurationError(
+                f"MCPRuntime(tool_list_timeout=...) must be positive, "
+                f"got {tool_list_timeout}."
+            )
+        self._tool_list_timeout = tool_list_timeout
         self._elicitation_handler = elicitation_handler
         self._pool_idle_ttl = pool_idle_ttl
         self._pool_max_size = pool_max_size

@@ -964,6 +964,8 @@ class TestIdentityPool:
             MCPRuntime([], pool_idle_ttl=0.0)
         with pytest.raises(ConfigurationError, match="pool_max_size"):
             MCPRuntime([], pool_max_size=0)
+        with pytest.raises(ConfigurationError, match="tool_list_timeout"):
+            MCPRuntime([], tool_list_timeout=0.0)
 
 
 # ---------------------------------------------------------------------------
