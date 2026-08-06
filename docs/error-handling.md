@@ -142,6 +142,14 @@ a day of confusion:
 | 3. httpx read window | `MCPServer(timeout=)` on a glow `url` mount | Maximum **silent gap between bytes** on the remote HTTP hop. **Any** SSE frame the server emits — progress, log message, elicitation request — resets it, so a heartbeating server can hold a small window open indefinitely. | 300 s read (SDK `httpx.Timeout(30.0, read=300.0)`) |
 | 4. Proxy inner hop | — (pre-runtime; see note) | A glow `url` mount proxies through a fresh inner client per call. The inner call has **no per-call deadline**; only layer 3 governs the wire. | — |
 
+The **tool-inventory fan-out** has a fifth, separate layer: none of the above
+covers `list_tools()` (layer 1 binds `call_tool` only, and a swallowed read
+timeout leaves nothing to resolve the request), so each handle's share of the
+fan-out is bounded by `MCPRuntime(tool_list_timeout=)`. A server that cannot
+answer within it degrades — its last-known inventory is served, or it is
+excluded if it never answered — instead of hanging the merge for every
+conversation in the process.
+
 Two ground truths worth committing to memory (mcp SDK 1.27.0, source-verified):
 
 - **A dead request stream is a hang, not an error.** When layer 3 fires
@@ -150,7 +158,9 @@ Two ground truths worth committing to memory (mcp SDK 1.27.0, source-verified):
   its SSE events (requires a server-side event store) — the request future
   simply never resolves. With `tool_timeout=None` and no session default,
   that is an infinite hang. Pair a small read window with a per-call deadline,
-  or make the server heartbeat.
+  or make the server heartbeat. The inventory fan-out is the one path with
+  its own backstop against this (`tool_list_timeout` above); a tool *call*
+  still needs the pairing.
 - **Stream resumption exists but needs server support.** The SDK client
   auto-reconnects a dropped request stream via GET + `Last-Event-ID` when it
   has seen at least one `id:`-bearing event (independent of the

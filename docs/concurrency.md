@@ -32,6 +32,10 @@ Tool inventories are likewise per-server, not per-conversation: remote
 `list_tools` results cache for 60 seconds (invalidated early by
 `tools/list_changed` notifications), so per-turn tool listing does not
 multiply with conversation count.  In-memory servers stay live-linked.
+Because those handles are process-shared, the inventory fan-out is also
+bounded per server (`MCPRuntime(tool_list_timeout=)`, default 10 s): an
+unreachable server degrades to its last-known inventory — or is skipped
+if it never answered — rather than blocking every conversation's turn.
 
 Identity is a **conversation dimension** on top of this model:
 `conversation(auth=...)` pools additional warm clients by
