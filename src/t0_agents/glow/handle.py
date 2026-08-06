@@ -528,21 +528,22 @@ class FluentRun(Generic[T]):
     # ------------------------------------------------------------------
 
     def _require_run(self) -> Run[Any]:
-        """Return the built :class:`Run`, or raise if not yet consumed.
+        """Return the family's built :class:`Run`, or raise if not yet consumed.
 
         ``cost`` / ``usage`` / ``feedback`` / ``fork`` operate on the
-        underlying Run, which exists only once this FluentRun has been
-        consumed (``await`` it, iterate ``.events()``, or call
-        ``.result()``).  Reaching for them earlier is a programming
-        error — raise clearly rather than silently kick off a hidden run.
+        underlying Run, which exists only once this FluentRun — or any
+        handle derived from it — has been consumed (``await`` it, iterate
+        ``.events()``, or call ``.result()``).  Reaching for them earlier
+        is a programming error — raise clearly rather than silently kick
+        off a hidden run.
         """
-        if self._run is None:
+        if self._lineage.run is None:
             raise ConfigurationError(
                 "FluentRun: cost()/usage()/feedback()/fork() are available "
                 "only after the run has been consumed — `await` the run, "
                 "iterate `.events()`, or call `.result()` first."
             )
-        return self._run
+        return self._lineage.run
 
     def cost(self) -> float:
         """Aggregate cost (USD) of the underlying Run.  See :meth:`Run.cost`."""

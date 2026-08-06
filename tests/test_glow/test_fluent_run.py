@@ -428,6 +428,16 @@ async def test_escape_hatch_delegates_after_run() -> None:
     assert fake.feedback_calls == [("thumbs_up", 1.0, "inference", None)]
 
 
+async def test_escape_hatch_reads_the_family_run() -> None:
+    fake = _FakeRun(value="v")
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+
+    await fr.text()  # consume a DERIVED handle; the root builds nothing itself
+
+    assert fr.consumed is True
+    assert fr.cost() == 0.42  # the root serves the family's run, not a raise
+
+
 # ---------------------------------------------------------------------------
 # M5 streaming surface — on_error flip, stream_text, statuses
 # ---------------------------------------------------------------------------
