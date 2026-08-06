@@ -79,8 +79,12 @@ the process.  Compared to composing servers by hand:
   a warning.
 - **Session-loss recovery.**  A server rollout that terminates warm
   sessions is absorbed: the runtime rebuilds the client and re-sends the
-  rejected call exactly once (safe — the server rejected it before
-  dispatch).
+  rejected call exactly once (safe — the rejection carries that
+  request's own id, so it provably never dispatched).  A server whose
+  SDK predates that mapping rejects with a bare HTTP 400 instead, which
+  fails *every* call in flight on the handle; the client is still
+  rebuilt so later calls recover, but nothing is re-sent.  See
+  [error-handling](error-handling.md#session-loss).
 
 Authenticated mounts (`headers=`/`auth=`) and per-agent `tools=`
 filtering are covered in

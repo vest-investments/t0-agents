@@ -37,8 +37,9 @@ endpoints each become a direct, long-lived `fastmcp.Client` handle
 (HTTP, SSE — the transport is inferred from the URL unless `headers=` /
 `auth=` are set; see below).  Remote connections are warm — the
 handshake happens once per server, not once per call — and a
-rolled/expired server session is rebuilt transparently with at most one
-safe re-send of the rejected call.  Duplicate final tool names across
+rolled/expired server session is rebuilt transparently, with at most one
+safe re-send of the rejected call (some rejection shapes rebuild without
+re-sending — see [error handling](../error-handling.md#session-loss)).  Duplicate final tool names across
 mounts fail loud at build time.
 
 Every glow agent on a given `App` sees every mounted server by default.

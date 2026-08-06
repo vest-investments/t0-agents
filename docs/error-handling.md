@@ -183,6 +183,32 @@ Rules of thumb:
 
 ---
 
+## Session loss
+
+A server that rolls invalidates the warm session behind every handle
+pointing at it. Two shapes reach the runtime, and they recover
+differently:
+
+| Shape | Reaches the runtime as | Recovery |
+|-------|------------------------|----------|
+| HTTP 404 — the spec mapping | `McpError`, code `32600` | rebuild the client, re-send the call once |
+| bare HTTP 400 — older server SDKs | `httpx.HTTPStatusError` | rebuild the client, **propagate** |
+
+The asymmetry is a safety property, not an oversight. The SDK
+synthesises the `32600` error *per rejected POST*, so it carries that
+request's own id and the call provably never dispatched — re-sending is
+safe even for a non-idempotent order write. A bare 400 instead tears the
+whole transport down, failing every call in flight on that handle,
+including one the server already dispatched and ran. The two are
+indistinguishable from the client, so the call is never re-sent; only
+the handle is rebuilt, which is what stops the *next* call from
+inheriting a dead client.
+
+A propagated rejection lands in the taxonomy's catch-all row above:
+`"ERROR: unexpected HTTPStatusError: …"`.
+
+---
+
 ## Examples
 
 ### Easy -- basic try/except
