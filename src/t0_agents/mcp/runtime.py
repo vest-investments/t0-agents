@@ -663,13 +663,48 @@ class MCPRuntime:
         namespace, verbatim otherwise.  A final name provided by two
         handles raises :class:`ConfigurationError` — the composite silently
         forwarded duplicates to inference.
+
+        Each handle gets ``tool_list_timeout`` seconds of the fan-out.
+        Handles are process-shared, so one server that cannot answer
+        would otherwise hang every conversation's turn; instead it
+        degrades: its last-known inventory is served (ignoring the TTL),
+        and a handle that has never answered is excluded from this
+        merge.  The accepted cost is staleness — a tool added to a
+        server while it is unreachable stays invisible until it answers
+        again.  An unreachable server never raises; a genuine name
+        collision still does.
         """
         per_handle = await asyncio.gather(
-            *(handle.tools() for handle in self._handles)
+            *(
+                asyncio.wait_for(handle.tools(), self._tool_list_timeout)
+                for handle in self._handles
+            ),
+            return_exceptions=True,
         )
         merged: list[mcp.types.Tool] = []
         owners: dict[str, str] = {}
-        for handle, tools in zip(self._handles, per_handle, strict=True):
+        for handle, result in zip(self._handles, per_handle, strict=True):
+            if isinstance(result, BaseException):
+                fallback = handle._last_known
+                if fallback is None:
+                    logger.warning(
+                        "MCP server %r did not answer list_tools (%r) and "
+                        "has no prior inventory; excluding it from this "
+                        "merge",
+                        handle.key,
+                        result,
+                    )
+                    continue
+                logger.warning(
+                    "MCP server %r did not answer list_tools (%r); serving "
+                    "its last-known inventory (%d tools)",
+                    handle.key,
+                    result,
+                    len(fallback),
+                )
+                tools = fallback
+            else:
+                tools = result
             for tool in tools:
                 final = handle.public_name(tool.name)
                 other = owners.get(final)

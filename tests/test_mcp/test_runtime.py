@@ -9,8 +9,10 @@ here or not at all.
 from __future__ import annotations
 
 import asyncio
+import logging
+import socket
 from collections.abc import AsyncIterator, Callable, Generator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import httpx
@@ -694,6 +696,98 @@ async def test_last_known_inventory_survives_invalidate() -> None:
 
     assert handle._cache is None
     assert handle._last_known is tools
+
+
+def _refused_url() -> str:
+    """A URL on a just-released local port — connects are refused fast."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"http://127.0.0.1:{port}/mcp"
+
+
+@asynccontextmanager
+async def _killable_http_server(server: FastMCP[Any]) -> AsyncIterator[str]:
+    """Ephemeral uvicorn that force-exits on teardown — for tests whose
+    runtime deliberately outlives the server (graceful shutdown would
+    wait forever on the warm client's standing GET stream)."""
+    uvicorn = pytest.importorskip("uvicorn")
+
+    config = uvicorn.Config(
+        server.http_app(path="/mcp"),
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        lifespan="on",
+    )
+    http = uvicorn.Server(config)
+    serve_task = asyncio.create_task(http.serve())
+    try:
+        while not http.started:
+            await asyncio.sleep(0.02)
+        port = http.servers[0].sockets[0].getsockname()[1]
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        http.should_exit = True
+        http.force_exit = True
+        await serve_task
+
+
+async def test_list_tools_excludes_a_server_that_never_answered(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unreachable server with no prior inventory degrades to
+    exclusion — the healthy servers' tools still come back and nothing
+    raises."""
+    dead = MCPServer(url=_refused_url(), namespace="dark")._to_spec()
+    healthy = _spec(_named_server("mem", "probe"), namespace="mem")
+
+    async with asyncio.timeout(15):
+        async with MCPRuntime([healthy, dead], tool_list_timeout=2.0) as runtime:
+            with caplog.at_level(logging.WARNING, logger="t0_agents.mcp.runtime"):
+                names = {tool.name for tool in await runtime.list_tools()}
+
+    assert names == {"mem_probe"}
+    assert any(
+        "'dark'" in record.message and "no prior inventory" in record.message
+        for record in caplog.records
+    )
+
+
+async def test_list_tools_serves_last_known_after_the_server_dies(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A server that answered before keeps contributing its last-known
+    tools while unreachable — the incident shape: mcp-fred served for
+    weeks, then dropped out of rotation mid-conversation."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+
+    runtime: MCPRuntime | None = None
+    try:
+        async with asyncio.timeout(30):
+            async with _killable_http_server(_named_server("rsrv", "hello")) as url:
+                spec = MCPServer(url=url, namespace="svc")._to_spec()
+                runtime = MCPRuntime([spec], tool_list_timeout=2.0)
+                primed = {tool.name for tool in await runtime.list_tools()}
+
+            clock.value += 61.0
+            with caplog.at_level(logging.WARNING, logger="t0_agents.mcp.runtime"):
+                degraded = {tool.name for tool in await runtime.list_tools()}
+    finally:
+        # Closing a client whose server is gone raises from the
+        # session-terminate hop — teardown noise, not this contract.
+        if runtime is not None:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert primed == {"svc_hello"}
+    assert degraded == {"svc_hello"}
+    assert any(
+        "'svc'" in record.message and "last-known inventory" in record.message
+        for record in caplog.records
+    )
 
 
 # --- Concurrency, teardown, and efficiency battery ---------------------------
