@@ -75,6 +75,17 @@ carry spec-level credentials sufficient to list; per-conversation
 an eliciting in-memory server via `MCPServer(server=..., elicits=True)`
 instead.  See [Multi-tenant apps](multi-tenant.md).
 
+## An unreachable server serves a degraded inventory
+
+The inventory fan-out gives each server `tool_list_timeout` seconds
+(default 10, an `MCPRuntime` knob).  A server that cannot answer in
+time contributes its **last-known** inventory — so a tool added while
+it is unreachable stays invisible until it answers again — and a
+server that has *never* answered is excluded from that merge entirely,
+with a warning.  Agents keep running on the degraded list; nothing
+raises and nothing blocks.  If your app must fail loud when a specific
+server is absent, assert on the merged tool list at boot.
+
 ## No `AsyncIterator` tools
 
 The plan flagged `AsyncIterator[str]` tool returns as a future

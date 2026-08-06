@@ -71,6 +71,12 @@ the process.  Compared to composing servers by hand:
 - **Cached inventories.**  Remote `list_tools` results cache for 60 s per
   server, invalidated early by `tools/list_changed`; in-memory servers
   stay live-linked.
+- **Bounded fan-out.**  Each server gets `tool_list_timeout` seconds
+  (default 10) of the inventory fan-out.  A server that cannot answer
+  degrades instead of blocking the merge: its last-known inventory is
+  served (a tool added while it is unreachable stays invisible until it
+  answers again), and a server that has never answered is skipped with
+  a warning.
 - **Session-loss recovery.**  A server rollout that terminates warm
   sessions is absorbed: the runtime rebuilds the client and re-sends the
   rejected call exactly once (safe — the server rejected it before

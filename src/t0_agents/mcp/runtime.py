@@ -59,6 +59,12 @@ logger = logging.getLogger(__name__)
 
 _TOOL_LIST_TTL_SECONDS = 60.0
 
+# Per-handle deadline on the list_tools() fan-out.  Deliberately NOT
+# derived from ``spec.timeout`` — that is the per-server httpx read
+# window, sized for slow tool calls (2400 s where an elicit wait must
+# clear), which as an inventory deadline would be no deadline at all.
+_TOOL_LIST_TIMEOUT_SECONDS = 10.0
+
 _POOL_IDLE_TTL_SECONDS = 900.0
 _POOL_MAX_SIZE = 1024
 
@@ -343,6 +349,11 @@ class _ServerHandle:
         self._generation = 0
         self._stack = AsyncExitStack()
         self._cache: tuple[list[mcp.types.Tool], float] | None = None
+        # Most recent successful inventory, deliberately surviving
+        # invalidate() — refresh() invalidates every handle before
+        # re-listing, which must not destroy the fallback consulted
+        # when that re-list fails.
+        self._last_known: list[mcp.types.Tool] | None = None
 
     def invalidate(self) -> None:
         self._cache = None
@@ -354,13 +365,25 @@ class _ServerHandle:
         return tool_name
 
     async def connect(self) -> None:
-        """Enter the client on first use; concurrent callers share one enter."""
+        """Enter the client on first use; concurrent callers share one enter.
+
+        An enter that fails — including one *cancelled* mid-handshake by
+        a caller's deadline — leaves the client half-entered, and fastmcp
+        clients must never be re-entered from that state (the next enter
+        wedges, turning a transient outage into a permanent one).  The
+        except arm re-mints while still holding the lock, so no queued
+        caller can ever observe the tainted client.
+        """
         if self._connected:
             return
         async with self._lock:
             if self._connected:
                 return
-            await self._stack.enter_async_context(self.client)
+            try:
+                await self._stack.enter_async_context(self.client)
+            except BaseException:
+                self._remint_locked()
+                raise
             self._connected = True
 
     async def aclose(self) -> None:
@@ -381,10 +404,16 @@ class _ServerHandle:
         ``tools/list_changed`` invalidates early, and the TTL is the
         backstop for notifications lost to the GET stream's 2-attempt
         reconnect cap.
+
+        Every successful fetch also lands in ``_last_known``, the
+        TTL-exempt fallback :meth:`MCPRuntime.list_tools` serves when
+        this handle cannot answer within its deadline.
         """
         await self.connect()
         if self.live_inventory:
-            return await self.client.list_tools()
+            tools = await self.client.list_tools()
+            self._last_known = tools
+            return tools
         cached = self._cache
         if cached is not None and time.monotonic() - cached[1] < _TOOL_LIST_TTL_SECONDS:
             return cached[0]
@@ -397,6 +426,7 @@ class _ServerHandle:
                 return cached[0]
             tools = await self.client.list_tools()
             self._cache = (tools, time.monotonic())
+            self._last_known = tools
             return tools
 
     async def call(
@@ -436,6 +466,21 @@ class _ServerHandle:
                 name, arguments, timeout=timeout, progress_handler=progress_handler
             )
 
+    def _remint_locked(self) -> tuple[bool, AsyncExitStack]:
+        """Swap in a factory-fresh client and stack; caller holds ``_lock``.
+
+        Returns ``(was_connected, stale_stack)`` so a caller that
+        replaced a live session can close the old stack outside the lock.
+        """
+        self._generation += 1
+        self._cache = None
+        was_connected = self._connected
+        self._connected = False
+        stale_stack = self._stack
+        self._stack = AsyncExitStack()
+        self.client = self._client_factory(self.invalidate)
+        return was_connected, stale_stack
+
     async def rebuild_if(self, generation: int) -> None:
         """Replace the client after a session-terminated error.
 
@@ -446,13 +491,7 @@ class _ServerHandle:
         async with self._lock:
             if self._generation != generation:
                 return
-            self._generation += 1
-            self._cache = None
-            was_connected = self._connected
-            self._connected = False
-            stale_stack = self._stack
-            self._stack = AsyncExitStack()
-            self.client = self._client_factory(self.invalidate)
+            was_connected, stale_stack = self._remint_locked()
         # The stale stack is independent of the rebuilt state — close it
         # outside the lock so a slow dead-session teardown (bounded by the
         # client disconnect timeout) never blocks connects to the fresh
@@ -503,6 +542,10 @@ class MCPRuntime:
     entry is evicted to make room — if every entry has a call in
     flight, acquisition fails loud rather than tearing a live client
     down.
+
+    ``tool_list_timeout`` bounds each handle's share of the
+    :meth:`list_tools` fan-out; see that method for the degradation
+    order when a server cannot answer within it.
     """
 
     def __init__(
@@ -513,6 +556,7 @@ class MCPRuntime:
         elicitation_handler: ElicitationHandler | None = None,
         pool_idle_ttl: float = _POOL_IDLE_TTL_SECONDS,
         pool_max_size: int = _POOL_MAX_SIZE,
+        tool_list_timeout: float = _TOOL_LIST_TIMEOUT_SECONDS,
     ) -> None:
         if pool_idle_ttl <= 0:
             raise ConfigurationError(
@@ -524,6 +568,12 @@ class MCPRuntime:
                 f"MCPRuntime(pool_max_size=...) must be >= 1, "
                 f"got {pool_max_size}."
             )
+        if tool_list_timeout <= 0:
+            raise ConfigurationError(
+                f"MCPRuntime(tool_list_timeout=...) must be positive, "
+                f"got {tool_list_timeout}."
+            )
+        self._tool_list_timeout = tool_list_timeout
         self._elicitation_handler = elicitation_handler
         self._pool_idle_ttl = pool_idle_ttl
         self._pool_max_size = pool_max_size
@@ -613,13 +663,48 @@ class MCPRuntime:
         namespace, verbatim otherwise.  A final name provided by two
         handles raises :class:`ConfigurationError` — the composite silently
         forwarded duplicates to inference.
+
+        Each handle gets ``tool_list_timeout`` seconds of the fan-out.
+        Handles are process-shared, so one server that cannot answer
+        would otherwise hang every conversation's turn; instead it
+        degrades: its last-known inventory is served (ignoring the TTL),
+        and a handle that has never answered is excluded from this
+        merge.  The accepted cost is staleness — a tool added to a
+        server while it is unreachable stays invisible until it answers
+        again.  An unreachable server never raises; a genuine name
+        collision still does.
         """
         per_handle = await asyncio.gather(
-            *(handle.tools() for handle in self._handles)
+            *(
+                asyncio.wait_for(handle.tools(), self._tool_list_timeout)
+                for handle in self._handles
+            ),
+            return_exceptions=True,
         )
         merged: list[mcp.types.Tool] = []
         owners: dict[str, str] = {}
-        for handle, tools in zip(self._handles, per_handle, strict=True):
+        for handle, result in zip(self._handles, per_handle, strict=True):
+            if isinstance(result, BaseException):
+                fallback = handle._last_known
+                if fallback is None:
+                    logger.warning(
+                        "MCP server %r did not answer list_tools (%r) and "
+                        "has no prior inventory; excluding it from this "
+                        "merge",
+                        handle.key,
+                        result,
+                    )
+                    continue
+                logger.warning(
+                    "MCP server %r did not answer list_tools (%r); serving "
+                    "its last-known inventory (%d tools)",
+                    handle.key,
+                    result,
+                    len(fallback),
+                )
+                tools = fallback
+            else:
+                tools = result
             for tool in tools:
                 final = handle.public_name(tool.name)
                 other = owners.get(final)

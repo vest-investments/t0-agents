@@ -9,8 +9,13 @@ here or not at all.
 from __future__ import annotations
 
 import asyncio
+import logging
+import socket
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Callable, Generator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -594,6 +599,358 @@ async def test_refresh_surfaces_server_side_tool_additions() -> None:
     assert refreshed == {"svc_first", "svc_second"}
 
 
+# --- Inventory fan-out resilience --------------------------------------------
+
+
+class _WedgeableClient:
+    """Stub whose ``__aenter__`` can hang until cancelled, or raise."""
+
+    def __init__(
+        self, *, hang_enter: bool = False, enter_error: Exception | None = None
+    ) -> None:
+        self.hang_enter = hang_enter
+        self.enter_error = enter_error
+        self.enter_calls = 0
+
+    async def __aenter__(self) -> _WedgeableClient:
+        self.enter_calls += 1
+        if self.hang_enter:
+            await asyncio.Event().wait()
+        if self.enter_error is not None:
+            raise self.enter_error
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    async def list_tools(self) -> list[mcp.types.Tool]:
+        return [mcp.types.Tool(name="stub_tool", inputSchema={"type": "object"})]
+
+
+class _MintPlan:
+    """Client factory handing out ``clients`` in order, recording mints."""
+
+    def __init__(self, *clients: _WedgeableClient) -> None:
+        self._pending = list(clients)
+        self.minted: list[_WedgeableClient] = []
+
+    def __call__(self, _invalidate: Callable[[], None]) -> Any:
+        client = self._pending.pop(0) if self._pending else _WedgeableClient()
+        self.minted.append(client)
+        return client
+
+
+def _planned_handle(plan: _MintPlan) -> _ServerHandle:
+    return _ServerHandle(
+        "wedge",
+        namespace=None,
+        prefix=False,
+        live_inventory=False,
+        client_factory=plan,  # type: ignore[arg-type]
+    )
+
+
+async def test_connect_remints_after_a_cancelled_enter() -> None:
+    """A deadline that cancels a wedged handshake must not leave the
+    half-entered client behind — the next caller would re-enter it and
+    turn a transient outage into a permanent wedge."""
+    wedged = _WedgeableClient(hang_enter=True)
+    plan = _MintPlan(wedged, _WedgeableClient())
+    handle = _planned_handle(plan)
+    generation = handle._generation
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(handle.connect(), timeout=0.1)
+
+    assert handle.client is not wedged
+    assert handle._generation == generation + 1
+    assert not handle._connected
+
+    await asyncio.wait_for(handle.connect(), timeout=1.0)
+    assert handle._connected
+    assert wedged.enter_calls == 1
+
+
+async def test_connect_remints_after_a_failed_enter() -> None:
+    failing = _WedgeableClient(enter_error=ConnectionError("refused"))
+    plan = _MintPlan(failing, _WedgeableClient())
+    handle = _planned_handle(plan)
+
+    with pytest.raises(ConnectionError):
+        await handle.connect()
+
+    assert handle.client is not failing
+    assert not handle._connected
+
+    await asyncio.wait_for(handle.connect(), timeout=1.0)
+    assert handle._connected
+    assert failing.enter_calls == 1
+
+
+async def test_last_known_inventory_survives_invalidate() -> None:
+    """``tools/list_changed`` (and refresh()) clear the TTL cache; the
+    stale-fallback record must outlive both or it is absent exactly
+    when a failed re-list needs it."""
+    stub = _StubClient()
+    handle = _stub_handle(stub)
+    tools = await handle.tools()
+
+    handle.invalidate()
+
+    assert handle._cache is None
+    assert handle._last_known is tools
+
+
+def _refused_url() -> str:
+    """A URL on a just-released local port — connects are refused fast."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"http://127.0.0.1:{port}/mcp"
+
+
+@asynccontextmanager
+async def _killable_http_server(server: FastMCP[Any]) -> AsyncIterator[str]:
+    """Ephemeral uvicorn that force-exits on teardown — for tests whose
+    runtime deliberately outlives the server (graceful shutdown would
+    wait forever on the warm client's standing GET stream)."""
+    uvicorn = pytest.importorskip("uvicorn")
+
+    config = uvicorn.Config(
+        server.http_app(path="/mcp"),
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        lifespan="on",
+    )
+    http = uvicorn.Server(config)
+    serve_task = asyncio.create_task(http.serve())
+    try:
+        while not http.started:
+            await asyncio.sleep(0.02)
+        port = http.servers[0].sockets[0].getsockname()[1]
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        http.should_exit = True
+        http.force_exit = True
+        await serve_task
+
+
+async def test_list_tools_excludes_a_server_that_never_answered(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unreachable server with no prior inventory degrades to
+    exclusion — the healthy servers' tools still come back and nothing
+    raises."""
+    dead = MCPServer(url=_refused_url(), namespace="dark")._to_spec()
+    healthy = _spec(_named_server("mem", "probe"), namespace="mem")
+
+    async with asyncio.timeout(15):
+        async with MCPRuntime([healthy, dead], tool_list_timeout=2.0) as runtime:
+            with caplog.at_level(logging.WARNING, logger="t0_agents.mcp.runtime"):
+                names = {tool.name for tool in await runtime.list_tools()}
+
+    assert names == {"mem_probe"}
+    assert any(
+        "'dark'" in record.message and "no prior inventory" in record.message
+        for record in caplog.records
+    )
+
+
+async def test_list_tools_serves_last_known_after_the_server_dies(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A server that answered before keeps contributing its last-known
+    tools while unreachable — the incident shape: mcp-fred served for
+    weeks, then dropped out of rotation mid-conversation."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+
+    runtime: MCPRuntime | None = None
+    try:
+        async with asyncio.timeout(30):
+            async with _killable_http_server(_named_server("rsrv", "hello")) as url:
+                spec = MCPServer(url=url, namespace="svc")._to_spec()
+                runtime = MCPRuntime([spec], tool_list_timeout=2.0)
+                primed = {tool.name for tool in await runtime.list_tools()}
+
+            clock.value += 61.0
+            with caplog.at_level(logging.WARNING, logger="t0_agents.mcp.runtime"):
+                degraded = {tool.name for tool in await runtime.list_tools()}
+    finally:
+        # Closing a client whose server is gone raises from the
+        # session-terminate hop — teardown noise, not this contract.
+        if runtime is not None:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert primed == {"svc_hello"}
+    assert degraded == {"svc_hello"}
+    assert any(
+        "'svc'" in record.message and "last-known inventory" in record.message
+        for record in caplog.records
+    )
+
+
+class _Wedge:
+    """ASGI wrapper that hangs POSTs until the client hangs up — the
+    readiness-flap double: a dead request stream, not an error.  (The
+    404 sibling is :class:`_SessionKiller`.)"""
+
+    def __init__(self) -> None:
+        self.wedge_posts = False
+
+    def wrap(self, app: Any) -> Any:
+        async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+            if (
+                scope["type"] == "http"
+                and scope["method"] == "POST"
+                and self.wedge_posts
+            ):
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        return
+            await app(scope, receive, send)
+
+        return wrapper
+
+
+async def test_back_to_back_list_tools_through_an_outage_recover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cancellation-safety pin: repeated deadline hits on a warm
+    handle must not wedge it or tear down its live session, and the
+    first fan-out after the server heals serves a live inventory again."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    wedge = _Wedge()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=wedge.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=0.5) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                warm_client = handle.client
+
+                wedge.wedge_posts = True
+                clock.value += 61.0
+                stale_one = {tool.name for tool in await runtime.list_tools()}
+                clock.value += 61.0
+                stale_two = {tool.name for tool in await runtime.list_tools()}
+
+                wedge.wedge_posts = False
+                clock.value += 61.0
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                healed = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert stale_one == {"svc_hello"}
+    assert stale_two == {"svc_hello"}
+    assert healed == {"svc_hello", "svc_second"}
+    assert handle.client is warm_client
+
+
+async def test_refresh_serves_last_known_while_unreachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """refresh() invalidates every handle then re-lists; the fallback
+    must survive that invalidation or the safety net is absent on the
+    one path that most needs it."""
+    wedge = _Wedge()
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(
+            _named_server("rsrv", "hello"), wrap_asgi=wedge.wrap
+        ) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=0.5) as runtime:
+                primed = {tool.name for tool in await runtime.list_tools()}
+
+                wedge.wedge_posts = True
+                with caplog.at_level(
+                    logging.WARNING, logger="t0_agents.mcp.runtime"
+                ):
+                    refreshed = {tool.name for tool in await runtime.refresh()}
+                wedge.wedge_posts = False
+
+    assert primed == {"svc_hello"}
+    assert refreshed == {"svc_hello"}
+    assert any(
+        "last-known inventory" in record.message for record in caplog.records
+    )
+
+
+async def test_partial_merge_still_raises_on_genuine_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degradation never relaxes the collision rule: a stale fallback
+    colliding with a live handle's tool fails loud, exactly as two live
+    handles would."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    wedge = _Wedge()
+    local = _named_server("mem", "other")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(
+            _named_server("rsrv", "dupe"), wrap_asgi=wedge.wrap
+        ) as url:
+            specs = [
+                MCPServer(url=url)._to_spec(),
+                _spec(local),
+            ]
+            async with MCPRuntime(specs, tool_list_timeout=0.5) as runtime:
+                primed = {tool.name for tool in await runtime.list_tools()}
+
+                @local.tool
+                async def dupe() -> str:
+                    """Collides with the wedged server's last-known tool."""
+                    return "local:dupe"
+
+                wedge.wedge_posts = True
+                clock.value += 61.0
+                with pytest.raises(ConfigurationError, match="dupe"):
+                    await runtime.list_tools()
+                wedge.wedge_posts = False
+
+    assert primed == {"dupe", "other"}
+
+
+def test_list_tools_never_returns_is_bounded_in_subprocess() -> None:
+    """One server whose request stream never answers ⇒ the healthy
+    server's tools still come back within the deadline.
+
+    Subprocess-isolated per the ``_timeout_survival_script`` precedent:
+    against a pre-fix runtime this scenario does not fail, it hangs
+    (verified once against v2.2.0 `main` — the incident's exact shape),
+    and an in-process hang would poison later App+uvicorn tests into
+    order-dependent hangs.  The driver's hard timeout turns a
+    reintroduced regression into a loud failure instead.
+    """
+    pytest.importorskip("uvicorn")
+    script = Path(__file__).with_name("_list_tools_hang_script.py")
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"hang script failed (rc={proc.returncode})\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "LIST-TOOLS-OK" in proc.stdout
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 
@@ -964,6 +1321,8 @@ class TestIdentityPool:
             MCPRuntime([], pool_idle_ttl=0.0)
         with pytest.raises(ConfigurationError, match="pool_max_size"):
             MCPRuntime([], pool_max_size=0)
+        with pytest.raises(ConfigurationError, match="tool_list_timeout"):
+            MCPRuntime([], tool_list_timeout=0.0)
 
 
 # ---------------------------------------------------------------------------
