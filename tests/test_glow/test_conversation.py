@@ -219,6 +219,40 @@ def test_sequential_guard_blocks_an_unconsumed_send(conv_app: App) -> None:
     assert _INVOKES == []  # neither send actually invoked the agent
 
 
+async def test_consumed_derived_send_unblocks_the_next_send(conv_app: App) -> None:
+    @conv_app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    conv = t.conversation()
+    await conv.send("a").with_(tags={"topic": "x"})  # the DERIVED run is consumed
+    await conv.send("b")
+    assert [i["user_message"] for i in _INVOKES] == ["a", "b"]
+
+
+async def test_consumed_output_override_unblocks_the_next_send(conv_app: App) -> None:
+    @conv_app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    conv = t.conversation()
+    await conv.send("a").text()  # ._spawn()-derived, same family
+    await conv.send("b")
+    assert [i["user_message"] for i in _INVOKES] == ["a", "b"]
+
+
+def test_sequential_guard_still_blocks_an_unconsumed_derived_send(conv_app: App) -> None:
+    @conv_app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    conv = t.conversation()
+    conv.send("a").with_(tags={"topic": "x"})  # derived but never consumed
+    with pytest.raises(ConfigurationError, match="not been consumed"):
+        conv.send("b")
+    assert _INVOKES == []
+
+
 async def test_user_sugar_stamps_write_tags(conv_app: App) -> None:
     @conv_app.agent("t")
     async def t(q: str) -> str:  # type: ignore[empty-body]

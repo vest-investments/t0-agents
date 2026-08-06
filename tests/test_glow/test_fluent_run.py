@@ -428,6 +428,16 @@ async def test_escape_hatch_delegates_after_run() -> None:
     assert fake.feedback_calls == [("thumbs_up", 1.0, "inference", None)]
 
 
+async def test_escape_hatch_reads_the_family_run() -> None:
+    fake = _FakeRun(value="v")
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+
+    await fr.text()  # consume a DERIVED handle; the root builds nothing itself
+
+    assert fr.consumed is True
+    assert fr.cost() == 0.42  # the root serves the family's run, not a raise
+
+
 # ---------------------------------------------------------------------------
 # M5 streaming surface — on_error flip, stream_text, statuses
 # ---------------------------------------------------------------------------
@@ -538,6 +548,30 @@ async def test_consumed_is_false_until_consumption() -> None:
     assert fr.consumed is False
     await fr.result()
     assert fr.consumed is True
+
+
+async def test_consumed_reads_across_with_derivations() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+    derived = fr.with_(tags={"customer_id": "c1"})
+    assert fr.consumed is False
+    await derived.result()
+    assert derived.consumed is True
+    assert fr.consumed is True  # consumption is a family property, not per-handle
+
+
+async def test_consumed_reads_across_output_derivations() -> None:
+    fr: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    await fr.text().result()
+    assert fr.consumed is True
+
+
+async def test_consumed_does_not_leak_across_independent_runs() -> None:
+    first: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    second: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    await first.result()
+    assert first.consumed is True
+    assert second.consumed is False
 
 
 async def test_on_result_fires_on_result() -> None:

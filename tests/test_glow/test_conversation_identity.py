@@ -296,8 +296,9 @@ class TestObservedHandlerEvents:
 
         conv = chat.conversation()
         buffer = EventBuffer()
+        run = SimpleNamespace(_buffer=buffer)
         conv._pending = cast(
-            Any, SimpleNamespace(_run=SimpleNamespace(_buffer=buffer))
+            Any, SimpleNamespace(_lineage=SimpleNamespace(run=run))
         )
         return conv, buffer
 
