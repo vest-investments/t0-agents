@@ -114,6 +114,13 @@ conv.send("second")       # ConfigurationError: the previous send() has not
 
 Await each send (or drain its stream) before the next.
 
+Consuming a **derived** handle counts. `send()` returns the root `FluentRun`,
+and every fluent override — `.with_(...)`, `.json(...)`, `.text()`, `.as_(...)`
+— derives a new one; the chain shares a single consumption record, so draining
+whichever handle you end up with consumes the send. This is also how in-stream
+elicitation events find the run you actually drive: a HITL prompt raised during
+`conv.send(q).with_(...)` lands on that derived run's stream.
+
 ## Resuming
 
 `hydrate=True` reloads a stored conversation's transcript from the gateway
