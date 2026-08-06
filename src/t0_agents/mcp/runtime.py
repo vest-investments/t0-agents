@@ -349,6 +349,11 @@ class _ServerHandle:
         self._generation = 0
         self._stack = AsyncExitStack()
         self._cache: tuple[list[mcp.types.Tool], float] | None = None
+        # Most recent successful inventory, deliberately surviving
+        # invalidate() — refresh() invalidates every handle before
+        # re-listing, which must not destroy the fallback consulted
+        # when that re-list fails.
+        self._last_known: list[mcp.types.Tool] | None = None
 
     def invalidate(self) -> None:
         self._cache = None
@@ -399,10 +404,16 @@ class _ServerHandle:
         ``tools/list_changed`` invalidates early, and the TTL is the
         backstop for notifications lost to the GET stream's 2-attempt
         reconnect cap.
+
+        Every successful fetch also lands in ``_last_known``, the
+        TTL-exempt fallback :meth:`MCPRuntime.list_tools` serves when
+        this handle cannot answer within its deadline.
         """
         await self.connect()
         if self.live_inventory:
-            return await self.client.list_tools()
+            tools = await self.client.list_tools()
+            self._last_known = tools
+            return tools
         cached = self._cache
         if cached is not None and time.monotonic() - cached[1] < _TOOL_LIST_TTL_SECONDS:
             return cached[0]
@@ -415,6 +426,7 @@ class _ServerHandle:
                 return cached[0]
             tools = await self.client.list_tools()
             self._cache = (tools, time.monotonic())
+            self._last_known = tools
             return tools
 
     async def call(

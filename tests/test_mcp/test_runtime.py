@@ -682,6 +682,20 @@ async def test_connect_remints_after_a_failed_enter() -> None:
     assert failing.enter_calls == 1
 
 
+async def test_last_known_inventory_survives_invalidate() -> None:
+    """``tools/list_changed`` (and refresh()) clear the TTL cache; the
+    stale-fallback record must outlive both or it is absent exactly
+    when a failed re-list needs it."""
+    stub = _StubClient()
+    handle = _stub_handle(stub)
+    tools = await handle.tools()
+
+    handle.invalidate()
+
+    assert handle._cache is None
+    assert handle._last_known is tools
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 
