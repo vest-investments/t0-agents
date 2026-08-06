@@ -336,10 +336,17 @@ class Conversation(Generic[R]):
         return cast("ElicitationHandler", _ObservedHandler(source, self))
 
     def _active_buffer(self) -> EventBuffer | None:
+        """The event buffer of the run this send actually built, if any.
+
+        Reads the pending handle's lineage rather than the handle itself:
+        ``send()`` returns the root ``FluentRun`` but callers routinely
+        consume a derived one (``send(...).with_(...)`` / ``.json(...)``),
+        and elicitation events must land on the run being driven.
+        """
         pending = self._pending
         if pending is None:
             return None
-        run = pending._run
+        run = pending._lineage.run
         if run is None:
             return None
         return run._buffer
