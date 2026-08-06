@@ -647,6 +647,36 @@ async def test_session_rejection_never_reaches_the_json_rpc_layer() -> None:
     assert executions == ["work"]
 
 
+async def test_session_rejection_rebuilds_the_handle_and_unpoisons_it() -> None:
+    """The production symptom, in one test.
+
+    Without the rebuild the torn-down client is reused, so every later
+    call on this handle fails too — the pool entry heals only on its idle
+    TTL or a process restart.  The rejected call itself still raises: it
+    is not resent.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            original_client = handle.client
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError):
+                await runtime.call_tool("svc_work", {})
+
+            assert handle.client is not original_client
+            recovered = await runtime.call_tool("svc_work", {})
+
+    assert recovered.data == "done"
+    assert executions == ["work", "work"]
+
+
 async def test_refresh_surfaces_server_side_tool_additions() -> None:
     server = _named_server("growing", "first")
     async with _ephemeral_http_server(server) as url:
