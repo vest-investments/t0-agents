@@ -540,6 +540,30 @@ async def test_consumed_is_false_until_consumption() -> None:
     assert fr.consumed is True
 
 
+async def test_consumed_reads_across_with_derivations() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fr: FluentRun[str] = FluentRun(_make_capturing_build(calls), ChatOutput())
+    derived = fr.with_(tags={"customer_id": "c1"})
+    assert fr.consumed is False
+    await derived.result()
+    assert derived.consumed is True
+    assert fr.consumed is True  # consumption is a family property, not per-handle
+
+
+async def test_consumed_reads_across_output_derivations() -> None:
+    fr: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    await fr.text().result()
+    assert fr.consumed is True
+
+
+async def test_consumed_does_not_leak_across_independent_runs() -> None:
+    first: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    second: FluentRun[str] = FluentRun(_make_build(), ChatOutput())
+    await first.result()
+    assert first.consumed is True
+    assert second.consumed is False
+
+
 async def test_on_result_fires_on_result() -> None:
     seen: list[AgentResult[Any]] = []
     fr: FluentRun[str] = FluentRun(

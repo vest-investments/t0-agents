@@ -74,6 +74,24 @@ R3 = TypeVar("R3")
 R4 = TypeVar("R4")
 
 
+class _RunLineage:
+    """The one mutable cell shared by every ``FluentRun`` derived from a root.
+
+    Fluent overrides each return a *new* handle, but all handles in the
+    chain stand for the same logical run — whichever member is consumed
+    builds THE :class:`Run` for the family.  The lineage records it so an
+    observer holding any member can see the consumption and reach the built
+    run: glow's :class:`~t0_agents.glow.conversation.Conversation` holds the
+    root ``send()`` returned while the caller typically drives a derived
+    handle (``send(...).with_(...)`` / ``.json(...)``).
+    """
+
+    __slots__ = ("run",)
+
+    def __init__(self) -> None:
+        self.run: Run[Any] | None = None
+
+
 class FluentRun(Generic[T]):
     """Lazy, fluent wrapper over :class:`~t0_agents.core.run.Run`.
 
@@ -81,7 +99,9 @@ class FluentRun(Generic[T]):
     taking the chosen mode plus per-call kwargs) and a default
     :class:`OutputMode`.  Each fluent override (:meth:`text`, :meth:`json`,
     :meth:`as_`, :meth:`with_`) returns a *new* ``FluentRun`` with the
-    override applied; the prior instance is unchanged.  When the same
+    override applied; the prior instance is unchanged — but root and
+    derived handles share one :class:`_RunLineage`, so consumption is
+    observable from any of them (see :attr:`consumed`).  When the same
     FluentRun's output is overridden a second time (e.g. ``.json(A).json(B)``),
     the second override logs DEBUG so overlap is observable.
 
@@ -112,6 +132,11 @@ class FluentRun(Generic[T]):
         self._chosen_output: OutputMode[Any] = default_output
         self._has_override: bool = False
         self._run: Run[Any] | None = None
+        # The family's consumption record.  Fresh here (a construction is a
+        # root); ``_spawn()`` / ``with_()`` overwrite the derived handle's
+        # cell with the parent's, so one send's whole derivation chain
+        # shares it.
+        self._lineage: _RunLineage = _RunLineage()
         # Mounted MCP namespaces, injected by ``App._invoke`` so
         # :meth:`statuses` decomposes prefixed tool names without
         # reaching back into the App.
@@ -213,6 +238,7 @@ class FluentRun(Generic[T]):
         )
         new._has_override = self._has_override
         new._call_kwargs = {**self._call_kwargs, **call_kwargs}
+        new._lineage = self._lineage
         return new
 
     def _spawn(self, new_output: OutputMode[Any]) -> FluentRun[Any]:
@@ -245,6 +271,7 @@ class FluentRun(Generic[T]):
         )
         new._has_override = True
         new._call_kwargs = dict(self._call_kwargs)
+        new._lineage = self._lineage
         return new
 
     # ------------------------------------------------------------------
@@ -266,6 +293,7 @@ class FluentRun(Generic[T]):
             if self._prepare is not None:
                 await self._prepare()
             self._run = self._build(self._chosen_output, **self._call_kwargs)
+            self._lineage.run = self._run
         return self._run
 
     def _fire(self, result: AgentResult[Any]) -> None:
@@ -287,15 +315,18 @@ class FluentRun(Generic[T]):
 
     @property
     def consumed(self) -> bool:
-        """Whether consumption has begun — the underlying Run has been built.
+        """Whether consumption has begun — on this handle or any derived one.
 
         ``True`` once ``await`` / :meth:`result` / the first iteration of
         :meth:`events` / :meth:`stream_text` has fired the build closure (via
-        :meth:`_ensure_run`).  glow's
+        :meth:`_ensure_run`) of this ``FluentRun`` **or of any handle derived
+        from it** via :meth:`text` / :meth:`json` / :meth:`as_` /
+        :meth:`with_` — the chain shares one :class:`_RunLineage`.  glow's
         :class:`~t0_agents.glow.conversation.Conversation` reads it to enforce
-        sequential sends — a send left unconsumed blocks the next one.
+        sequential sends: ``send()`` returns the root handle, and the send
+        counts as consumed whichever derived handle the caller drives.
         """
-        return self._run is not None
+        return self._lineage.run is not None
 
     @overload
     def events(
