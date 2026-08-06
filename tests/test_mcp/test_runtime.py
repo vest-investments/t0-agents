@@ -519,6 +519,43 @@ class _SessionKiller:
         return wrapper
 
 
+class _SessionRejector:
+    """ASGI wrapper that answers the next N POSTs with a bare HTTP error.
+
+    At the default 400 this is the shape ``mcp-customers`` returns for an
+    unknown session id — its SDK predates the spec's 404 mapping, so the
+    rejection never reaches the JSON-RPC layer and arrives as an
+    ``httpx.HTTPStatusError`` instead.  (The 404 sibling, which the SDK
+    *does* map to code 32600, is :class:`_SessionKiller`.)
+    """
+
+    def __init__(self, status: int = 400) -> None:
+        self.status = status
+        self.reject_next_posts = 0
+
+    def wrap(self, app: Any) -> Any:
+        async def wrapper(scope: Any, receive: Any, send: Any) -> None:
+            if (
+                scope["type"] == "http"
+                and scope["method"] == "POST"
+                and self.reject_next_posts > 0
+            ):
+                self.reject_next_posts -= 1
+                body = b"No valid session ID provided"
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": self.status,
+                        "headers": [(b"content-length", str(len(body)).encode())],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return
+            await app(scope, receive, send)
+
+        return wrapper
+
+
 def _counting_server(executions: list[str]) -> FastMCP[Any]:
     server: FastMCP[Any] = FastMCP("flaky")
 
@@ -578,6 +615,36 @@ async def test_non_session_errors_never_resend() -> None:
 
     assert executions == ["work", "slow"]
     assert handle.client is client_before
+
+
+async def test_session_rejection_never_reaches_the_json_rpc_layer() -> None:
+    """A bare 400 dies in the transport, so the 32600 arm cannot see it.
+
+    ``mcp-customers`` rejects an unknown session id this way.  The
+    transport calls ``raise_for_status`` before anything is decoded as
+    JSON-RPC, so the caller gets an ``httpx.HTTPStatusError`` and never an
+    ``McpError`` — which is why the recovery keys on the status rather
+    than on a widened :func:`_is_session_terminated`.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        runtime = MCPRuntime([spec])
+        try:
+            await runtime.call_tool("svc_work", {})
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError) as excinfo:
+                await runtime.call_tool("svc_work", {})
+        finally:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert excinfo.value.response.status_code == 400
+    assert executions == ["work"]
 
 
 async def test_refresh_surfaces_server_side_tool_additions() -> None:
