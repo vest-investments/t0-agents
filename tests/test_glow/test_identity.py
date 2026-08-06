@@ -322,6 +322,70 @@ async def test_in_stream_elicitation_events_carry_the_forwarder_id() -> None:
     assert requested[0].schema_json != ""
 
 
+async def test_in_stream_elicitation_events_survive_a_derived_send() -> None:
+    """Consuming a ``send(...).with_(...)``-derived handle still delivers the
+    in-stream ElicitationRequested/Resolved pair.  ``.with_()`` derives a NEW
+    FluentRun, so the conversation must observe the run actually consumed —
+    not the handle ``send()`` returned (the v2.2.0 bug consumers patched by
+    re-pointing ``conv._pending`` by hand)."""
+    from tests._fake_t0 import FakeT0, chat_chunk, final_chunk, text_chunk, tool_call_chunk
+
+    gateway = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [
+                        tool_call_chunk(
+                            raw_name="svc_ask",
+                            raw_arguments="{}",
+                            block_id="c1",
+                        )
+                    ]
+                ),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("done", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    app = App(
+        t0=cast(AsyncTensorZeroGateway, gateway),
+        servers=[
+            MCPServer(server=_elicit_tag_server(), namespace="svc", elicits=True)
+        ],
+    )
+
+    @app.agent("chat")
+    async def chat(q: str) -> str:
+        """A HITL agent."""
+
+    cell: list[ElicitationForwarder] = []
+
+    async def on_request(envelope: RequestEnvelope) -> None:
+        await cell[0].resolve(
+            envelope["elicitation_id"],
+            {"action": "accept", "content": {"value": "tag"}},
+        )
+
+    async with app.lifespan():
+        forwarder = ElicitationForwarder(on_request=on_request)
+        cell.append(forwarder)
+        conv = chat.conversation(elicitation_handler=forwarder)
+
+        events: list[Any] = []
+        derived = conv.send("go").with_(tags={"topic": "hitl"})
+        async for event in derived.events():
+            events.append(event)
+
+    requested = [e for e in events if isinstance(e, ElicitationRequestedEvent)]
+    resolved = [e for e in events if isinstance(e, ElicitationResolvedEvent)]
+    assert len(requested) == 1 and len(resolved) == 1
+    assert resolved[0].id == requested[0].id
+    assert resolved[0].action == "accept"
+
+
 async def test_undeclared_elicit_fails_loud_and_never_misroutes() -> None:
     """A server that elicits WITHOUT declaring elicits=True rides a
     handler-less identity client: the elicit fails loud (capability not
