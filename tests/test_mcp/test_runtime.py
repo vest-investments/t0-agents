@@ -677,6 +677,63 @@ async def test_session_rejection_rebuilds_the_handle_and_unpoisons_it() -> None:
     assert executions == ["work", "work"]
 
 
+async def test_a_dispatched_call_is_never_resent_on_rejection() -> None:
+    """The safety property behind the no-resend rule.
+
+    Tearing the transport down fails every request in flight, so a call
+    the server already dispatched raises the *same* 400 as the one that
+    was actually rejected.  Resending on this shape would re-run a tool
+    that already executed — for an order write, a duplicate trade.
+    """
+    executions: list[str] = []
+    rejector = _SessionRejector()
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+
+            dispatched = asyncio.create_task(runtime.call_tool("svc_slow", {}))
+            while "slow" not in executions:
+                await asyncio.sleep(0.02)
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError):
+                await runtime.call_tool("svc_work", {})
+            with pytest.raises(httpx.HTTPStatusError):
+                await dispatched
+            await asyncio.sleep(1.5)
+
+    assert executions == ["work", "slow"]
+
+
+async def test_non_400_http_errors_leave_the_handle_alone() -> None:
+    """Only the session-rejection status rebuilds.  A 503 in front of the
+    server is not a lost session: it propagates, handle untouched."""
+    executions: list[str] = []
+    rejector = _SessionRejector(status=503)
+    async with _ephemeral_http_server(
+        _counting_server(executions), wrap_asgi=rejector.wrap
+    ) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        runtime = MCPRuntime([spec])
+        try:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            client_before = handle.client
+
+            rejector.reject_next_posts = 1
+            with pytest.raises(httpx.HTTPStatusError) as excinfo:
+                await runtime.call_tool("svc_work", {})
+        finally:
+            with suppress(Exception):
+                await runtime.aclose()
+
+    assert excinfo.value.response.status_code == 503
+    assert handle.client is client_before
+
+
 async def test_refresh_surfaces_server_side_tool_additions() -> None:
     server = _named_server("growing", "first")
     async with _ephemeral_http_server(server) as url:
