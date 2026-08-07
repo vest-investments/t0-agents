@@ -67,6 +67,11 @@ async def test_orchestrator_with_agent_handle_depends_runs_gateway_free() -> Non
 
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from t0_agents import ElicitationForwarder, MemoryProvider
+    from t0_agents.glow import ServerCredentials
+
     # Pure static checks (mypy-only; never executed).  events() returns
     # un-consumed async iterators, so these stay out of the runtime path.
     def _events_overloads_narrow_the_element_type(run: FluentRun[str]) -> None:
@@ -84,3 +89,19 @@ if TYPE_CHECKING:
         research: AgentHandle[..., str],
     ) -> None:
         assert_type(research.conversation(), Conversation[str])
+
+    def _agent_handle_takes_the_identity_kwargs_without_a_cast(
+        research: AgentHandle[..., str],
+        auth: Mapping[str, ServerCredentials],
+        handler: ElicitationForwarder,
+        memory: MemoryProvider,
+    ) -> None:
+        assert_type(
+            research.conversation(
+                auth=auth,
+                elicitation_handler=handler,
+                memory=memory,
+                tools=["math_*"],
+            ),
+            Conversation[str],
+        )
