@@ -13,13 +13,19 @@ parameter so the orchestrator body stays typed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NoReturn, ParamSpec, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, NoReturn, ParamSpec, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    import httpx
+    from fastmcp.client.elicitation import ElicitationHandler
+
+    from t0_agents.core.elicitation_forwarder import ElicitationForwarder
+    from t0_agents.core.types import MemoryProvider
     from t0_agents.glow.conversation import Conversation
     from t0_agents.glow.handle import FluentRun
+    from t0_agents.mcp.runtime import ServerCredentials
 
 __all__ = ["AgentHandle", "llm"]
 
@@ -63,11 +69,19 @@ class AgentHandle(Protocol[P, R]):
         hydrate: bool = False,
         user: str | None = None,
         tags: Mapping[str, str] | None = None,
+        auth: Mapping[str, ServerCredentials | Mapping[str, str] | httpx.Auth]
+        | None = None,
+        elicitation_handler: ElicitationForwarder | ElicitationHandler | None = None,
+        memory: MemoryProvider | None = None,
+        tools: list[Any] | None = None,
     ) -> Conversation[R]:
         """Open a multi-turn :class:`Conversation` over one episode.
 
         Lets a conversation-capable handle be typed without importing
-        the private wrapper; the concrete signature lives on the
-        ``@app.agent`` wrapper.
+        the private wrapper.  The signature mirrors the ``@app.agent``
+        wrapper's, so the identity dimension — ``auth``,
+        ``elicitation_handler``, ``memory``, ``tools`` — type-checks
+        through this Protocol with no ``cast``.  See
+        :doc:`/glow/multi-tenant` for what each one does.
         """
         ...
