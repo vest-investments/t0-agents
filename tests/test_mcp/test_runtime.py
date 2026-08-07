@@ -1296,6 +1296,43 @@ async def test_non_terminated_mcp_errors_are_not_retried() -> None:
     assert handle._generation == generation_before
 
 
+async def test_concurrent_inventory_callers_share_one_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Several conversations hitting the same dead session trigger ONE
+    re-mint: every caller captures the same generation before failing,
+    the first ``rebuild_if`` wins, and the rest reuse the fresh client
+    (and its fresh TTL cache) instead of tearing it down again."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    killer = _SessionKiller()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=killer.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                generation_before = handle._generation
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                killer.kill_next_posts = 2
+                result_a, result_b = await asyncio.gather(
+                    runtime.list_tools(), runtime.list_tools()
+                )
+
+    assert primed == {"svc_hello"}
+    assert {tool.name for tool in result_a} == {"svc_hello", "svc_second"}
+    assert {tool.name for tool in result_b} == {"svc_hello", "svc_second"}
+    assert handle._generation == generation_before + 1
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 
