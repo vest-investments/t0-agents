@@ -78,7 +78,10 @@ instead.  See [Multi-tenant apps](multi-tenant.md).
 ## An unreachable server serves a degraded inventory
 
 The inventory fan-out gives each server `tool_list_timeout` seconds
-(default 10, an `MCPRuntime` knob).  A server that cannot answer in
+(default 10, an `MCPRuntime` knob).  A server that merely *rolled* —
+its old session is dead but the server answers — self-heals inside
+that budget: the client is rebuilt and the list re-fetched once, so a
+redeploy no longer degrades anything.  A server that cannot answer in
 time contributes its **last-known** inventory — so a tool added while
 it is unreachable stays invisible until it answers again — and a
 server that has *never* answered is excluded from that merge entirely,

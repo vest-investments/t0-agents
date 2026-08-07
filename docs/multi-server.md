@@ -72,18 +72,23 @@ the process.  Compared to composing servers by hand:
   server, invalidated early by `tools/list_changed`; in-memory servers
   stay live-linked.
 - **Bounded fan-out.**  Each server gets `tool_list_timeout` seconds
-  (default 10) of the inventory fan-out.  A server that cannot answer
-  degrades instead of blocking the merge: its last-known inventory is
-  served (a tool added while it is unreachable stays invisible until it
-  answers again), and a server that has never answered is skipped with
-  a warning.
+  (default 10) of the inventory fan-out — one budget covering the fetch
+  and any session-loss recovery.  A server that cannot answer degrades
+  instead of blocking the merge, in order: a dead session is rebuilt
+  and re-listed once; failing that, its last-known inventory is served
+  (a tool added while it is unreachable stays invisible until it
+  answers again); a server that has never answered is skipped with a
+  warning.
 - **Session-loss recovery.**  A server rollout that terminates warm
-  sessions is absorbed: the runtime rebuilds the client and re-sends the
-  rejected call exactly once (safe — the rejection carries that
-  request's own id, so it provably never dispatched).  A server whose
+  sessions is absorbed on both paths.  On a call, the runtime rebuilds
+  the client and re-sends exactly once when the rejection provably
+  never dispatched (it carries that request's own id); a server whose
   SDK predates that mapping rejects with a bare HTTP 400 instead, which
-  fails *every* call in flight on the handle; the client is still
-  rebuilt so later calls recover, but nothing is re-sent.  See
+  fails *every* call in flight on the handle — the client is still
+  rebuilt so later calls recover, but nothing is re-sent.  On the
+  inventory fan-out, listing is read-only, so the runtime rebuilds and
+  re-lists once on *either* shape — the handle self-heals without a
+  process restart.  See
   [error-handling](error-handling.md#session-loss).
 
 Authenticated mounts (`headers=`/`auth=`) and per-agent `tools=`
