@@ -1105,6 +1105,234 @@ def test_list_tools_never_returns_is_bounded_in_subprocess() -> None:
     assert "LIST-TOOLS-OK" in proc.stdout
 
 
+# --- Inventory session recovery ----------------------------------------------
+
+
+async def test_list_tools_recovers_a_terminated_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pool-poisoning shape, healed: a server redeploy leaves the
+    warm handle holding a dead session id, and without recovery the
+    fan-out serves the stale fallback until a process restart.  The
+    re-list must be live — the late-registered tool proves it wasn't
+    the last-known list."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    killer = _SessionKiller()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=killer.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                original_client = handle.client
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                killer.kill_next_posts = 1
+                recovered = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert recovered == {"svc_hello", "svc_second"}
+    assert handle.client is not original_client
+
+
+async def test_list_tools_recovers_a_rejected_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same recovery on the bare-400 shape.  ``call()`` never resends on
+    this shape (indistinguishable from a dispatched call's failure);
+    listing is read-only, so the inventory path retries on both."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    rejector = _SessionRejector()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=rejector.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                original_client = handle.client
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                rejector.reject_next_posts = 1
+                recovered = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert recovered == {"svc_hello", "svc_second"}
+    assert handle.client is not original_client
+
+
+async def test_failed_inventory_recovery_falls_back_to_last_known(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Recovery is attempted first; only when the rebuilt client also
+    fails does M2's degradation apply — and it still never raises.
+    Both warnings must appear, in that order: the re-list attempt, then
+    the last-known fallback."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    killer = _SessionKiller()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=killer.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                primed = {tool.name for tool in await runtime.list_tools()}
+
+                clock.value += 61.0
+                killer.kill_next_posts = 50
+                with caplog.at_level(
+                    logging.WARNING, logger="t0_agents.mcp.runtime"
+                ):
+                    degraded = {tool.name for tool in await runtime.list_tools()}
+                killer.kill_next_posts = 0
+
+    assert primed == {"svc_hello"}
+    assert degraded == {"svc_hello"}
+    messages = [record.message for record in caplog.records]
+    relist = next(
+        index for index, msg in enumerate(messages) if "re-listing once" in msg
+    )
+    fallback = next(
+        index
+        for index, msg in enumerate(messages)
+        if "last-known inventory" in msg
+    )
+    assert relist < fallback
+
+
+async def test_non_session_inventory_errors_are_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Only the two session-loss shapes rebuild.  A 503 in front of the
+    server is not a lost session: no re-mint, no re-list — straight to
+    the last-known fallback."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    rejector = _SessionRejector(status=503)
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=rejector.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            runtime = MCPRuntime([spec], tool_list_timeout=5.0)
+            try:
+                primed = {tool.name for tool in await runtime.list_tools()}
+                (handle,) = runtime._handles
+                client_before = handle.client
+                generation_before = handle._generation
+
+                clock.value += 61.0
+                rejector.reject_next_posts = 1
+                with caplog.at_level(
+                    logging.WARNING, logger="t0_agents.mcp.runtime"
+                ):
+                    degraded = {tool.name for tool in await runtime.list_tools()}
+            finally:
+                with suppress(Exception):
+                    await runtime.aclose()
+
+    assert primed == {"svc_hello"}
+    assert degraded == {"svc_hello"}
+    assert handle.client is client_before
+    assert handle._generation == generation_before
+    assert not any(
+        "re-listing once" in record.message for record in caplog.records
+    )
+
+
+async def test_non_terminated_mcp_errors_are_not_retried() -> None:
+    """The McpError predicate's negative: a code other than 32600 is a
+    server-side error, not a lost session — one fetch, no rebuild."""
+    from mcp.shared.exceptions import McpError
+
+    class _ListErringClient:
+        def __init__(self) -> None:
+            self.list_calls = 0
+
+        async def __aenter__(self) -> _ListErringClient:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        async def list_tools(self) -> list[mcp.types.Tool]:
+            self.list_calls += 1
+            raise McpError(
+                mcp.types.ErrorData(code=-32000, message="internal error")
+            )
+
+    stub = _ListErringClient()
+    handle = _ServerHandle(
+        "stub",
+        namespace=None,
+        prefix=False,
+        live_inventory=False,
+        client_factory=lambda _invalidate: stub,  # type: ignore[arg-type,return-value]
+    )
+    generation_before = handle._generation
+
+    with pytest.raises(McpError):
+        await handle.tools()
+
+    assert stub.list_calls == 1
+    assert handle._generation == generation_before
+
+
+async def test_concurrent_inventory_callers_share_one_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Several conversations hitting the same dead session trigger ONE
+    re-mint: every caller captures the same generation before failing,
+    the first ``rebuild_if`` wins, and the rest reuse the fresh client
+    (and its fresh TTL cache) instead of tearing it down again."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    killer = _SessionKiller()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=killer.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                generation_before = handle._generation
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                killer.kill_next_posts = 2
+                result_a, result_b = await asyncio.gather(
+                    runtime.list_tools(), runtime.list_tools()
+                )
+
+    assert primed == {"svc_hello"}
+    assert {tool.name for tool in result_a} == {"svc_hello", "svc_second"}
+    assert {tool.name for tool in result_b} == {"svc_hello", "svc_second"}
+    assert handle._generation == generation_before + 1
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 

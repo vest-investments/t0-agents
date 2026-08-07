@@ -186,11 +186,11 @@ Rules of thumb:
 ## Session loss
 
 A server that rolls invalidates the warm session behind every handle
-pointing at it. Two shapes reach the runtime, and they recover
-differently:
+pointing at it. Two shapes reach the runtime, and on the call path they
+recover differently:
 
-| Shape | Reaches the runtime as | Recovery |
-|-------|------------------------|----------|
+| Shape | Reaches the runtime as | Recovery (call path) |
+|-------|------------------------|----------------------|
 | HTTP 404 — the spec mapping | `McpError`, code `32600` | rebuild the client, re-send the call once |
 | bare HTTP 400 — older server SDKs | `httpx.HTTPStatusError` | rebuild the client, **propagate** |
 
@@ -203,6 +203,15 @@ including one the server already dispatched and ran. The two are
 indistinguishable from the client, so the call is never re-sent; only
 the handle is rebuilt, which is what stops the *next* call from
 inheriting a dead client.
+
+The inventory fan-out (`list_tools`) carries none of that caution:
+listing is read-only, so on *either* shape the handle is rebuilt and
+the list re-fetched exactly once, inside the same per-server
+`tool_list_timeout` budget. Only if the rebuilt client also fails does
+the [bounded fan-out](multi-server.md)'s degradation apply — last-known
+inventory, else exclusion. This is what lets a process heal from a
+server rollout on the next turn instead of serving a stale inventory
+until it restarts.
 
 A propagated rejection lands in the taxonomy's catch-all row above:
 `"ERROR: unexpected HTTPStatusError: …"`.

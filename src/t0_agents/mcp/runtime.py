@@ -419,7 +419,42 @@ class _ServerHandle:
         Every successful fetch also lands in ``_last_known``, the
         TTL-exempt fallback :meth:`MCPRuntime.list_tools` serves when
         this handle cannot answer within its deadline.
+
+        A dead session heals here: on either session-loss shape (see
+        :meth:`call`) the client is rebuilt and the list re-fetched,
+        exactly once.  Listing is read-only, so unlike :meth:`call` the
+        retry is safe on *both* shapes — none of the "the call MAY have
+        executed" caution applies to an inventory fetch.  Recovery runs
+        *before* :meth:`MCPRuntime.list_tools` degrades to the
+        last-known list, and a failed retry propagates so that
+        degradation still applies.  Timeouts and connect failures are
+        not session loss and are never retried.
         """
+        generation = self._generation
+        try:
+            return await self._tools_once()
+        except McpError as error:
+            if not _is_session_terminated(error):
+                raise
+            logger.warning(
+                "MCP session for %r terminated during tools/list; "
+                "rebuilding client and re-listing once",
+                self.key,
+            )
+        except httpx.HTTPStatusError as error:
+            if not _is_session_rejected(error):
+                raise
+            logger.warning(
+                "MCP session for %r rejected with HTTP %d during "
+                "tools/list; rebuilding client and re-listing once",
+                self.key,
+                error.response.status_code,
+            )
+        await self.rebuild_if(generation)
+        return await self._tools_once()
+
+    async def _tools_once(self) -> list[mcp.types.Tool]:
+        """Single fetch attempt: connect, then live or TTL-cached inventory."""
         await self.connect()
         if self.live_inventory:
             tools = await self.client.list_tools()
@@ -696,15 +731,18 @@ class MCPRuntime:
         handles raises :class:`ConfigurationError` — the composite silently
         forwarded duplicates to inference.
 
-        Each handle gets ``tool_list_timeout`` seconds of the fan-out.
-        Handles are process-shared, so one server that cannot answer
-        would otherwise hang every conversation's turn; instead it
-        degrades: its last-known inventory is served (ignoring the TTL),
-        and a handle that has never answered is excluded from this
-        merge.  The accepted cost is staleness — a tool added to a
-        server while it is unreachable stays invisible until it answers
-        again.  An unreachable server never raises; a genuine name
-        collision still does.
+        Each handle gets ``tool_list_timeout`` seconds of the fan-out —
+        one budget covering :meth:`_ServerHandle.tools`' fetch *and* its
+        rebuild-and-re-list recovery from a dead session.  Handles are
+        process-shared, so one server that cannot answer would otherwise
+        hang every conversation's turn; instead it degrades, in order: a
+        dead session is rebuilt and re-listed once (the handle
+        self-heals — no process restart); failing that, its last-known
+        inventory is served (ignoring the TTL); a handle that has never
+        answered is excluded from this merge.  The accepted cost is
+        staleness — a tool added to a server while it is unreachable
+        stays invisible until it answers again.  An unreachable server
+        never raises; a genuine name collision still does.
         """
         per_handle = await asyncio.gather(
             *(

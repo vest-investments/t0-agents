@@ -33,9 +33,12 @@ Tool inventories are likewise per-server, not per-conversation: remote
 `tools/list_changed` notifications), so per-turn tool listing does not
 multiply with conversation count.  In-memory servers stay live-linked.
 Because those handles are process-shared, the inventory fan-out is also
-bounded per server (`MCPRuntime(tool_list_timeout=)`, default 10 s): an
-unreachable server degrades to its last-known inventory — or is skipped
-if it never answered — rather than blocking every conversation's turn.
+bounded per server (`MCPRuntime(tool_list_timeout=)`, default 10 s): a
+dead session is rebuilt and re-listed once within that budget (the
+generation guard collapses concurrent rebuilds into one, so N turns
+hitting the same dead handle never churn clients), an unreachable
+server degrades to its last-known inventory — or is skipped if it
+never answered — rather than blocking every conversation's turn.
 
 Identity is a **conversation dimension** on top of this model:
 `conversation(auth=...)` pools additional warm clients by
