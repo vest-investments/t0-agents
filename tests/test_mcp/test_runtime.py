@@ -1105,6 +1105,77 @@ def test_list_tools_never_returns_is_bounded_in_subprocess() -> None:
     assert "LIST-TOOLS-OK" in proc.stdout
 
 
+# --- Inventory session recovery ----------------------------------------------
+
+
+async def test_list_tools_recovers_a_terminated_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pool-poisoning shape, healed: a server redeploy leaves the
+    warm handle holding a dead session id, and without recovery the
+    fan-out serves the stale fallback until a process restart.  The
+    re-list must be live — the late-registered tool proves it wasn't
+    the last-known list."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    killer = _SessionKiller()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=killer.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                original_client = handle.client
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                killer.kill_next_posts = 1
+                recovered = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert recovered == {"svc_hello", "svc_second"}
+    assert handle.client is not original_client
+
+
+async def test_list_tools_recovers_a_rejected_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same recovery on the bare-400 shape.  ``call()`` never resends on
+    this shape (indistinguishable from a dispatched call's failure);
+    listing is read-only, so the inventory path retries on both."""
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    rejector = _SessionRejector()
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server, wrap_asgi=rejector.wrap) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                original_client = handle.client
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                clock.value += 61.0
+                rejector.reject_next_posts = 1
+                recovered = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert recovered == {"svc_hello", "svc_second"}
+    assert handle.client is not original_client
+
+
 # --- Concurrency, teardown, and efficiency battery ---------------------------
 
 
