@@ -4,6 +4,96 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.1] — 2026-08-07
+
+A resilience patch over 2.2.0, written from a production incident: one
+mounted MCP server that stopped answering hung every conversation in the
+process — silently, with no error and no log. The tool-inventory fan-out is
+now bounded and degrades instead of blocking; session-loss recovery reaches
+the inventory path, so a server redeploy no longer needs a consumer
+restart; a session rejected with a bare HTTP 400 is recovered; and
+in-stream elicitation survives derived fluent handles. Nothing breaks — the
+only public type change *widens* a Protocol.
+
+### Added
+
+- **`MCPRuntime(tool_list_timeout=)` — a per-server budget for the tool
+  inventory.**  Each handle's share of the `list_tools()` fan-out gets
+  `tool_list_timeout` seconds (default `10.0`), covering the fetch and any
+  session-loss recovery inside the one budget.  Deliberately its own
+  constant rather than derived from `MCPServer(timeout=)`: a read window
+  sized to clear an elicitation wait is no deadline at all.
+- **`AgentHandle.conversation()` carries the identity kwargs.**  The public
+  Protocol declared only `id` / `hydrate` / `user` / `tags` while the
+  concrete `@app.agent` wrapper had always accepted `auth`,
+  `elicitation_handler`, `memory` and `tools` as well.  Consumers typing
+  against `AgentHandle` therefore needed `cast(Any, handle)` — switching
+  off type-checking on the call that opens every turn — and multi-tenancy
+  was unreachable through the public type.  The two signatures now agree.
+  Type-surface only; the implementation already satisfied the wider shape,
+  so structural conformance is unchanged.  This was one of the original
+  `2.2.1` follow-ups, stranded when the release was never cut; it lands
+  here.
+
+### Fixed
+
+- **`list_tools()` no longer hangs on an unreachable server.**  The
+  inventory fan-out was an `asyncio.gather` with no timeout and no
+  `return_exceptions`, so a single server that never answered meant the
+  turn never reached the LLM — and because the SDK swallows a read timeout
+  on a dead request stream, there was no ceiling short of whatever the
+  caller imposed.  Each handle now runs inside its own `tool_list_timeout`
+  budget and the fan-out tolerates failures, degrading in order: a dead
+  session is rebuilt and re-listed once; failing that, the handle's
+  **last-known** inventory is served; a server that has never answered is
+  excluded from the merge with a warning.  **The tradeoff to know about:**
+  a tool *added* while a server is unreachable stays invisible until that
+  server answers again.  The last-known list is held separately from the
+  60 s TTL cache so `refresh()`'s invalidate-all cannot wipe the fallback
+  exactly when it is needed.  Relatedly, a `connect()` interrupted
+  mid-`enter_async_context` now re-mints its client under the lock it
+  already holds instead of leaving a half-entered stack for the next caller
+  to re-enter — cancelling a wedged handle no longer converts a transient
+  outage into a permanent one.
+- **Session-loss recovery now covers the inventory path, not just calls.**
+  A server that merely *rolled* — its warm session dead, the server itself
+  answering — used to poison its handle until the consuming process
+  restarted: the fan-out saw the rejection, fell into the degradation arm,
+  and served a stale list forever.  `_ServerHandle.tools()` now rebuilds
+  and re-lists once on either rejection shape, inside the same
+  `tool_list_timeout` budget, with a generation guard that collapses
+  concurrent rebuilds into a single one.  Listing is read-only, so unlike a
+  tool *call* it retries on both shapes.  **This retires the "restart the
+  consumer after every MCP-server deploy" rule.**  The unprefixed-name
+  routing lookup goes through the same wrapper and self-heals too.
+- **A session rejected with a bare HTTP 400 rebuilds the handle.**  Servers
+  whose SDK predates the `404 → 32600` mapping reject a stale session with
+  a plain HTTP 400, which the transport raises as `httpx.HTTPStatusError`
+  before anything is decoded as JSON-RPC — so the existing
+  session-terminated detection never saw it and the handle stayed dead for
+  every later call.  The client is now rebuilt on that shape, but the call
+  is **never re-sent**: a 400 tears the whole transport down and fails
+  every request in flight on that handle, including ones the server already
+  dispatched and ran to completion, and the client cannot tell pre- from
+  post-dispatch.  The `404 / 32600` arm still re-sends exactly once — that
+  error is synthesised per rejected POST and carries the request's own id,
+  which is what makes resending provably safe there.  The asymmetry is
+  deliberate; see `docs/error-handling.md` § Session loss.
+- **Derived fluent runs share their root's consumption state.**
+  `Conversation.send()` pinned `_pending` to the original `FluentRun` while
+  `.with_(...)` / `.json(...)` / `.text()` / `.as_()` derive a new one, so
+  in-stream elicitation events resolved against a run that was never built
+  and both HITL frames were dropped.  Every run derived from one root now
+  shares a lineage cell, and the conversation resolves its buffer through
+  that.  Two symptoms go with it: `ElicitationRequested` /
+  `ElicitationResolved` now reach the stream on a derived send, and a
+  fully-drained derived send no longer trips the sequential-send guard with
+  `ConfigurationError` on the *next* `send()` — a pattern
+  `docs/glow/conversations.md` already documented as supported.
+  `FluentRun.consumed` (and the post-consumption `cost()` / `usage()` /
+  `feedback()` / `fork()` helpers) are family-aware accordingly.  Consumers
+  re-pointing `conv._pending` by hand can stop.
+
 ## [2.2.0] — 2026-07-21
 
 The fastmcp vertical: mounting MCP servers on a glow `App` is now Pythonic
