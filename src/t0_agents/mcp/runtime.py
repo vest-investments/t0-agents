@@ -420,6 +420,10 @@ class _ServerHandle:
         TTL-exempt fallback :meth:`MCPRuntime.list_tools` serves when
         this handle cannot answer within its deadline.
         """
+        return await self._tools_once()
+
+    async def _tools_once(self) -> list[mcp.types.Tool]:
+        """Single fetch attempt: connect, then live or TTL-cached inventory."""
         await self.connect()
         if self.live_inventory:
             tools = await self.client.list_tools()
