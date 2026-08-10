@@ -81,8 +81,11 @@ The inventory fan-out gives each server `tool_list_timeout` seconds
 (default 10, an `MCPRuntime` knob).  A server that merely *rolled* —
 its old session is dead but the server answers — self-heals inside
 that budget: the client is rebuilt and the list re-fetched once, so a
-redeploy no longer degrades anything.  A server that cannot answer in
-time contributes its **last-known** inventory — so a tool added while
+redeploy no longer degrades anything.  The same holds once a server
+that had been *absent* comes back: the client that lost its session is
+rebuilt on the next listing rather than serving stale names forever.  A
+server that cannot answer in time contributes its **last-known**
+inventory — so a tool added while
 it is unreachable stays invisible until it answers again — and a
 server that has *never* answered is excluded from that merge entirely,
 with a warning.  Agents keep running on the degraded list; nothing

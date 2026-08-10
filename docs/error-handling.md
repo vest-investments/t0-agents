@@ -186,15 +186,18 @@ Rules of thumb:
 ## Session loss
 
 A server that rolls invalidates the warm session behind every handle
-pointing at it. Two shapes reach the runtime, and on the call path they
-recover differently:
+pointing at it — and a server that simply *goes away* for a while breaks
+the same handle a third way. All three reach the runtime, and on the
+call path they recover differently:
 
-| Shape | Reaches the runtime as | Recovery (call path) |
-|-------|------------------------|----------------------|
-| HTTP 404 — the spec mapping | `McpError`, code `32600` | rebuild the client, re-send the call once |
-| bare HTTP 400 — older server SDKs | `httpx.HTTPStatusError` | rebuild the client, **propagate** |
+| Shape | Cause | Reaches the runtime as | Recovery (call path) |
+|-------|-------|------------------------|----------------------|
+| HTTP 404 — the spec mapping | server rolled | `McpError`, code `32600` | rebuild the client, re-send the call once |
+| bare HTTP 400 — older server SDKs | server rolled | `httpx.HTTPStatusError` | rebuild the client, **propagate** |
+| client lost its session | server was *absent* | `RuntimeError("Client is not connected…")` | rebuild the client, re-send the call once |
 
-The asymmetry is a safety property, not an oversight. The SDK
+The asymmetry is a safety property, not an oversight, and it follows
+entirely from *where* each failure happens relative to dispatch. The SDK
 synthesises the `32600` error *per rejected POST*, so it carries that
 request's own id and the call provably never dispatched — re-sending is
 safe even for a non-idempotent order write. A bare 400 instead tears the
@@ -204,14 +207,24 @@ indistinguishable from the client, so the call is never re-sent; only
 the handle is rebuilt, which is what stops the *next* call from
 inheriting a dead client.
 
+The third shape is the safest of all: fastmcp raises it from the
+`Client.session` property on *attribute access*, before any network I/O,
+so the request could not have left the process. It appears when a server
+is absent long enough for the transport to die — scaled to zero, evicted,
+crash-looping — after which fastmcp drops its session while the handle
+still believes it is connected. Nothing was ever rejected, so neither
+session predicate matches it; without its own arm the handle stays dead
+for the lifetime of the process, which is exactly what was observed in
+production before this shape was handled.
+
 The inventory fan-out (`list_tools`) carries none of that caution:
-listing is read-only, so on *either* shape the handle is rebuilt and
-the list re-fetched exactly once, inside the same per-server
+listing is read-only, so on *any* of the three shapes the handle is
+rebuilt and the list re-fetched exactly once, inside the same per-server
 `tool_list_timeout` budget. Only if the rebuilt client also fails does
 the [bounded fan-out](multi-server.md)'s degradation apply — last-known
 inventory, else exclusion. This is what lets a process heal from a
-server rollout on the next turn instead of serving a stale inventory
-until it restarts.
+server rollout *or* a server outage on the next turn instead of serving
+a stale inventory until it restarts.
 
 A propagated rejection lands in the taxonomy's catch-all row above:
 `"ERROR: unexpected HTTPStatusError: …"`.
