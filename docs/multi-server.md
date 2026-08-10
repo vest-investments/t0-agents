@@ -85,10 +85,12 @@ the process.  Compared to composing servers by hand:
   never dispatched (it carries that request's own id); a server whose
   SDK predates that mapping rejects with a bare HTTP 400 instead, which
   fails *every* call in flight on the handle — the client is still
-  rebuilt so later calls recover, but nothing is re-sent.  On the
-  inventory fan-out, listing is read-only, so the runtime rebuilds and
-  re-lists once on *either* shape — the handle self-heals without a
-  process restart.  See
+  rebuilt so later calls recover, but nothing is re-sent.  A server that
+  was *absent* rather than rolled breaks the handle a third way — the
+  client loses its session and raises before dispatch — and is rebuilt
+  and re-sent like the first.  On the inventory fan-out, listing is
+  read-only, so the runtime rebuilds and re-lists once on *any* of the
+  three shapes — the handle self-heals without a process restart.  See
   [error-handling](error-handling.md#session-loss).
 
 Authenticated mounts (`headers=`/`auth=`) and per-agent `tools=`

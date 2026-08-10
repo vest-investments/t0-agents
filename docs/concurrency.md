@@ -34,9 +34,11 @@ Tool inventories are likewise per-server, not per-conversation: remote
 multiply with conversation count.  In-memory servers stay live-linked.
 Because those handles are process-shared, the inventory fan-out is also
 bounded per server (`MCPRuntime(tool_list_timeout=)`, default 10 s): a
-dead session is rebuilt and re-listed once within that budget (the
-generation guard collapses concurrent rebuilds into one, so N turns
-hitting the same dead handle never churn clients), an unreachable
+dead session is rebuilt and re-listed once within that budget —
+whether the server rejected it or the client simply lost it while the
+server was away (the generation guard collapses concurrent rebuilds
+into one, so N turns hitting the same dead handle never churn
+clients) — an unreachable
 server degrades to its last-known inventory — or is skipped if it
 never answered — rather than blocking every conversation's turn.
 

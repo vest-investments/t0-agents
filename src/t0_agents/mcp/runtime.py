@@ -81,12 +81,27 @@ _SESSION_TERMINATED_CODE = 32600
 _SESSION_REJECTED_STATUS = 400
 
 
+# The two shapes above are a server REJECTING a session it does not
+# recognise, which is what a redeploy produces.  A server that is simply
+# ABSENT for a while — scaled to zero, evicted, crash-looping past the
+# connection's patience — produces a third shape: the transport dies, so
+# fastmcp drops its session while this handle still believes it is
+# connected, and the next use raises from the `Client.session` property.
+# Matched on the message because fastmcp raises a bare `RuntimeError`;
+# the type alone would swallow unrelated bugs.
+_CLIENT_DISCONNECTED_MESSAGE = "Client is not connected"
+
+
 def _is_session_terminated(error: McpError) -> bool:
     return error.error.code == _SESSION_TERMINATED_CODE
 
 
 def _is_session_rejected(error: httpx.HTTPStatusError) -> bool:
     return error.response.status_code == _SESSION_REJECTED_STATUS
+
+
+def _is_client_disconnected(error: RuntimeError) -> bool:
+    return _CLIENT_DISCONNECTED_MESSAGE in str(error)
 
 
 class _InventoryMessageHandler(TaskNotificationHandler):
@@ -420,11 +435,11 @@ class _ServerHandle:
         TTL-exempt fallback :meth:`MCPRuntime.list_tools` serves when
         this handle cannot answer within its deadline.
 
-        A dead session heals here: on either session-loss shape (see
-        :meth:`call`) the client is rebuilt and the list re-fetched,
-        exactly once.  Listing is read-only, so unlike :meth:`call` the
-        retry is safe on *both* shapes — none of the "the call MAY have
-        executed" caution applies to an inventory fetch.  Recovery runs
+        A dead session heals here: on any of the three session-loss
+        shapes (see :meth:`call`) the client is rebuilt and the list
+        re-fetched, exactly once.  Listing is read-only, so unlike
+        :meth:`call` the retry is safe on *every* shape — none of the
+        "the call MAY have executed" caution applies here.  Recovery runs
         *before* :meth:`MCPRuntime.list_tools` degrades to the
         last-known list, and a failed retry propagates so that
         degradation still applies.  Timeouts and connect failures are
@@ -449,6 +464,14 @@ class _ServerHandle:
                 "tools/list; rebuilding client and re-listing once",
                 self.key,
                 error.response.status_code,
+            )
+        except RuntimeError as error:
+            if not _is_client_disconnected(error):
+                raise
+            logger.warning(
+                "MCP client for %r lost its session during tools/list; "
+                "rebuilding client and re-listing once",
+                self.key,
             )
         await self.rebuild_if(generation)
         return await self._tools_once()
@@ -497,6 +520,12 @@ class _ServerHandle:
         is rebuilt (without it the dead client is reused and every later
         call fails too) but the call is never resent.
 
+        A *disconnected client* — the server was absent long enough to
+        drop the transport — is the safest of the three: fastmcp raises
+        from the ``Client.session`` property on attribute access, before
+        any network I/O, so the request provably never left the process.
+        One re-send on a rebuilt client is safe, order writes included.
+
         Any other failure, including timeouts and mid-call stream deaths,
         propagates: the call MAY have executed.
         """
@@ -532,6 +561,20 @@ class _ServerHandle:
             )
             await self.rebuild_if(generation)
             raise
+        except RuntimeError as error:
+            if not _is_client_disconnected(error):
+                raise
+            logger.warning(
+                "MCP client for %r lost its session; rebuilding client "
+                "and resending %r once",
+                self.key,
+                name,
+            )
+            await self.rebuild_if(generation)
+            await self.connect()
+            return await self.client.call_tool(
+                name, arguments, timeout=timeout, progress_handler=progress_handler
+            )
 
     def _remint_locked(self) -> tuple[bool, AsyncExitStack]:
         """Swap in a factory-fresh client and stack; caller holds ``_lock``.
