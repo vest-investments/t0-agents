@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.2] — 2026-08-10
+
+A one-shape follow-up to 2.2.1, found by verifying 2.2.1 in production
+rather than by reading the code. 2.2.1 recovers a session a server
+**rejects**, which is what a redeploy produces. It does not recover a
+client whose session simply **vanished**, which is what a server's
+*absence* produces — scaled to zero, evicted, or crash-looping long
+enough for the transport to die. Nothing is rejected in that case, so
+neither session predicate matched, `rebuild_if` never fired, and the
+handle stayed dead for the lifetime of the process while the server sat
+there healthy. Measured: three consecutive turns failed to reach a server
+that had been back for minutes; only a restart cleared it.
+
+### Fixed
+
+- `MCPRuntime` now recognises a third session-loss shape — fastmcp's
+  `RuntimeError("Client is not connected…")` — and recovers from it on
+  both the inventory and the call path. A server that was fully absent
+  and came back no longer requires a consumer restart, closing the gap
+  2.2.1 left behind for that trigger.
+- The call path **re-sends** once on this shape. The safety argument is
+  stronger than for the `32600` shape: fastmcp raises from the
+  `Client.session` property on attribute access, before any network I/O,
+  so the request provably never left the process. (The bare-400 shape
+  keeps its no-resend rule — it dies *after* dispatch.)
+
+### Notes
+
+- The predicate matches fastmcp's message, not a bare `RuntimeError`;
+  matching the type alone would swallow unrelated bugs and could re-send
+  an order write. Pinned by a test.
+- No API change. `docs/error-handling.md` § Session loss now documents
+  all three shapes in one table.
+
 ## [2.2.1] — 2026-08-07
 
 A resilience patch over 2.2.0, written from a production incident: one
