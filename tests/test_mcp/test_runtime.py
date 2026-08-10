@@ -596,6 +596,60 @@ async def test_session_terminated_rebuilds_and_resends_exactly_once() -> None:
     assert handle.client is not original_client
 
 
+async def test_vanished_session_rebuilds_and_resends_exactly_once() -> None:
+    """The full-outage shape, healed on the call path.
+
+    A server that is merely absent for a while never *rejects* anything:
+    the transport dies, fastmcp drops its session, and the next use
+    raises from the ``Client.session`` property while this handle still
+    believes it is connected.  Resending is safe here — that property
+    raises on attribute access, before any network I/O, so the request
+    provably never left the process (a stronger argument than the 32600
+    shape's, and the opposite of the bare 400's).
+    """
+    executions: list[str] = []
+    async with _ephemeral_http_server(_counting_server(executions)) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            warm = await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            original_client = handle.client
+
+            # Exactly what a dropped transport leaves behind.
+            handle.client._reset_session_state()
+            assert handle._connected is True
+
+            recovered = await runtime.call_tool("svc_work", {})
+
+    assert warm.data == "done"
+    assert recovered.data == "done"
+    assert executions == ["work", "work"]
+    assert handle.client is not original_client
+
+
+async def test_unrelated_runtime_errors_never_resend() -> None:
+    """The predicate matches a message, not a type.  An unrelated
+    ``RuntimeError`` must propagate untouched — matching bare
+    ``RuntimeError`` would swallow real bugs and resend order writes."""
+    executions: list[str] = []
+    async with _ephemeral_http_server(_counting_server(executions)) as url:
+        spec = MCPServer(url=url, namespace="svc")._to_spec()
+        async with MCPRuntime([spec]) as runtime:
+            await runtime.call_tool("svc_work", {})
+            (handle,) = runtime._handles
+            client_before = handle.client
+
+            async def _boom(*args: Any, **kwargs: Any) -> Any:
+                raise RuntimeError("event loop is closed")
+
+            handle.client.call_tool = _boom  # type: ignore[method-assign]
+            with pytest.raises(RuntimeError, match="event loop is closed"):
+                await runtime.call_tool("svc_work", {})
+
+    assert executions == ["work"]
+    assert handle.client is client_before
+
+
 async def test_non_session_errors_never_resend() -> None:
     """A per-call timeout fires AFTER the request dispatched — resending
     could double-execute an order-write. It must propagate untouched."""
@@ -1169,6 +1223,47 @@ async def test_list_tools_recovers_a_rejected_session(
 
                 clock.value += 61.0
                 rejector.reject_next_posts = 1
+                recovered = {tool.name for tool in await runtime.list_tools()}
+
+    assert primed == {"svc_hello"}
+    assert recovered == {"svc_hello", "svc_second"}
+    assert handle.client is not original_client
+
+
+async def test_list_tools_recovers_a_vanished_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The full-outage shape on the inventory path — the one measured in
+    production 2026-08-10.
+
+    Note what is NOT wrong here: the server is up and answering.  Only
+    the client lost its session, so without this recovery the fan-out
+    serves the last-known list *forever* while the server sits there
+    healthy — three consecutive turns failed that way in prod, and only a
+    process restart cleared it.  The late-registered tool proves the
+    re-list was live rather than the stale fallback.
+    """
+    clock = _Clock()
+    monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
+    server = _named_server("rsrv", "hello")
+
+    async with asyncio.timeout(30):
+        async with _ephemeral_http_server(server) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec], tool_list_timeout=5.0) as runtime:
+                (handle,) = runtime._handles
+                primed = {tool.name for tool in await runtime.list_tools()}
+                original_client = handle.client
+
+                @server.tool
+                async def second() -> str:
+                    """Late registration, visible only to a live fetch."""
+                    return "second"
+
+                handle.client._reset_session_state()
+                assert handle._connected is True
+
+                clock.value += 61.0
                 recovered = {tool.name for tool in await runtime.list_tools()}
 
     assert primed == {"svc_hello"}
