@@ -657,6 +657,16 @@ def _output_to_content_blocks(output: Any) -> list[Any]:
     thoughts stay in the store but are never replayed. A thought-only
     output therefore yields ``[]`` and the caller appends no assistant
     message.
+
+    Output-side tool calls arrive as
+    :class:`~tensorzero.generated_types.ContentBlockChatOutputToolCall`:
+    ``arguments`` is the PARSED value (a dict — ``None`` when the model's
+    JSON was invalid) and the model's raw JSON string lives in
+    ``raw_arguments``; an INVALID call likewise has ``name=None`` but
+    always carries ``raw_name``.  The replayed input side
+    (``ToolCallWrapper``) demands ``str`` arguments in every union
+    variant, so ``raw_arguments`` must be carried through as the string
+    — anything else 400s every subsequent inference of the episode.
     """
     if not isinstance(output, list):
         return []
@@ -666,19 +676,32 @@ def _output_to_content_blocks(output: Any) -> list[Any]:
             if item.text:
                 blocks.append(Text(text=item.text))
         elif getattr(item, "type", None) == "tool_call":
-            # ContentBlockChatOutputToolCall inherits arguments/id/name.
-            args = getattr(item, "arguments", "") or ""
-            try:
-                decoded = json.loads(args) if args else None
-            except (TypeError, ValueError):
-                parsed = None
+            raw = getattr(item, "raw_arguments", None)
+            args_obj = getattr(item, "arguments", None)
+            raw_args: str
+            if isinstance(raw, str):
+                raw_args = raw
+            elif isinstance(args_obj, str):
+                raw_args = args_obj
             else:
-                parsed = decoded if isinstance(decoded, dict) else None
+                raw_args = json.dumps(args_obj) if args_obj is not None else ""
+            parsed: dict[str, Any] | None
+            if isinstance(args_obj, dict):
+                parsed = cast("dict[str, Any]", args_obj)
+            else:
+                try:
+                    decoded = json.loads(raw_args) if raw_args else None
+                except (TypeError, ValueError):
+                    parsed = None
+                else:
+                    parsed = decoded if isinstance(decoded, dict) else None
             blocks.append(
                 ToolCall(
                     id=getattr(item, "id", ""),
-                    raw_arguments=args,
-                    raw_name=getattr(item, "name", "") or "",
+                    raw_arguments=raw_args,
+                    raw_name=getattr(item, "raw_name", None)
+                    or getattr(item, "name", None)
+                    or "",
                     arguments=parsed,
                     name=getattr(item, "name", None),
                 ),

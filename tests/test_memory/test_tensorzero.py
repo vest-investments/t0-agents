@@ -19,9 +19,11 @@ from tensorzero import (
     InferenceFilterTag,
     Text,
     Thought,
+    ToolCall,
 )
 from tensorzero.generated_types import (
     ContentBlockChatOutputText,
+    ContentBlockChatOutputToolCall,
     InferenceFilterTime,
     StoredInferenceChat,
     StoredInferenceJson,
@@ -38,6 +40,7 @@ from tensorzero.generated_types import (
 from t0_agents.core.types import MemoryProvider
 from t0_agents.memory import TensorZeroMemory
 from t0_agents.memory.base import MemoryRecord
+from t0_agents.memory.tensorzero import _output_to_content_blocks
 from tests._fake_t0 import FakeListInferencesResponse, FakeT0
 
 # ---------------------------------------------------------------------------
@@ -1065,64 +1068,77 @@ class TestHelperBranches:
         assert len(history) == 1
         assert history[0]["role"] == "user"
 
-    async def test_output_to_content_blocks_tool_call(self) -> None:
-        """Output-side ToolCall blocks are converted to runtime ToolCall."""
-        from dataclasses import dataclass
+    async def test_output_tool_call_replays_the_served_gateway_shape(self) -> None:
+        """The converter must carry the model's raw JSON STRING to the wire.
 
-        from tensorzero import ToolCall
-
-        @dataclass
-        class _OutputToolCall:
-            arguments: str = '{"x": 1}'
-            id: str = "out-tc-1"
-            name: str = "do_thing"
-            type: str = "tool_call"
-
-        ep = str(uuid4())
-        inf = _stored_chat(episode_id=ep)
-        object.__setattr__(inf, "output", [_OutputToolCall()])
-        t0 = FakeT0(
-            [],
-            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        The gateway serves output-side calls as
+        :class:`ContentBlockChatOutputToolCall` — ``arguments`` already
+        PARSED (a dict) and the raw JSON string in ``raw_arguments``.
+        The replayed input side (``ToolCallWrapper``, an untagged union)
+        demands str in both variants, so a dict smuggled into
+        ``raw_arguments`` 400s every subsequent message of the episode
+        (the 2026-08-17 poisoned-history incident)."""
+        stored = ContentBlockChatOutputToolCall(
+            id="out-tc-1",
+            raw_arguments='{"x": 1}',
+            raw_name="do_thing",
+            arguments={"x": 1},
+            name="do_thing",
         )
-        mem = _make_memory(t0)
-        history = await mem.load_history(ep)
-        assert history is not None
-        assistant = history[-1]
-        assert assistant["role"] == "assistant"
-        block = assistant["content"][0]
+        blocks = _output_to_content_blocks([stored])
+        assert len(blocks) == 1
+        block = blocks[0]
         assert isinstance(block, ToolCall)
+        assert block.raw_arguments == '{"x": 1}'
         assert block.arguments == {"x": 1}
         assert block.name == "do_thing"
+        assert block.raw_name == "do_thing"
+        wire = block.to_dict()
+        assert wire["raw_arguments"] == '{"x": 1}'
+        assert isinstance(wire["raw_arguments"], str)
 
-    async def test_output_to_content_blocks_tool_call_invalid_json(self) -> None:
-        """Output-side ToolCall with non-JSON arguments → arguments=None,
-        raw_arguments preserved."""
-        from dataclasses import dataclass
+    async def test_output_tool_call_invalid_call_replays_raw_fields(self) -> None:
+        """An INVALID stored call keeps its raw fields on replay.
 
-        from tensorzero import ToolCall
+        When the model wrote unparseable arguments (or an unknown tool
+        name) the gateway persists ``arguments=None`` / ``name=None`` but
+        ALWAYS carries ``raw_arguments`` / ``raw_name`` — mirror those
+        through instead of dropping them to empty strings."""
+        stored = ContentBlockChatOutputToolCall(
+            id="out-tc-2",
+            raw_arguments="not-json",
+            raw_name="do_thing",
+            arguments=None,
+            name=None,
+        )
+        blocks = _output_to_content_blocks([stored])
+        block = blocks[0]
+        assert isinstance(block, ToolCall)
+        assert block.raw_arguments == "not-json"
+        assert block.arguments is None
+        assert block.raw_name == "do_thing"
+        assert block.name is None
+
+    async def test_output_tool_call_dict_only_arguments_are_serialized(self) -> None:
+        """Defensive fallback: a dict-only block is serialized, not passed raw.
+
+        No known gateway shape lacks ``raw_arguments``, but if one ever
+        does, the wire still demands a string — ``json.dumps`` the parsed
+        dict rather than emit it verbatim."""
+        from dataclasses import dataclass, field
 
         @dataclass
-        class _OutputToolCall:
-            arguments: str = "not-json"
-            id: str = "out-tc-2"
+        class _DictOnlyToolCall:
+            arguments: dict[str, Any] = field(default_factory=lambda: {"x": 1})
+            id: str = "out-tc-3"
             name: str = "do_thing"
             type: str = "tool_call"
 
-        ep = str(uuid4())
-        inf = _stored_chat(episode_id=ep)
-        object.__setattr__(inf, "output", [_OutputToolCall()])
-        t0 = FakeT0(
-            [],
-            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
-        )
-        mem = _make_memory(t0)
-        history = await mem.load_history(ep)
-        assert history is not None
-        block = history[-1]["content"][0]
+        blocks = _output_to_content_blocks([_DictOnlyToolCall()])
+        block = blocks[0]
         assert isinstance(block, ToolCall)
-        assert block.arguments is None
-        assert block.raw_arguments == "not-json"
+        assert block.raw_arguments == '{"x": 1}'
+        assert block.arguments == {"x": 1}
 
     async def test_output_thought_block_stripped_on_replay(self) -> None:
         """Output-side ``Thought`` blocks are dropped on replay; ``Text``
