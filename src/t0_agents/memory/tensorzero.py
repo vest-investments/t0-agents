@@ -279,6 +279,15 @@ class TensorZeroMemory:
         The drop is silent (no warning) because it is by design, not a
         decode failure. A turn whose only content was a thought yields no
         replayed message at all (it is skipped, never emitted empty).
+
+        ``ToolCall`` blocks are dropped from the appended assistant
+        message (debug-logged): it is built from the LAST inference's
+        output, so a tool call there is unanswered by construction — its
+        result would live in the input of a next inference that never
+        ran, meaning the turn died mid-tool-loop.  Replaying it puts an
+        assistant tool_call directly before the next user message, which
+        OpenAI-compatible providers reject; dropping it lets the model
+        re-decide the call.  A normal turn ends in text and is untouched.
         """
         request = ListInferencesRequest(
             function_name=self._function_name,
@@ -312,8 +321,22 @@ class TensorZeroMemory:
         # Append the most recent assistant reply (TZ stores it as
         # ``output``, not as a message inside ``input.messages`` — the
         # input only carries the turn-N messages BEFORE the model
-        # responded).
+        # responded).  Tool calls here are dangling by construction —
+        # see the docstring — so they never replay.
         assistant_blocks = _output_to_content_blocks(latest.output)
+        dangling = sum(1 for b in assistant_blocks if isinstance(b, ToolCall))
+        if dangling:
+            assistant_blocks = [
+                b for b in assistant_blocks if not isinstance(b, ToolCall)
+            ]
+            logger.debug(
+                "TensorZeroMemory.load_history: dropped %d dangling "
+                "tool_call block(s) from the final assistant message of "
+                "episode %s — the turn died mid-tool-loop, so their "
+                "results were never produced.",
+                dangling,
+                episode_id,
+            )
         if assistant_blocks:
             history.append(
                 Message(role="assistant", content=assistant_blocks),

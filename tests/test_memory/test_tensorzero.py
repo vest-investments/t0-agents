@@ -1080,7 +1080,9 @@ class TestHelperBranches:
         (the 2026-08-17 poisoned-history incident)."""
         stored = ContentBlockChatOutputToolCall(
             id="out-tc-1",
-            raw_arguments='{"x": 1}',
+            # Deliberately NOT json.dumps-canonical (no space): the wire
+            # must carry the model's literal string, not a re-serialization.
+            raw_arguments='{"x":1}',
             raw_name="do_thing",
             arguments={"x": 1},
             name="do_thing",
@@ -1089,12 +1091,12 @@ class TestHelperBranches:
         assert len(blocks) == 1
         block = blocks[0]
         assert isinstance(block, ToolCall)
-        assert block.raw_arguments == '{"x": 1}'
+        assert block.raw_arguments == '{"x":1}'
         assert block.arguments == {"x": 1}
         assert block.name == "do_thing"
         assert block.raw_name == "do_thing"
         wire = block.to_dict()
-        assert wire["raw_arguments"] == '{"x": 1}'
+        assert wire["raw_arguments"] == '{"x":1}'
         assert isinstance(wire["raw_arguments"], str)
 
     async def test_output_tool_call_invalid_call_replays_raw_fields(self) -> None:
@@ -1139,6 +1141,128 @@ class TestHelperBranches:
         assert isinstance(block, ToolCall)
         assert block.raw_arguments == '{"x": 1}'
         assert block.arguments == {"x": 1}
+
+    async def test_dangling_tool_call_dropped_from_final_assistant_message(
+        self,
+    ) -> None:
+        """A mid-tool-loop death leaves an unanswered final tool call.
+
+        The appended assistant message comes from the LAST inference's
+        output; a tool_call there is unanswered by construction — its
+        result would live in the input of a next inference that never
+        ran.  Providers reject an assistant tool_call followed directly
+        by a user message, so the dangling call is dropped on replay and
+        the model re-decides it.  A tool_call-only output therefore
+        appends no assistant message at all (the thought-only precedent).
+        """
+        ep = str(uuid4())
+        inf = _stored_chat(
+            user_messages=[_user_text_msg("rank bond ETFs")], episode_id=ep
+        )
+        dangling = ContentBlockChatOutputToolCall(
+            id="out-tc-4",
+            raw_arguments='{"q": "bond"}',
+            raw_name="search",
+            arguments={"q": "bond"},
+            name="search",
+        )
+        object.__setattr__(inf, "output", [dangling])
+        t0 = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        mem = _make_memory(t0)
+        history = await mem.load_history(ep)
+        assert history is not None
+        assert len(history) == 1
+        assert history[0]["role"] == "user"
+
+    async def test_final_assistant_text_survives_the_dangling_drop(self) -> None:
+        """Mixed final output: the text is kept, only the dangling call goes."""
+        ep = str(uuid4())
+        inf = _stored_chat(episode_id=ep)
+        output_blocks = [
+            ContentBlockChatOutputText(text="Let me check the market."),
+            ContentBlockChatOutputToolCall(
+                id="out-tc-5",
+                raw_arguments='{"q": "bond"}',
+                raw_name="search",
+                arguments={"q": "bond"},
+                name="search",
+            ),
+        ]
+        object.__setattr__(inf, "output", output_blocks)
+        t0 = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        mem = _make_memory(t0)
+        history = await mem.load_history(ep)
+        assert history is not None
+        assistant = history[-1]
+        assert assistant["role"] == "assistant"
+        content = assistant["content"]
+        assert isinstance(content, list)
+        assert len(content) == 1
+        block = content[0]
+        assert isinstance(block, Text)
+        assert block.text == "Let me check the market."
+
+    async def test_poisoned_episode_replays_history_minus_the_dangling_call(
+        self,
+    ) -> None:
+        """The 2026-08-17 incident shape end to end.
+
+        An episode whose last inference output is a tool_call replays as
+        the prior user/tool context with the dangling call dropped:
+        answered input-side calls survive untouched (they deserialized
+        fine throughout the incident), and nothing malformed is appended.
+        """
+        ep = str(uuid4())
+        msgs = [
+            _user_text_msg("rank bond ETFs"),
+            StoredInputMessage(
+                role="assistant",
+                content=[
+                    StoredInputMessageContentToolCall(
+                        id="c1",
+                        name="search_tickers",
+                        arguments='{"q": "bond ETF"}',
+                    )
+                ],
+            ),
+            StoredInputMessage(
+                role="user",
+                content=[
+                    StoredInputMessageContentToolResult(
+                        id="c1",
+                        name="search_tickers",
+                        result="BND, IEF",
+                    )
+                ],
+            ),
+        ]
+        inf = _stored_chat(user_messages=msgs, episode_id=ep)
+        dangling = ContentBlockChatOutputToolCall(
+            id="c2",
+            raw_arguments='{"ticker": "BND"}',
+            raw_name="get_bars",
+            arguments={"ticker": "BND"},
+            name="get_bars",
+        )
+        object.__setattr__(inf, "output", [dangling])
+        t0 = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        mem = _make_memory(t0)
+        history = await mem.load_history(ep)
+        assert history is not None
+        assert [m["role"] for m in history] == ["user", "assistant", "user"]
+        answered = history[1]["content"]
+        assert isinstance(answered, list)
+        assert isinstance(answered[0], ToolCall)
+        assert answered[0].raw_arguments == '{"q": "bond ETF"}'
 
     async def test_output_thought_block_stripped_on_replay(self) -> None:
         """Output-side ``Thought`` blocks are dropped on replay; ``Text``
