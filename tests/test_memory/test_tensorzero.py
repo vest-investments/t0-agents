@@ -19,9 +19,11 @@ from tensorzero import (
     InferenceFilterTag,
     Text,
     Thought,
+    ToolCall,
 )
 from tensorzero.generated_types import (
     ContentBlockChatOutputText,
+    ContentBlockChatOutputToolCall,
     InferenceFilterTime,
     StoredInferenceChat,
     StoredInferenceJson,
@@ -38,6 +40,7 @@ from tensorzero.generated_types import (
 from t0_agents.core.types import MemoryProvider
 from t0_agents.memory import TensorZeroMemory
 from t0_agents.memory.base import MemoryRecord
+from t0_agents.memory.tensorzero import _output_to_content_blocks
 from tests._fake_t0 import FakeListInferencesResponse, FakeT0
 
 # ---------------------------------------------------------------------------
@@ -1065,22 +1068,130 @@ class TestHelperBranches:
         assert len(history) == 1
         assert history[0]["role"] == "user"
 
-    async def test_output_to_content_blocks_tool_call(self) -> None:
-        """Output-side ToolCall blocks are converted to runtime ToolCall."""
-        from dataclasses import dataclass
+    async def test_output_tool_call_replays_the_served_gateway_shape(self) -> None:
+        """The converter must carry the model's raw JSON STRING to the wire.
 
-        from tensorzero import ToolCall
+        The gateway serves output-side calls as
+        :class:`ContentBlockChatOutputToolCall` — ``arguments`` already
+        PARSED (a dict) and the raw JSON string in ``raw_arguments``.
+        The replayed input side (``ToolCallWrapper``, an untagged union)
+        demands str in both variants, so a dict smuggled into
+        ``raw_arguments`` 400s every subsequent message of the episode
+        (the 2026-08-17 poisoned-history incident)."""
+        stored = ContentBlockChatOutputToolCall(
+            id="out-tc-1",
+            # Deliberately NOT json.dumps-canonical (no space): the wire
+            # must carry the model's literal string, not a re-serialization.
+            raw_arguments='{"x":1}',
+            raw_name="do_thing",
+            arguments={"x": 1},
+            name="do_thing",
+        )
+        blocks = _output_to_content_blocks([stored])
+        assert len(blocks) == 1
+        block = blocks[0]
+        assert isinstance(block, ToolCall)
+        assert block.raw_arguments == '{"x":1}'
+        assert block.arguments == {"x": 1}
+        assert block.name == "do_thing"
+        assert block.raw_name == "do_thing"
+        wire = block.to_dict()
+        assert wire["raw_arguments"] == '{"x":1}'
+        assert isinstance(wire["raw_arguments"], str)
+
+    async def test_output_tool_call_invalid_call_replays_raw_fields(self) -> None:
+        """An INVALID stored call keeps its raw fields on replay.
+
+        When the model wrote unparseable arguments (or an unknown tool
+        name) the gateway persists ``arguments=None`` / ``name=None`` but
+        ALWAYS carries ``raw_arguments`` / ``raw_name`` — mirror those
+        through instead of dropping them to empty strings."""
+        stored = ContentBlockChatOutputToolCall(
+            id="out-tc-2",
+            raw_arguments="not-json",
+            raw_name="do_thing",
+            arguments=None,
+            name=None,
+        )
+        blocks = _output_to_content_blocks([stored])
+        block = blocks[0]
+        assert isinstance(block, ToolCall)
+        assert block.raw_arguments == "not-json"
+        assert block.arguments is None
+        assert block.raw_name == "do_thing"
+        assert block.name is None
+
+    async def test_output_tool_call_dict_only_arguments_are_serialized(self) -> None:
+        """Defensive fallback: a dict-only block is serialized, not passed raw.
+
+        No known gateway shape lacks ``raw_arguments``, but if one ever
+        does, the wire still demands a string — ``json.dumps`` the parsed
+        dict rather than emit it verbatim."""
+        from dataclasses import dataclass, field
 
         @dataclass
-        class _OutputToolCall:
-            arguments: str = '{"x": 1}'
-            id: str = "out-tc-1"
+        class _DictOnlyToolCall:
+            arguments: dict[str, Any] = field(default_factory=lambda: {"x": 1})
+            id: str = "out-tc-3"
             name: str = "do_thing"
             type: str = "tool_call"
 
+        blocks = _output_to_content_blocks([_DictOnlyToolCall()])
+        block = blocks[0]
+        assert isinstance(block, ToolCall)
+        assert block.raw_arguments == '{"x": 1}'
+        assert block.arguments == {"x": 1}
+
+    async def test_dangling_tool_call_dropped_from_final_assistant_message(
+        self,
+    ) -> None:
+        """A mid-tool-loop death leaves an unanswered final tool call.
+
+        The appended assistant message comes from the LAST inference's
+        output; a tool_call there is unanswered by construction — its
+        result would live in the input of a next inference that never
+        ran.  Providers reject an assistant tool_call followed directly
+        by a user message, so the dangling call is dropped on replay and
+        the model re-decides it.  A tool_call-only output therefore
+        appends no assistant message at all (the thought-only precedent).
+        """
+        ep = str(uuid4())
+        inf = _stored_chat(
+            user_messages=[_user_text_msg("rank bond ETFs")], episode_id=ep
+        )
+        dangling = ContentBlockChatOutputToolCall(
+            id="out-tc-4",
+            raw_arguments='{"q": "bond"}',
+            raw_name="search",
+            arguments={"q": "bond"},
+            name="search",
+        )
+        object.__setattr__(inf, "output", [dangling])
+        t0 = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        mem = _make_memory(t0)
+        history = await mem.load_history(ep)
+        assert history is not None
+        assert len(history) == 1
+        assert history[0]["role"] == "user"
+
+    async def test_final_assistant_text_survives_the_dangling_drop(self) -> None:
+        """Mixed final output: the text is kept, only the dangling call goes."""
         ep = str(uuid4())
         inf = _stored_chat(episode_id=ep)
-        object.__setattr__(inf, "output", [_OutputToolCall()])
+        output_blocks = [
+            ContentBlockChatOutputText(text="Let me check the market."),
+            ContentBlockChatOutputToolCall(
+                id="out-tc-5",
+                raw_arguments='{"q": "bond"}',
+                raw_name="search",
+                arguments={"q": "bond"},
+                name="search",
+            ),
+        ]
+        object.__setattr__(inf, "output", output_blocks)
         t0 = FakeT0(
             [],
             list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
@@ -1090,28 +1201,56 @@ class TestHelperBranches:
         assert history is not None
         assistant = history[-1]
         assert assistant["role"] == "assistant"
-        block = assistant["content"][0]
-        assert isinstance(block, ToolCall)
-        assert block.arguments == {"x": 1}
-        assert block.name == "do_thing"
+        content = assistant["content"]
+        assert isinstance(content, list)
+        assert len(content) == 1
+        block = content[0]
+        assert isinstance(block, Text)
+        assert block.text == "Let me check the market."
 
-    async def test_output_to_content_blocks_tool_call_invalid_json(self) -> None:
-        """Output-side ToolCall with non-JSON arguments → arguments=None,
-        raw_arguments preserved."""
-        from dataclasses import dataclass
+    async def test_poisoned_episode_replays_history_minus_the_dangling_call(
+        self,
+    ) -> None:
+        """The 2026-08-17 incident shape end to end.
 
-        from tensorzero import ToolCall
-
-        @dataclass
-        class _OutputToolCall:
-            arguments: str = "not-json"
-            id: str = "out-tc-2"
-            name: str = "do_thing"
-            type: str = "tool_call"
-
+        An episode whose last inference output is a tool_call replays as
+        the prior user/tool context with the dangling call dropped:
+        answered input-side calls survive untouched (they deserialized
+        fine throughout the incident), and nothing malformed is appended.
+        """
         ep = str(uuid4())
-        inf = _stored_chat(episode_id=ep)
-        object.__setattr__(inf, "output", [_OutputToolCall()])
+        msgs = [
+            _user_text_msg("rank bond ETFs"),
+            StoredInputMessage(
+                role="assistant",
+                content=[
+                    StoredInputMessageContentToolCall(
+                        id="c1",
+                        name="search_tickers",
+                        arguments='{"q": "bond ETF"}',
+                    )
+                ],
+            ),
+            StoredInputMessage(
+                role="user",
+                content=[
+                    StoredInputMessageContentToolResult(
+                        id="c1",
+                        name="search_tickers",
+                        result="BND, IEF",
+                    )
+                ],
+            ),
+        ]
+        inf = _stored_chat(user_messages=msgs, episode_id=ep)
+        dangling = ContentBlockChatOutputToolCall(
+            id="c2",
+            raw_arguments='{"ticker": "BND"}',
+            raw_name="get_bars",
+            arguments={"ticker": "BND"},
+            name="get_bars",
+        )
+        object.__setattr__(inf, "output", [dangling])
         t0 = FakeT0(
             [],
             list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
@@ -1119,10 +1258,11 @@ class TestHelperBranches:
         mem = _make_memory(t0)
         history = await mem.load_history(ep)
         assert history is not None
-        block = history[-1]["content"][0]
-        assert isinstance(block, ToolCall)
-        assert block.arguments is None
-        assert block.raw_arguments == "not-json"
+        assert [m["role"] for m in history] == ["user", "assistant", "user"]
+        answered = history[1]["content"]
+        assert isinstance(answered, list)
+        assert isinstance(answered[0], ToolCall)
+        assert answered[0].raw_arguments == '{"q": "bond ETF"}'
 
     async def test_output_thought_block_stripped_on_replay(self) -> None:
         """Output-side ``Thought`` blocks are dropped on replay; ``Text``

@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.3] — 2026-08-18
+
+A replay-correctness patch written from a production incident: a turn
+that died mid-tool-loop (a provider 429, in the incident) left its
+conversation **permanently dead** — every subsequent message failed in
+under a second with `data did not match any variant of untagged enum
+ToolCallWrapper`, before any inference ran. Measured blast radius at
+fix time: 5 of 207 episodes (30 days) sat in that state; one user
+retried 11 times into the same wall. The poison was generated at
+**replay time** from healthy stored rows, so this release revives those
+conversations in place — no data migration.
+
+### Fixed
+
+- `TensorZeroMemory.load_history` replays output-side tool calls with
+  the shape the gateway actually serves. The converter read
+  `item.arguments` expecting the raw JSON string, but
+  `ContentBlockChatOutputToolCall` carries `arguments` already PARSED
+  (a dict — `None` when invalid) and the string in `raw_arguments`;
+  the dict flowed into `ToolCall.raw_arguments` (a dataclass, no
+  runtime validation) and onto the wire, where the input side demands
+  `str` in every `ToolCallWrapper` variant. Now the raw string is
+  preferred, a str `arguments` (older stored shapes) is accepted, and
+  a dict-only shape is `json.dumps`-serialized as a last resort;
+  `raw_name` is mirrored the same way — an INVALID stored call has
+  `name=None` but always carries `raw_name`.
+- `load_history` drops `tool_call` blocks from the appended final
+  assistant message (debug-logged). They are unanswered by
+  construction — their results would live in the input of a next
+  inference that never ran — and OpenAI-compatible providers reject an
+  assistant tool call followed directly by a user message. The model
+  re-decides the call instead; a normal turn ends in text and is
+  untouched.
+
+### Notes
+
+- The replaced test stubs modeled `arguments` as a str with no
+  `raw_arguments` — a shape the gateway never returns — which is why
+  they passed on broken code. The new tests build the real client
+  dataclass (`tensorzero==2026.4.0`) and pin the wire dict; 3/3 fail
+  against the previous converter.
+- No API change. Only replay-time construction changed; nothing about
+  stored data or the write path moved.
+
 ## [2.2.2] — 2026-08-10
 
 A one-shape follow-up to 2.2.1, found by verifying 2.2.1 in production
