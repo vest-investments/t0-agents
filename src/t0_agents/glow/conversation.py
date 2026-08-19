@@ -29,6 +29,7 @@ class only ever owns *one* conversation.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 from uuid import uuid4
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
     from t0_agents.glow.handle import FluentRun
 
 __all__ = ["Conversation"]
+
+logger = logging.getLogger(__name__)
 
 R = TypeVar("R")
 
@@ -360,14 +363,29 @@ class Conversation(Generic[R]):
         buffers them harmlessly.  A buffer that already closed (the run
         settled while the elicitation was resolving) drops the event —
         never fails the elicitation.
+
+        A drop is logged at WARNING because it is invisible everywhere
+        else: the MCP server keeps blocking on its own elicit deadline,
+        so a dropped request looks like a user who never answered.
         """
         buffer = self._active_buffer()
         if buffer is None:
+            logger.warning(
+                "Dropping %s %s on conversation %s: no active run buffer",
+                type(event).__name__,
+                event.id,
+                self._id,
+            )
             return
         try:
             await buffer.put(event)
         except RuntimeError:
-            return
+            logger.warning(
+                "Dropping %s %s on conversation %s: run buffer already closed",
+                type(event).__name__,
+                event.id,
+                self._id,
+            )
 
     # ------------------------------------------------------------------
     # Internals
