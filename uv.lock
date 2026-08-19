@@ -1551,7 +1551,7 @@ wheels = [
 
 [[package]]
 name = "t0-agents"
-version = "2.2.3"
+version = "2.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
