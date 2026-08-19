@@ -9,6 +9,7 @@ wire witnesses, event-id unification) lives in ``test_identity.py``.
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -26,6 +27,7 @@ from t0_agents.glow.conversation import (
     _ObservedHandler,
 )
 from t0_agents.memory.base import MemoryRecord
+from t0_agents.stream.events import ElicitationResolvedEvent
 from t0_agents.testing import MockGateway
 
 
@@ -363,6 +365,44 @@ class TestObservedHandlerEvents:
             observed("Confirm?", None, None, None), timeout=1.0
         )
         assert result == {"ok": True}
+
+    async def test_emit_without_active_run_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        app = App(t0=_fake_t0())
+
+        @app.agent("chat")
+        async def chat(q: str) -> str:
+            """A plain agent."""
+
+        conv = chat.conversation()
+
+        with caplog.at_level(
+            logging.WARNING, logger="t0_agents.glow.conversation"
+        ):
+            await conv._emit(
+                ElicitationResolvedEvent(id="drop-1", action="accept")
+            )
+
+        assert "no active run buffer" in caplog.text
+        assert "drop-1" in caplog.text
+        assert conv.id in caplog.text
+
+    async def test_emit_onto_closed_buffer_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        conv, buffer = await self._emitting_conversation()
+        await buffer.close()
+
+        with caplog.at_level(
+            logging.WARNING, logger="t0_agents.glow.conversation"
+        ):
+            await conv._emit(
+                ElicitationResolvedEvent(id="drop-2", action="decline")
+            )
+
+        assert "run buffer already closed" in caplog.text
+        assert "drop-2" in caplog.text
 
 
 class TestConversationToolScoping:
