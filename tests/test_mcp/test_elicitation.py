@@ -325,3 +325,38 @@ class TestReferenceHandlers:
         async with Client(mcp, elicitation_handler=auto_decline_handler) as client:
             result = await client.call_tool("approve_action", {"action": "deploy"})
             assert result.data == "Rejected: deploy"
+
+
+# --- Pooled per-conversation dispatch ---------------------------------------
+
+
+async def test_pooled_elicit_client_dispatches_through_the_latest_view() -> None:
+    """The conversation-scoped client is minted once per conversation and
+    outlives the view that first acquired it, so its elicitation dispatch
+    must follow the acquiring view — never the minting one.  A frozen
+    first-view binding sends every later elicit to a handler whose owner is
+    long settled: the prompt is silently dropped and the answer is awaited
+    where nothing can resolve it."""
+    from t0_agents.mcp.runtime import MCPRuntime
+    from tests.test_mcp.test_runtime import _approve_handler, _elicit_server, _spec
+
+    spec = _spec(_elicit_server(), namespace="svc", elicits=True)
+    async with MCPRuntime([spec]) as runtime:
+        log_1: list[str] = []
+        view_1 = runtime.for_conversation(
+            "conv-a",
+            elicitation_factory=lambda: _approve_handler("first", log_1),
+        )
+        await view_1.call_tool("svc_order", {})
+
+        log_2: list[str] = []
+        view_2 = runtime.for_conversation(
+            "conv-a",
+            elicitation_factory=lambda: _approve_handler("second", log_2),
+        )
+        result = await view_2.call_tool("svc_order", {})
+
+        assert result.data == "placed"
+        assert log_1 == ["first"]
+        assert log_2 == ["second"]
+        assert runtime.client_counts().conversation == 1

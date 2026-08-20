@@ -210,7 +210,9 @@ class ClientCounts:
     scoping).  The pool-model invariant: ``identity`` grows with
     *identities x overlaid servers*, ``conversation`` only with
     *conversations that touched an ``elicits=True`` server* — never with
-    ``conversations x servers``.
+    ``conversations x servers``.  A credential rotation inside one
+    conversation transiently adds one ``conversation`` entry while the
+    stale client idles out.
     """
 
     static: int
@@ -617,6 +619,36 @@ class _ServerHandle:
                 )
 
 
+class _HandlerDispatch:
+    """Rebindable elicitation-handler slot for one conversation-scoped entry.
+
+    The pooled client is minted once per conversation and outlives the
+    view that first acquired it, while the handler it must reach is
+    per-view state (each view closes over its own conversation handle).
+    Baking the minting view's handler into the client would route every
+    later elicit to a handle whose run has already settled — the prompt
+    is dropped as undeliverable and the answer awaited where nothing can
+    resolve it.  The client is constructed with this dispatcher instead:
+    :meth:`MCPRuntime._acquire_entry` rebinds :attr:`handler` on every
+    lease, so an elicit always resolves through the view that made the
+    call.
+    """
+
+    __slots__ = ("handler",)
+
+    def __init__(self, handler: ElicitationHandler) -> None:
+        self.handler: ElicitationHandler = handler
+
+    async def __call__(
+        self,
+        message: str,
+        response_type: type[Any] | None,
+        params: Any,
+        context: Any,
+    ) -> Any:
+        return await self.handler(message, response_type, params, context)
+
+
 @dataclass
 class _PoolEntry:
     """One pooled client: a cloned handle plus its lease bookkeeping.
@@ -626,13 +658,17 @@ class _PoolEntry:
     on the HITL path is a human reading a confirmation prompt);
     ``last_used`` drives idle-TTL eviction; ``conversation_scoped``
     separates elicit-scoping entries from identity entries in
-    :meth:`MCPRuntime.client_counts`.
+    :meth:`MCPRuntime.client_counts`; ``handler_dispatch`` is the
+    rebindable elicitation slot of a conversation-scoped entry (``None``
+    on identity entries, which stay handler-less so a surprise elicit
+    fails loud instead of misrouting).
     """
 
     handle: _ServerHandle
     last_used: float = field(default_factory=time.monotonic)
     active: int = 0
     conversation_scoped: bool = False
+    handler_dispatch: _HandlerDispatch | None = None
 
 
 class MCPRuntime:
@@ -1023,7 +1059,11 @@ class MCPRuntime:
         Pairs with :meth:`_release_entry` (call in a ``finally``).  Every
         acquisition sweeps expired idle entries and enforces the size
         cap; evicted handles close in tracked background tasks so no
-        caller pays a stranger's disconnect latency.
+        caller pays a stranger's disconnect latency.  A
+        conversation-scoped entry dispatches elicitation through a
+        :class:`_HandlerDispatch` rebound on every lease, so the pooled
+        client — which outlives the view that minted it — always reaches
+        the acquiring view's current handler.
         """
         now = time.monotonic()
         key = (base.key, identity_key)
@@ -1033,16 +1073,30 @@ class MCPRuntime:
             if entry is None:
                 if len(self._pool) >= self._pool_max_size:
                     self._evict_oldest_idle_locked()
+                dispatch = (
+                    _HandlerDispatch(elicitation_handler)
+                    if conversation_scoped and elicitation_handler is not None
+                    else None
+                )
                 handle = self._clone_handle(
                     base,
                     overlay=overlay,
-                    elicitation_handler=elicitation_handler,
+                    elicitation_handler=(
+                        dispatch if dispatch is not None else elicitation_handler
+                    ),
                     pool_suffix=identity_key,
                 )
                 entry = _PoolEntry(
-                    handle=handle, conversation_scoped=conversation_scoped
+                    handle=handle,
+                    conversation_scoped=conversation_scoped,
+                    handler_dispatch=dispatch,
                 )
                 self._pool[key] = entry
+            elif (
+                entry.handler_dispatch is not None
+                and elicitation_handler is not None
+            ):
+                entry.handler_dispatch.handler = elicitation_handler
             entry.active += 1
             entry.last_used = now
         return entry
@@ -1138,12 +1192,15 @@ class MCPRuntime:
         client by scope: an ``elicits=True`` server gets this
         conversation's private client (the only scoping that keeps HITL
         prompts on the right conversation — the SDK discards the
-        elicit↔call correlation id); an overlaid server shares the
-        identity-pool entry for those credentials, handler-less so a
-        surprise elicit fails loud instead of misrouting; everything
-        else rides the shared base handle, byte-identical to the static
-        path.  ``list_tools`` serves the shared inventory — never
-        re-listed per conversation.
+        elicit↔call correlation id), keyed by conversation plus the
+        credential fingerprint (a rotated overlay mints a fresh client)
+        and rebound to the acquiring view's handler on every lease (the
+        client outlives the view that minted it); an overlaid server
+        shares the identity-pool entry for those credentials,
+        handler-less so a surprise elicit fails loud instead of
+        misrouting; everything else rides the shared base handle,
+        byte-identical to the static path.  ``list_tools`` serves the
+        shared inventory — never re-listed per conversation.
         """
         resolved = dict(overlays or {})
         if resolved:
@@ -1252,7 +1309,14 @@ class _ConversationView:
                 progress_handler=progress_handler,
             )
         if elicits:
+            # The credential fingerprint rides the key so a rotated
+            # overlay mints a fresh private client (the stale one idles
+            # out) — headers live in the transport and cannot be swapped
+            # on a warm client, and the identity pool already re-keys
+            # rotations the same way.
             identity_key = f"conv:{self._conversation_key}"
+            if overlay is not None:
+                identity_key = f"{identity_key}#{overlay.identity_key()}"
             handler: ElicitationHandler | None = cast(
                 "ElicitationHandler", self._trampoline
             )

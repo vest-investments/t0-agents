@@ -211,6 +211,42 @@ async def test_credential_rotation_mints_a_fresh_pooled_client() -> None:
     assert witness[conversation_id] == ["u-old", "u-new"]
 
 
+async def test_rotated_credentials_reach_the_wire_on_an_eliciting_mount() -> None:
+    """Rotation must re-key the conversation-scoped (elicits=True) client
+    exactly as it re-keys an identity-pooled one: the next send rides a NEW
+    private client carrying the new header, while the stale client idles
+    out.  A conversation key without the credential fingerprint freezes the
+    first send's headers into the pooled transport for the entry's lifetime."""
+    gateway, witness, _ = _keyed_gateway("svc_whoami")
+    async with _ephemeral_http_server(_whoami_server()) as url:
+        app = App(
+            t0=cast(AsyncTensorZeroGateway, gateway),
+            servers=[MCPServer(url=url, namespace="svc", elicits=True)],
+        )
+
+        @app.agent("chat")
+        async def chat(q: str) -> str:
+            """An identity-aware agent."""
+
+        async with app.lifespan():
+            conv_1 = chat.conversation(auth={"svc": {"X-User": "u-old"}})
+            conversation_id = conv_1.id
+            await conv_1.send("hi")
+
+            conv_2 = chat.conversation(
+                id=conversation_id, auth={"svc": {"X-User": "u-new"}}
+            )
+            await conv_2.send("hi again")
+
+            runtime = app._owned_client
+            assert runtime is not None
+            counts = runtime.client_counts()
+            assert counts.conversation == 2
+            assert counts.identity == 0
+
+    assert witness[conversation_id] == ["u-old", "u-new"]
+
+
 # ---------------------------------------------------------------------------
 # (b) elicitation — concurrent routing + (h) in-stream id unification
 # ---------------------------------------------------------------------------
@@ -381,6 +417,138 @@ async def test_in_stream_elicitation_events_survive_a_derived_send() -> None:
 
     requested = [e for e in events if isinstance(e, ElicitationRequestedEvent)]
     resolved = [e for e in events if isinstance(e, ElicitationResolvedEvent)]
+    assert len(requested) == 1 and len(resolved) == 1
+    assert resolved[0].id == requested[0].id
+    assert resolved[0].action == "accept"
+
+
+def _elicit_turn_scripts() -> list[Any]:
+    """Two scripted model turns: call ``svc_ask``, then close with text."""
+    from tests._fake_t0 import chat_chunk, final_chunk, text_chunk, tool_call_chunk
+
+    return [
+        [
+            chat_chunk(
+                [
+                    tool_call_chunk(
+                        raw_name="svc_ask",
+                        raw_arguments="{}",
+                        block_id="c1",
+                    )
+                ]
+            ),
+            final_chunk(),
+        ],
+        [
+            chat_chunk([text_chunk("done", block_id="t1")]),
+            final_chunk(),
+        ],
+    ]
+
+
+async def test_elicitation_survives_a_rebuilt_conversation_handle() -> None:
+    """A consumer that reopens a conversation per send (a fresh Conversation
+    object over one id — the documented resume pattern) still gets in-stream
+    elicitation events on the send actually being driven.  The pooled
+    per-conversation elicit client outlives the handle that minted it, so its
+    dispatch must follow the CURRENT handle: a frozen first-handle binding
+    routes every later prompt onto the first handle's settled run, where it
+    is dropped as ``run buffer already closed`` — and the resolve lands on
+    the first handle's (abandoned) forwarder."""
+    from tests._fake_t0 import FakeT0
+
+    gateway = FakeT0(responses=_elicit_turn_scripts() + _elicit_turn_scripts())
+    app = App(
+        t0=cast(AsyncTensorZeroGateway, gateway),
+        servers=[
+            MCPServer(server=_elicit_tag_server(), namespace="svc", elicits=True)
+        ],
+    )
+
+    @app.agent("chat")
+    async def chat(q: str) -> str:
+        """A HITL agent."""
+
+    def _resolving_forwarder(
+        envelopes: list[RequestEnvelope],
+    ) -> ElicitationForwarder:
+        cell: list[ElicitationForwarder] = []
+
+        async def on_request(envelope: RequestEnvelope) -> None:
+            envelopes.append(envelope)
+            await cell[0].resolve(
+                envelope["elicitation_id"],
+                {"action": "accept", "content": {"value": "tag"}},
+            )
+
+        forwarder = ElicitationForwarder(on_request=on_request)
+        cell.append(forwarder)
+        return forwarder
+
+    async with app.lifespan():
+        envelopes_1: list[RequestEnvelope] = []
+        conv_1 = chat.conversation(
+            elicitation_handler=_resolving_forwarder(envelopes_1)
+        )
+        async for _ in conv_1.send("go").events():
+            pass
+
+        envelopes_2: list[RequestEnvelope] = []
+        conv_2 = chat.conversation(
+            id=conv_1.id, elicitation_handler=_resolving_forwarder(envelopes_2)
+        )
+        events: list[Any] = []
+        async for event in conv_2.send("go").events():
+            events.append(event)
+
+    requested = [e for e in events if isinstance(e, ElicitationRequestedEvent)]
+    resolved = [e for e in events if isinstance(e, ElicitationResolvedEvent)]
+    assert len(envelopes_1) == 1
+    assert len(envelopes_2) == 1
+    assert len(requested) == 1 and len(resolved) == 1
+    assert requested[0].id == envelopes_2[0]["elicitation_id"]
+    assert resolved[0].id == requested[0].id
+    assert resolved[0].action == "accept"
+
+
+async def test_elicitation_survives_a_rebuilt_handle_with_a_bare_handler() -> None:
+    """The same reopened-conversation shape through a plain
+    ``ElicitationHandler`` (the ``_ObservedHandler`` wrap): the second send's
+    stream still carries the Requested/Resolved pair and the second handle's
+    handler answers.  Covers the non-forwarder emit path — the fix lives
+    below both observer shapes."""
+    from tests._fake_t0 import FakeT0
+
+    gateway = FakeT0(responses=_elicit_turn_scripts() + _elicit_turn_scripts())
+    app = App(
+        t0=cast(AsyncTensorZeroGateway, gateway),
+        servers=[
+            MCPServer(server=_elicit_tag_server(), namespace="svc", elicits=True)
+        ],
+    )
+
+    @app.agent("chat")
+    async def chat(q: str) -> str:
+        """A HITL agent."""
+
+    handled: list[str] = []
+    async with app.lifespan():
+        conv_1 = chat.conversation(
+            elicitation_handler=_tag_handler("one", handled)
+        )
+        async for _ in conv_1.send("go").events():
+            pass
+
+        conv_2 = chat.conversation(
+            id=conv_1.id, elicitation_handler=_tag_handler("two", handled)
+        )
+        events: list[Any] = []
+        async for event in conv_2.send("go").events():
+            events.append(event)
+
+    requested = [e for e in events if isinstance(e, ElicitationRequestedEvent)]
+    resolved = [e for e in events if isinstance(e, ElicitationResolvedEvent)]
+    assert handled == ["one", "two"]
     assert len(requested) == 1 and len(resolved) == 1
     assert resolved[0].id == requested[0].id
     assert resolved[0].action == "accept"
