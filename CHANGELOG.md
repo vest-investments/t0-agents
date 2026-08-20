@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.4] — 2026-08-19
+
+An observability release. `Conversation._emit` is best-effort by
+design: an event whose run has no active buffer, or whose buffer
+already closed, is dropped rather than failing the caller. Both
+branches were bare returns, so a drop left no trace anywhere — and
+for an elicitation that is indistinguishable from a person who
+simply never answered, because the MCP server goes on blocking
+against its own elicit deadline either way. The drops themselves
+are unchanged here; they are now merely visible.
+
+### Added
+
+- **Both `Conversation._emit` drop branches log at `WARNING`.** The
+  message names the branch that fired — `Dropping <Event> <event-id> on
+  conversation <conversation-id>: no active run buffer` when the run's
+  lineage carries no buffer, and `… run buffer already closed` when
+  `buffer.put()` raises on a settled run — so a dropped HITL prompt can
+  be correlated with the request a server is still blocking on. `_emit`
+  stays best-effort and still never fails an elicitation.
+
+### Notes
+
+- Diagnostic only. A dropped event is still dropped, and the second
+  branch — a buffer that closed while an elicitation raised during tool
+  execution was still resolving — remains an open lifecycle defect.
+- Each branch's WARNING is pinned by a test, conversation and event ids
+  included; both fail against a bare return.
+
 ## [2.2.3] — 2026-08-18
 
 A replay-correctness patch written from a production incident: a turn
