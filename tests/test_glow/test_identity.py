@@ -211,6 +211,42 @@ async def test_credential_rotation_mints_a_fresh_pooled_client() -> None:
     assert witness[conversation_id] == ["u-old", "u-new"]
 
 
+async def test_rotated_credentials_reach_the_wire_on_an_eliciting_mount() -> None:
+    """Rotation must re-key the conversation-scoped (elicits=True) client
+    exactly as it re-keys an identity-pooled one: the next send rides a NEW
+    private client carrying the new header, while the stale client idles
+    out.  A conversation key without the credential fingerprint freezes the
+    first send's headers into the pooled transport for the entry's lifetime."""
+    gateway, witness, _ = _keyed_gateway("svc_whoami")
+    async with _ephemeral_http_server(_whoami_server()) as url:
+        app = App(
+            t0=cast(AsyncTensorZeroGateway, gateway),
+            servers=[MCPServer(url=url, namespace="svc", elicits=True)],
+        )
+
+        @app.agent("chat")
+        async def chat(q: str) -> str:
+            """An identity-aware agent."""
+
+        async with app.lifespan():
+            conv_1 = chat.conversation(auth={"svc": {"X-User": "u-old"}})
+            conversation_id = conv_1.id
+            await conv_1.send("hi")
+
+            conv_2 = chat.conversation(
+                id=conversation_id, auth={"svc": {"X-User": "u-new"}}
+            )
+            await conv_2.send("hi again")
+
+            runtime = app._owned_client
+            assert runtime is not None
+            counts = runtime.client_counts()
+            assert counts.conversation == 2
+            assert counts.identity == 0
+
+    assert witness[conversation_id] == ["u-old", "u-new"]
+
+
 # ---------------------------------------------------------------------------
 # (b) elicitation — concurrent routing + (h) in-stream id unification
 # ---------------------------------------------------------------------------

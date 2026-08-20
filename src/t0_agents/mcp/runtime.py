@@ -210,7 +210,9 @@ class ClientCounts:
     scoping).  The pool-model invariant: ``identity`` grows with
     *identities x overlaid servers*, ``conversation`` only with
     *conversations that touched an ``elicits=True`` server* — never with
-    ``conversations x servers``.
+    ``conversations x servers``.  A credential rotation inside one
+    conversation transiently adds one ``conversation`` entry while the
+    stale client idles out.
     """
 
     static: int
@@ -1190,12 +1192,15 @@ class MCPRuntime:
         client by scope: an ``elicits=True`` server gets this
         conversation's private client (the only scoping that keeps HITL
         prompts on the right conversation — the SDK discards the
-        elicit↔call correlation id); an overlaid server shares the
-        identity-pool entry for those credentials, handler-less so a
-        surprise elicit fails loud instead of misrouting; everything
-        else rides the shared base handle, byte-identical to the static
-        path.  ``list_tools`` serves the shared inventory — never
-        re-listed per conversation.
+        elicit↔call correlation id), keyed by conversation plus the
+        credential fingerprint (a rotated overlay mints a fresh client)
+        and rebound to the acquiring view's handler on every lease (the
+        client outlives the view that minted it); an overlaid server
+        shares the identity-pool entry for those credentials,
+        handler-less so a surprise elicit fails loud instead of
+        misrouting; everything else rides the shared base handle,
+        byte-identical to the static path.  ``list_tools`` serves the
+        shared inventory — never re-listed per conversation.
         """
         resolved = dict(overlays or {})
         if resolved:
@@ -1304,7 +1309,14 @@ class _ConversationView:
                 progress_handler=progress_handler,
             )
         if elicits:
+            # The credential fingerprint rides the key so a rotated
+            # overlay mints a fresh private client (the stale one idles
+            # out) — headers live in the transport and cannot be swapped
+            # on a warm client, and the identity pool already re-keys
+            # rotations the same way.
             identity_key = f"conv:{self._conversation_key}"
+            if overlay is not None:
+                identity_key = f"{identity_key}#{overlay.identity_key()}"
             handler: ElicitationHandler | None = cast(
                 "ElicitationHandler", self._trampoline
             )
