@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.5] — 2026-08-20
+
+The lifecycle defect [2.2.4] left open, fixed at its real source. A
+conversation-scoped elicitation client is pooled once and then
+outlives the handle that minted it, but the handler it must reach is
+per-handle state. The minting handle's handler was baked into the
+client, so an elicitation raised on any later send of the same
+conversation was routed at a settled run — dropped as undeliverable
+(the `run buffer already closed` warning [2.2.4] added) while the
+server went on blocking against its own elicit deadline. The first
+send delivered; every send after it was silent.
+
+### Fixed
+
+- **Conversation-scoped pooled clients dispatch elicitation through
+  the acquiring handle's current handler.** `_acquire_entry` rebinds a
+  `_HandlerDispatch` slot on every lease instead of constructing the
+  client around one handler, so a prompt raised on any send reaches
+  the handle that made the call — and its answer resolves against a
+  forwarder that is still registered. Identity-pool entries stay
+  handler-less so a surprise elicit still fails loud. The
+  trampoline's documented contract ("the factory is consulted per
+  elicitation — never captured") now holds at the pool too.
+- **Conversation-scoped pool keys carry the credential fingerprint.**
+  A rotated overlay mints a fresh private client instead of riding
+  the first send's headers for the conversation's lifetime; headers
+  live in the transport and cannot be swapped on a warm client. The
+  identity pool has always re-keyed rotations this way.
+
+### Notes
+
+- `Conversation._emit` is unchanged — its warnings stay as the net
+  for genuinely undeliverable frames.
+- `ClientCounts.conversation` may transiently read one higher for a
+  single conversation while a rotated-out client idles out.
+- Both fixes are pinned by regression tests that fail against
+  [2.2.4]: events surviving a reopened handle, per-send dispatch, and
+  the rotation re-key.
+
 ## [2.2.4] — 2026-08-19
 
 An observability release. `Conversation._emit` is best-effort by
