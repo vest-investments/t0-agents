@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.6] — 2026-08-21
+
+A small surface release. Stopping an in-flight run was reachable only
+by dropping down to the underlying `Run` — and the two places that
+documented that detour contradicted each other and the code. The
+escape hatch said the fluent handle has no `cancel()`; the
+`RunCancelledError` docstring said an `events()` iterator never
+raises on cancellation. Both were wrong, the second in the worst
+possible place. A missing `cancel()` also invites the one mistake
+that matters here: cancelling the task that *consumes* a run leaves
+the drive running unobserved, tools in flight included.
+
+### Added
+
+- **`FluentRun.cancel()`.** The fluent handle reaches `Run.cancel()`
+  directly, joining `cost()` / `usage()` / `feedback()` / `fork()`.
+  Awaiting it stops the *drive*, not merely the consumption: the
+  drive task is cancelled and awaited, so on return the run is
+  settled at `"cancelled"`, no further tool call can start, and a
+  tool blocked mid-dispatch has already observed the cancellation at
+  its own await point. The run is reached through the shared lineage,
+  so any handle in a fluent chain cancels the one run the family
+  stands for. Idempotent.
+- **It is a no-op before consumption.** Unlike the other run-level
+  delegations, which raise until the run exists, cancelling an
+  unconsumed handle succeeds and does nothing — the same answer
+  `Run.cancel()` gives for an already-settled run. It does not arm a
+  pending cancellation, so a caller racing a cancel against the first
+  consumption needs its own "cancel requested" flag; the method
+  cannot pre-empt a run that was never built.
+
+### Fixed
+
+- **`RunCancelledError`'s docstring described the opposite
+  behaviour.** It claimed `run.events()` consumers see the events up
+  to the cancellation point "followed by an end-of-stream — the
+  iterator does not raise". The iterator *does* raise, in **both**
+  `on_error` modes: unlike a failure, a cancellation is never
+  converted into a terminal `RunErrorEvent`. `Run.cancel()`,
+  `events()`, `docs/streaming.md` and an existing test all said so
+  already; the exception's own docstring was the lone dissenter.
+
+### Notes
+
+- No behaviour change for existing consumers: one new method, two
+  corrected docstrings, no control-flow edits.
+- The escape-hatch guide no longer lists `cancel()` / `fork()` as
+  drop-downs — `fork()` had been on the handle since that guide was
+  written. `replay()` is now the only live-handle method that still
+  requires the underlying `Run`.
+- A cancelled run crossing `wire.project()` lands as a terminal
+  `ErrorFrame` carrying `exc_class="RunCancelledError"`, not a raise:
+  `as_terminal_safe()` catches `Exception`, and `RunCancelledError`
+  is one. Long-standing behaviour, newly pinned by a test.
+
 ## [2.2.5] — 2026-08-20
 
 The lifecycle defect [2.2.4] left open, fixed at its real source. A
