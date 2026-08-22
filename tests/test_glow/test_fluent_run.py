@@ -57,6 +57,9 @@ class _FakeRun:
         # Escape-hatch call recorders (M2 delegation tests).
         self.feedback_calls: list[tuple[str, Any, str, str | None]] = []
         self.fork_calls: list[tuple[str, Any]] = []
+        # A count, not a flag: ``Run.cancel`` is idempotent by contract, so
+        # the handle is expected to forward repeat cancels rather than latch.
+        self.cancel_calls: int = 0
         # M5 streaming-surface recorders.
         self.events_on_error_calls: list[str] = []
         self.stream_text_fallback_calls: list[bool] = []
@@ -81,7 +84,8 @@ class _FakeRun:
         yield "chunk"
 
 
-    # Escape-hatch surface consumed by FluentRun.cost/usage/feedback/fork.
+    # Escape-hatch surface consumed by
+    # FluentRun.cost/usage/feedback/fork/cancel.
     def cost(self) -> float:
         return 0.42
 
@@ -101,6 +105,9 @@ class _FakeRun:
     async def fork(self, extra_message: str, *, agent: Any = None) -> Run[Any]:
         self.fork_calls.append((extra_message, agent))
         return cast(Run[Any], self)
+
+    async def cancel(self) -> None:
+        self.cancel_calls += 1
 
 
 def _make_build(
@@ -436,6 +443,53 @@ async def test_escape_hatch_reads_the_family_run() -> None:
 
     assert fr.consumed is True
     assert fr.cost() == 0.42  # the root serves the family's run, not a raise
+
+
+# ---------------------------------------------------------------------------
+# cancel() — the escape-hatch method that tolerates having no Run yet
+# ---------------------------------------------------------------------------
+
+
+async def test_cancel_delegates_and_forwards_repeat_calls() -> None:
+    """No latch on the handle: ``Run.cancel`` is idempotent by contract."""
+    fake = _FakeRun(value="v")
+    fr: FluentRun[str] = FluentRun(_make_build(fake_run=fake), ChatOutput())
+
+    await fr  # consume → underlying Run built
+
+    await fr.cancel()
+    await fr.cancel()  # cancelling a settled run must not raise...
+
+    assert fake.cancel_calls == 2  # ...and must still reach the Run
+
+
+async def test_cancel_before_consumption_is_a_noop() -> None:
+    """Diverges from the raising escape hatch: no Run yet, nothing to cancel."""
+    captured: list[OutputMode[Any]] = []
+    fake = _FakeRun(value="v")
+    fr: FluentRun[str] = FluentRun(_make_build(captured, fake), ChatOutput())
+
+    await fr.cancel()  # cost()/usage()/feedback()/fork() would raise here
+
+    assert fr.consumed is False
+    assert captured == []  # the build closure never fired
+    assert fake.cancel_calls == 0
+    assert await fr == "v"  # and the handle still works afterwards
+
+
+async def test_cancel_reaches_the_family_run_from_either_handle() -> None:
+    calls: list[tuple[OutputMode[Any], dict[str, Any]]] = []
+    fake = _FakeRun(value="v")
+    root: FluentRun[str] = FluentRun(_make_capturing_build(calls, fake), ChatOutput())
+    derived = root.with_(tags={"turn": "1"})
+
+    await derived  # only the DERIVED handle is ever consumed
+
+    await root.cancel()  # the root stands for the family's run...
+    await derived.cancel()  # ...and so does the handle that built it
+
+    assert len(calls) == 1  # one run for the family, not one per handle
+    assert fake.cancel_calls == 2
 
 
 # ---------------------------------------------------------------------------
