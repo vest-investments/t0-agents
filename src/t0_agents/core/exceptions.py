@@ -51,13 +51,15 @@ class SubAgentError(T0AgentsError):
 
 
 class RunCancelledError(T0AgentsError):
-    """Raised by ``await run.result()`` after ``await run.cancel()``.
+    """Raised after ``await run.cancel()``, on every consumption channel.
 
-    Surfaced through the awaitable consumption channel so callers can
-    distinguish a user-initiated cancellation from a genuine failure.
-    ``run.events()`` consumers see the events emitted up to the
-    cancellation point followed by an end-of-stream — the iterator
-    does not raise.
+    Surfaced through the awaitable channel — ``await run.result()`` and
+    plain ``await run`` — so callers can distinguish a user-initiated
+    cancellation from a genuine failure.  ``run.events()`` consumers see
+    the events emitted up to the cancellation point and then this
+    exception raised out of the iterator, in **both** ``on_error`` modes:
+    unlike a failure, a cancellation is never converted into a terminal
+    ``RunErrorEvent``.
     """
 
 

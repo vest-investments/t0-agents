@@ -13,7 +13,8 @@ a Run; the ``@app.agent`` decorator supplies it (see ``App._invoke``).
 path: ``answer = await tutor(query)``).  :meth:`result` is the escape
 hatch for the full :class:`AgentResult` (``episode_id`` /
 ``inference_ids`` / diagnostics); :meth:`cost` / :meth:`usage` /
-:meth:`feedback` / :meth:`fork` reach the run-level surface directly.
+:meth:`feedback` / :meth:`fork` / :meth:`cancel` reach the run-level
+surface directly.
 """
 
 from __future__ import annotations
@@ -569,6 +570,43 @@ class FluentRun(Generic[T]):
     async def fork(self, extra_message: str, *, agent: Agent | None = None) -> Run[T]:
         """Continue this Run with another user turn.  See :meth:`Run.fork`."""
         return cast(Run[T], await self._require_run().fork(extra_message, agent=agent))
+
+    async def cancel(self) -> None:
+        """Cancel the family's underlying Run.  See :meth:`Run.cancel`.
+
+        Awaiting this stops the *drive*, not merely the consumption: the
+        drive task is cancelled and awaited, so by the time ``cancel()``
+        returns the run is settled at state ``"cancelled"``, no further
+        tool call can start, and a tool blocked mid-dispatch has already
+        observed the cancellation at its own await point.  Cancelling the
+        consumer task instead would leave the drive running unobserved —
+        which is why this reaches the run rather than the iterator.
+
+        Every consumption channel then reports it:
+        :meth:`events` raises
+        :class:`~t0_agents.core.exceptions.RunCancelledError` after
+        yielding the events emitted up to the cancellation point — in
+        **both** ``on_error`` modes, since cancellation is never converted
+        into a terminal event — and :meth:`result` / ``await`` raise it
+        directly.  Idempotent: cancelling a settled run is a no-op.
+
+        The run is reached through the shared lineage, so any handle in a
+        fluent chain cancels the one run the family stands for: the holder
+        of the root handle can cancel a run consumed through a derived one.
+
+        **No-op before consumption.**  Unlike :meth:`cost` / :meth:`usage`
+        / :meth:`feedback` / :meth:`fork`, which raise until the run
+        exists, cancelling an unconsumed handle succeeds and does nothing —
+        there is no run to cancel, which is the same answer
+        :meth:`Run.cancel` gives for an already-settled one.  It does not
+        arm a pending cancellation, so a caller racing a cancel against the
+        first consumption needs its own "cancel requested" flag; this
+        method cannot pre-empt a run that was never built.
+        """
+        run = self._lineage.run
+        if run is None:
+            return
+        await run.cancel()
 
 
 async def _filter_with_selectors(

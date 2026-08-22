@@ -57,7 +57,8 @@ companions live under [`examples/glow/`](../../examples/glow/).
    way, `wrapper._agent` is the v1.0 `Agent` the decorator built.
    Includes `app.lifespan()` / `build()` / `shutdown()` and the
    drop-down recipes for middleware, custom `OutputMode`, hand-rolled
-   event handling, and the `cancel()` / `fork()` / `replay()` surface.
+   event handling, and `replay()` — the one live-handle method the
+   fluent handle does not carry.
 6. **[Conversations](conversations.md)** — saying a second thing:
    `agent.conversation()` / `send()`, the pinned `conv.id ==
    episode_id`, `conv.transcript`, memory-strategy-aware history,

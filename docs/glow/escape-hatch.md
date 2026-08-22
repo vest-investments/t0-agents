@@ -130,19 +130,29 @@ async for event in run.events():
             ...
 ```
 
-### Direct `Run[T]` surface — cancel, fork, replay
+### Direct `Run[T]` surface — replay
 
-`FluentRun` doesn't expose `cancel()` / `fork()` / `replay()` —
-they live on the underlying [`Run[T]`](../run.md):
+`cancel()` and `fork()` are on the handle itself — no drop-down needed.
+Cancelling reaches the *drive*, so it also stops a tool already in
+flight; cancelling the task that iterates `events()` would not:
 
 ```python
-run = tutor._agent.invoke("Plan a trip")
+run = tutor("Plan a trip")            # a FluentRun
 async for ev in run.events():
     if some_condition(ev):
-        await run.cancel()
+        await run.cancel()            # the drive dies, not just this loop
         break
 
 forked = await run.fork("Same prompt, different model")
+```
+
+`replay()` is the one live-handle method that still lives only on the
+underlying [`Run[T]`](../run.md):
+
+```python
+run = tutor._agent.invoke("Plan a trip")
+await run.result()
+again = await run.replay(variant="candidate-b")
 ```
 
 ## When to drop down (matrix)
@@ -151,7 +161,7 @@ forked = await run.fork("Same prompt, different model")
 |----------------------------------------------------------|-------------------------------------------------------|
 | Per-call middleware override                             | `wrapper._agent.invoke(..., middleware=[...])`        |
 | `OutputMode` with custom schema or retry policy          | `wrapper._agent.invoke(..., output=...)`              |
-| `cancel()` / `fork()` / `replay()`                       | `wrapper._agent.invoke(...)` → use `Run[T]` methods   |
+| `replay()` — `cancel()` / `fork()` are on the handle     | `wrapper._agent.invoke(...)` → use `Run[T]` methods   |
 | Full `AgentResult[T]` (`episode_id`, `inference_ids`, …) | `await wrapper(...).result()` (also works without drop-down) |
 | Hand-rolled event handling across full `AgentEvent`      | `wrapper._agent.invoke(...).events()` (no selectors)  |
 | Per-agent guardrails added at runtime, not decoration    | `wrapper._agent.config.guardrails.append(...)` (carefully) |
