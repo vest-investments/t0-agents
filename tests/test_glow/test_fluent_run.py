@@ -9,22 +9,41 @@ escape hatch.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
+from mcp.types import Tool as MCPTool
 from pydantic import BaseModel
+from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.agent import Agent
+from t0_agents.core.config import AgentConfig
+from t0_agents.core.exceptions import ConfigurationError, RunCancelledError
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.outputs.json import JsonOutput
 from t0_agents.core.outputs.structured import StructuredOutput
 from t0_agents.core.run import Run
-from t0_agents.core.types import AgentResult
+from t0_agents.core.types import AgentResult, ToolProvider
 from t0_agents.glow.handle import FluentRun
-from t0_agents.stream.events import AgentEvent, DoneEvent
+from t0_agents.stream.events import (
+    AgentEvent,
+    DoneEvent,
+    RunErrorEvent,
+    TextDeltaEvent,
+    ToolCallEvent,
+)
+from tests._fake_mcp import FakeMCPClient
+from tests._fake_t0 import (
+    FakeT0,
+    chat_chunk,
+    final_chunk,
+    text_chunk,
+    tool_call_chunk,
+)
 
 
 class _ModelA(BaseModel):
@@ -681,3 +700,122 @@ async def test_on_result_rides_through_with_and_output_override() -> None:
     # must survive, or a conv.send(x).with_(...).text() chain stops recording.
     await fr.with_(episode_id="e1").text().result()
     assert len(seen) == 1
+
+
+# ---------------------------------------------------------------------------
+# cancel() against a REAL Run — the terminal shape a streaming consumer maps
+# ---------------------------------------------------------------------------
+
+
+class _ParkedTool:
+    """A tool that parks forever, and records whether it saw the cancellation.
+
+    The seam a delegation test cannot reach: with the drive suspended
+    *inside* tool dispatch, cancelling the consumer would leave the agent
+    running unobserved.  Asserting on ``observed`` proves the drive itself
+    died and the blocked coroutine unwound.
+    """
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.observed: list[str] = []
+
+    async def __call__(self, name: str | None) -> None:
+        self.entered.set()
+        try:
+            await asyncio.Event().wait()  # never resolves
+        except asyncio.CancelledError:
+            self.observed.append("cancelled")
+            raise
+
+
+def _parked_tool_handle(tool: _ParkedTool) -> FluentRun[str]:
+    """A ``FluentRun`` over a real ``Run`` whose first turn calls ``tool``."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([text_chunk("looking it up", block_id="t1")]),
+                chat_chunk(
+                    [
+                        tool_call_chunk(
+                            raw_name="park", raw_arguments="{}", block_id="c1"
+                        )
+                    ]
+                ),
+                final_chunk(),
+            ]
+        ],
+    )
+    client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="park",
+                description="parks until cancelled",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        side_effect=tool,
+    )
+    agent = Agent(
+        AgentConfig(name="test", function_name="agent"),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=cast(ToolProvider, client),
+    )
+
+    def build(mode: OutputMode[Any], **call_kwargs: Any) -> Run[Any]:
+        return agent.invoke("go", output=mode, eager=False, **call_kwargs)
+
+    return FluentRun(build, ChatOutput())
+
+
+async def _cancel_once_parked(
+    fr: FluentRun[str],
+    tool: _ParkedTool,
+    *,
+    on_error: Literal["raise", "event"],
+    seen: list[AgentEvent],
+) -> None:
+    """Drain until the tool is parked, then cancel from inside the drain.
+
+    ``seen`` is caller-owned on purpose: the drain always ends by raising,
+    so a returned list would never reach the assertions.
+    """
+    async for event in fr.events(on_error=on_error):
+        seen.append(event)
+        if isinstance(event, ToolCallEvent):
+            await asyncio.wait_for(tool.entered.wait(), timeout=5)
+            await fr.cancel()
+
+
+async def test_cancellation_raises_out_of_events_in_both_modes() -> None:
+    """Cancellation is never converted — not even under ``on_error="event"``.
+
+    Pinned because a consumer projecting this stream onto a wire branches
+    on it: with ``"event"`` every *failure* arrives as a terminal
+    ``RunErrorEvent``, so cancellation looking the same would be
+    indistinguishable from a crash.  It raises instead, in both modes.
+    """
+    for mode in ("raise", "event"):
+        tool = _ParkedTool()
+        fr = _parked_tool_handle(tool)
+        seen: list[AgentEvent] = []
+
+        with pytest.raises(RunCancelledError):
+            await _cancel_once_parked(fr, tool, on_error=mode, seen=seen)
+
+        assert tool.observed == ["cancelled"], mode
+        assert not any(isinstance(e, RunErrorEvent) for e in seen), mode
+
+
+async def test_cancel_kills_the_drive_while_a_tool_is_blocked() -> None:
+    """The drive dies mid-dispatch, and the events already emitted survive."""
+    tool = _ParkedTool()
+    fr = _parked_tool_handle(tool)
+    seen: list[AgentEvent] = []
+
+    with pytest.raises(RunCancelledError):
+        await _cancel_once_parked(fr, tool, on_error="event", seen=seen)
+
+    assert tool.observed == ["cancelled"]
+    assert [e.delta for e in seen if isinstance(e, TextDeltaEvent)] == ["looking it up"]
+    assert not any(isinstance(e, DoneEvent) for e in seen)
