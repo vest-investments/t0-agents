@@ -779,12 +779,21 @@ async def _cancel_once_parked(
 
     ``seen`` is caller-owned on purpose: the drain always ends by raising,
     so a returned list would never reach the assertions.
+
+    The whole drain is deadlined because the tool parks forever: a cancel
+    that failed to reach the drive would leave the buffer open and hang the
+    suite rather than fail a test.  Mutation-checking these tests is what
+    surfaced that — the deadline turns the regression back into a failure.
     """
-    async for event in fr.events(on_error=on_error):
-        seen.append(event)
-        if isinstance(event, ToolCallEvent):
-            await asyncio.wait_for(tool.entered.wait(), timeout=5)
-            await fr.cancel()
+
+    async def _drain() -> None:
+        async for event in fr.events(on_error=on_error):
+            seen.append(event)
+            if isinstance(event, ToolCallEvent):
+                await asyncio.wait_for(tool.entered.wait(), timeout=5)
+                await fr.cancel()
+
+    await asyncio.wait_for(_drain(), timeout=10)
 
 
 async def test_cancellation_raises_out_of_events_in_both_modes() -> None:
