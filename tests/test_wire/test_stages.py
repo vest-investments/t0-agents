@@ -271,6 +271,27 @@ class TestAsTerminalSafe:
             ):
                 pass
 
+    async def test_a_cancelled_run_becomes_a_terminal_error_frame(self) -> None:
+        """Only ``asyncio.CancelledError`` propagates — ``Run`` raises neither.
+
+        ``run.cancel()`` surfaces ``RunCancelledError``, an ordinary
+        ``Exception``, so this stage converts it like any other failure.  A
+        consumer that wants a stopped turn to read differently on its wire
+        than a crash must branch on the frame: wrapping the projection in
+        ``except RunCancelledError`` never fires.
+        """
+        run = ScriptedAgent(result="never").invoke("q")
+        await run.cancel()
+
+        out = [f async for f in as_terminal_safe(project(run.events()))]
+
+        assert out == [
+            ErrorFrame(
+                message="Run was cancelled before completion",
+                detail={"exc_class": "RunCancelledError"},
+            )
+        ]
+
     async def test_both_failure_paths_produce_identical_wire_output(self) -> None:
         """A raised exception and its RunErrorEvent must be indistinguishable."""
 
