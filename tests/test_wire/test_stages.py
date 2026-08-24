@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterable
+from typing import Literal
 
 import pytest
 
@@ -459,6 +460,17 @@ async def _fallback(frames: Iterable[WireFrame]) -> list[WireFrame]:
     return [f async for f in with_text_fallback(_stream_frames(frames))]
 
 
+async def _fallback_policy(
+    frames: Iterable[WireFrame], *, thought_fallback: Literal["emit", "suppress"]
+) -> list[WireFrame]:
+    return [
+        f
+        async for f in with_text_fallback(
+            _stream_frames(frames), thought_fallback=thought_fallback
+        )
+    ]
+
+
 class TestWithTextFallback:
     async def test_a_texty_run_passes_through_untouched(self) -> None:
         source = [
@@ -590,6 +602,29 @@ class TestWithTextFallback:
             ]
         )
         assert TextDeltaFrame(block_id="inf-5", delta="new session answer") in out
+
+    async def test_suppress_keeps_a_raw_thought_answer_off_the_wire(self) -> None:
+        """The leak the policy exists for: a provider streaming
+        unsummarised chain-of-thought lands its whole monologue in
+        ``response_text`` under ``response_source == "thought"``, the
+        same slot a summary channel uses for a publishable answer."""
+        cot = "The user asked about X. First consider Y, then rule out Z…"
+        out = await _fallback_policy(
+            [
+                ThoughtDeltaFrame(id="th1", delta=cot),
+                _done(text=cot, ids=("inf-1",), source="thought"),
+            ],
+            thought_fallback="suppress",
+        )
+        assert out == [
+            ThoughtDeltaFrame(id="th1", delta=cot),
+            TextDeltaFrame(block_id="inf-1", delta=EMPTY_TURN_RETRY_TEXT),
+            TextEndFrame(block_id="inf-1"),
+            _done(text=cot, ids=("inf-1",), source="thought"),
+        ]
+        assert cot not in "".join(
+            f.delta for f in out if isinstance(f, TextDeltaFrame)
+        )
 
 
 async def _public(frames: Iterable[WireFrame]) -> list[PublicEvent]:
