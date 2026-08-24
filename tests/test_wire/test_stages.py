@@ -433,6 +433,18 @@ class TestWithStatus:
             "Thinking…",
         ]
 
+    async def test_a_recoverable_error_keeps_the_tool_call_flag(self) -> None:
+        out = await _statuses(
+            [
+                _tool_call("get_weather"),
+                ErrorFrame(message="retrying", detail={"recoverable": True}),
+                ThoughtDeltaFrame(id="th1", delta="same run"),
+            ]
+        )
+        assert [f.text for f in out if isinstance(f, StatusFrame)] == [
+            "Calling get_weather…",
+        ]
+
     async def test_originals_flow_through_first_and_unchanged(self) -> None:
         source = [
             ThoughtDeltaFrame(id="th1", delta="a"),

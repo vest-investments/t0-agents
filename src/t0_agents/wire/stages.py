@@ -278,7 +278,10 @@ async def with_status(
       hint stands until the next tool call or the run terminator.
     * A terminal :class:`DoneFrame` / :class:`ErrorFrame` re-arms both
       flags, so the next run on a long-lived stream surfaces its own
-      initial ``"Thinking…"``.
+      initial ``"Thinking…"``. A recoverable error frame
+      (``detail["recoverable"]``) only ends the current thought block —
+      the run goes on, and a tool call that already fired keeps the
+      hint suppressed.
     """
     in_thought_block = False
     saw_tool_call = False
@@ -294,7 +297,11 @@ async def with_status(
                 if not in_thought_block and not saw_tool_call:
                     in_thought_block = True
                     yield StatusFrame(text="Thinking…")
-            case DoneFrame() | ErrorFrame():
+            case ErrorFrame(detail=detail):
+                in_thought_block = False
+                if not detail.get("recoverable"):
+                    saw_tool_call = False
+            case DoneFrame():
                 in_thought_block = False
                 saw_tool_call = False
             case (
