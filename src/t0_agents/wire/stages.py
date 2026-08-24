@@ -13,6 +13,14 @@ frame variant refuses to type-check until each stage makes an explicit
 decision about it — for :func:`public_allowlist` that decision is
 render-vs-drop, and render-by-default would be a privacy regression.
 
+The public ``error`` event is terminal: only a failure that ends the
+run renders as one. Recoverable stream artefacts — a malformed
+tool-call payload, an unknown chunk, a corrective retry — are internal
+telemetry: :func:`project` stamps their frames
+``detail["recoverable"] = True`` and :func:`public_allowlist` drops
+them, so a client that seals its view on ``error`` never does so in the
+middle of an answer that is still streaming.
+
 The wire layer should consume **unfiltered** ``run.events()``: with
 ``on_error="event"`` the terminal :class:`RunErrorEvent` is subject to
 selector filtering like any other event, and a filtered stream would
@@ -131,7 +139,11 @@ async def project(events: AsyncIterator[AgentEvent]) -> AsyncIterator[WireFrame]
     A terminal :class:`RunErrorEvent` (``on_error="event"``) maps to the
     same frozen :class:`ErrorFrame` shape that :func:`as_terminal_safe`
     builds from a raised exception — the two failure paths are
-    indistinguishable on the wire.
+    indistinguishable on the wire. A recoverable :class:`ErrorEvent`
+    maps to an :class:`ErrorFrame` stamped
+    ``detail["recoverable"] = True`` — the positive discriminator
+    :func:`public_allowlist` keys its drop on; the stamp wins over any
+    same-named key the event's ``detail`` may carry.
     """
     async for event in events:
         match event:
@@ -196,7 +208,10 @@ async def project(events: AsyncIterator[AgentEvent]) -> AsyncIterator[WireFrame]
                     inference_ids=tuple(event.result.inference_ids),
                 )
             case ErrorEvent():
-                yield ErrorFrame(message=event.message, detail=event.detail)
+                yield ErrorFrame(
+                    message=event.message,
+                    detail={**event.detail, "recoverable": True},
+                )
             case RunErrorEvent():
                 yield _error_frame(event.error_type, event.message, event.detail)
             case ElicitationRequestedEvent():
@@ -263,7 +278,10 @@ async def with_status(
       hint stands until the next tool call or the run terminator.
     * A terminal :class:`DoneFrame` / :class:`ErrorFrame` re-arms both
       flags, so the next run on a long-lived stream surfaces its own
-      initial ``"Thinking…"``.
+      initial ``"Thinking…"``. A recoverable error frame
+      (``detail["recoverable"]``) only ends the current thought block —
+      the run goes on, and a tool call that already fired keeps the
+      hint suppressed.
     """
     in_thought_block = False
     saw_tool_call = False
@@ -279,7 +297,11 @@ async def with_status(
                 if not in_thought_block and not saw_tool_call:
                     in_thought_block = True
                     yield StatusFrame(text="Thinking…")
-            case DoneFrame() | ErrorFrame():
+            case ErrorFrame(detail=detail):
+                in_thought_block = False
+                if not detail.get("recoverable"):
+                    saw_tool_call = False
+            case DoneFrame():
                 in_thought_block = False
                 saw_tool_call = False
             case (
@@ -401,6 +423,15 @@ async def public_allowlist(
     arm forces an explicit render-vs-drop decision for every future
     frame — render-by-default would be a privacy regression.
 
+    An :class:`ErrorFrame` renders only when it is terminal. A frame
+    :func:`project` stamped ``detail["recoverable"]`` is dropped — not
+    remapped to ``status``: the run already handled the anomaly (the
+    model was re-prompted), and surfacing the mechanics would only make
+    a client seal a bubble that is still streaming. Every other error
+    frame renders unchanged, including consumer-synthesised ones with
+    an empty ``detail`` — the drop keys on the positive stamp, never on
+    the absence of ``exc_class``.
+
     Payload shapes are frozen exactly as production emits them,
     including which payloads carry a ``"type"`` field and which do not.
     Compose after :func:`with_text_fallback` so synthesised fallback
@@ -417,6 +448,8 @@ async def public_allowlist(
                 )
             case TextEndFrame(block_id=block_id):
                 yield PublicEvent("end", {"type": "end", "id": block_id})
+            case ErrorFrame(detail=detail) if detail.get("recoverable"):
+                continue
             case ErrorFrame(message=message, detail=detail):
                 yield PublicEvent("error", {"message": message, "detail": detail})
             case StatusFrame(text=text, server=server, tool=tool):
