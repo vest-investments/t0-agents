@@ -24,7 +24,7 @@ error string in the `result` field. The five cases:
 | Error | Cause | `ToolResult.result` message | When |
 |-------|-------|-----------------------------|------|
 | Hallucinated tool name | LLM produced a tool name not in the schema | `"ERROR: tool name '<raw_name>' is not in the schema"` | `ToolCall.name` is `None` (TensorZero validated it against `additional_tools` and zeroed the field) |
-| Invalid JSON arguments | LLM generated malformed JSON for the tool arguments | `"ERROR: invalid JSON arguments from LLM: <raw_arguments>"` | `ToolCall.arguments` is `None` (TensorZero parsed and rejected the JSON, but `raw_arguments` carries the original string) |
+| Invalid JSON arguments | LLM generated malformed JSON for the tool arguments | `"ERROR: invalid JSON arguments from LLM: <raw_arguments>"` | `ToolCall.arguments` is `None` (TensorZero rejected the JSON — unparseable, or parsed but failing the tool's parameter schema — while `raw_arguments` carries the original string). **Exception:** a complete object followed only by closing noise (`}` / `]` / whitespace) is salvaged by `salvage_tool_arguments` and dispatched with the recovered dict; a WARNING with sizes is logged instead of an error result |
 | `ToolError` | The tool function raised an exception | `"ERROR: tool execution failed: <e>"` | FastMCP catches the exception inside the tool and surfaces it through `ToolError` |
 | `McpError` | MCP protocol error or transport timeout (code `-32000`) | `"ERROR: MCP protocol error (possibly timeout): <e>"` | MCP transport layer failure, including per-call timeout expiry |
 | Unexpected exception | Any other exception type | `"ERROR: unexpected <ExceptionType>: <e>"` | Catch-all safety net so a single misbehaving tool cannot crash the loop |
@@ -39,6 +39,18 @@ identically on the streaming path: TensorZero only zeroes
 mirrors that zeroing against the advertised tool list before dispatch —
 a hallucinated name or unparseable arguments never reach the tool on
 either loop.
+
+**One salvage rule, both loops.** `core/turn_engine.salvage_tool_arguments`
+runs in the streaming assembler before its rebuild and in
+`_execute_single_tool_call` before the no-dispatch branch, so both loops
+accept and refuse exactly the same argument strings. It is deliberately
+narrow: only a complete top-level object followed by `}` / `]` /
+whitespace qualifies. A second object, prose, a stray comma, interior
+corruption (a missing comma, a truncated object) and syntactically valid
+JSON (a schema verdict, not a parse failure) all keep the error path. On
+the streaming loop a salvaged call emits no `ErrorEvent`, and the wire's
+`arguments_json` is the canonical serialisation of exactly the dict the
+tool received.
 
 **Elicitation not supported.** When a tool calls `ctx.elicit()` but the
 Client was created without an `elicitation_handler`, the server raises
