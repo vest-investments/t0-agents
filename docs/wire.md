@@ -87,10 +87,14 @@ ErrorFrame(message="max_turns_exceeded",
            detail={"max_turns": 20, "exc_class": "MaxTurnsExceededError"})
 ```
 
-A recoverable `ErrorEvent` also maps to `kind="error"` (verbatim, no
-`exc_class`) — whether the stream continues is answered by whether more
-frames follow, and `done` remains the only authoritative success
-terminator.
+A recoverable `ErrorEvent` also maps to `kind="error"`, stamped
+`detail["recoverable"] = true` and carrying no `exc_class` — the stream
+continues after it, and `done` remains the only authoritative success
+terminator. Both discriminators live in `detail`, so the frame shape
+and the codec are unchanged; a frame carrying neither is a
+consumer-synthesised terminal error (a backpressure drop, a first-frame
+timeout) and is treated as terminal. Only terminal frames reach the
+public wire — see `public_allowlist`.
 
 ## Stages
 
@@ -122,7 +126,8 @@ async for name, data in public_allowlist(frames):
   `StatusFrame` hints after their triggers: `"Calling {name}…"` per
   tool call (identity split against `known_servers`), `"Thinking…"`
   once per contiguous reasoning block, suppressed after any tool call;
-  the terminal `DoneFrame`/`ErrorFrame` re-arms.
+  the terminal `DoneFrame`/`ErrorFrame` re-arms, a recoverable error
+  frame only ends the current thought block.
 - **`with_text_fallback(frames)`** — the reasoning fallback +
   never-blank belt: when a `DoneFrame` arrives and no non-blank
   `TextDeltaFrame` streamed this run, synthesises a
@@ -136,7 +141,8 @@ async for name, data in public_allowlist(frames):
   stage: yields `PublicEvent(name, data)` pairs under exactly eight
   frozen names. Tool activity, reasoning, and turn markers are
   **dropped** — arguments, results, and thought content never reach a
-  public client.
+  public client — and so are recoverable error frames: the public
+  `error` event is terminal.
 
 ## The public wire (frozen)
 
@@ -159,6 +165,11 @@ Semantics consumers must honour:
 - **`done` is the only authoritative turn end.** `end` fires per text
   block; a multi-turn flow emits several. Closing on the first `end`
   truncates tool-turns.
+- **`error` is terminal.** Only a failure that ends the run renders as
+  `error`; recoverable stream artefacts (a malformed tool-call payload,
+  an unknown chunk, a corrective retry) never reach this wire. A client
+  may seal its view on `error` without truncating an answer that is
+  still streaming.
 - **Elicitation typing** is by schema introspection, never class name:
   `response_type` is `null` for binary approval or a scalar type name
   (`"bool"`, …); `schema` is the re-parsed requested-schema object
