@@ -133,6 +133,29 @@ class TestRobustness:
         assert error_block.result.startswith("ERROR: invalid JSON arguments")
         assert "{this is not json" in error_block.result
 
+    async def test_trailing_brace_is_salvaged_and_dispatched(self) -> None:
+        """A gateway-zeroed call whose only defect is one trailing ``}`` executes
+        with its full arguments and feeds the model a real result, not an error."""
+        tc = _tool_call(null_args=True, raw_arguments='{"a": 2, "b": 3}}')
+        t0 = FakeT0(
+            [
+                FakeChatResponse(content=[tc]),
+                FakeChatResponse(content=[Text(text="5")]),
+            ]
+        )
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "go",
+            "agent",
+        )
+        assert result.turns == 2
+        assert client.call_tool_invocations == [("add", {"a": 2, "b": 3}, 30.0)]
+
+        tool_block = t0.calls[1]["input"]["messages"][-1]["content"][0]
+        assert tool_block.result == "5"
+
     async def test_timeout_surfaces_as_mcperror(self) -> None:
         """``Client.call_tool(..., timeout=N)`` raises ``McpError``
         (code ``-32000``) on timeout, which the loop catches via the McpError
