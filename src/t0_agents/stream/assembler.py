@@ -215,7 +215,7 @@ class TurnStreamAssembler:
                     "%d chars parsed, %d trailing chars discarded",
                     tool_id,
                     name,
-                    len(raw_args) - salvaged.discarded,
+                    salvaged.parsed,
                     salvaged.discarded,
                 )
                 yield ToolCallEvent(id=tool_id, name=name, arguments=salvaged.arguments)

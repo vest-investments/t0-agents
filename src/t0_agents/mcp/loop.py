@@ -206,7 +206,7 @@ async def _execute_single_tool_call(
             "Tool %r: salvaged tool-call JSON arguments "
             "(%d chars parsed, %d trailing chars discarded)",
             name,
-            len(block.raw_arguments) - salvaged.discarded,
+            salvaged.parsed,
             salvaged.discarded,
         )
         arguments = salvaged.arguments

@@ -306,7 +306,7 @@ def test_salvage_recovers_large_object_followed_by_one_extra_brace() -> None:
     spec = _chart_spec()
     raw = json.dumps(spec)
     assert len(raw) > 1800
-    assert salvage_tool_arguments(raw + "}") == SalvagedArguments(spec, 1)
+    assert salvage_tool_arguments(raw + "}") == SalvagedArguments(spec, len(raw), 1)
 
 
 @pytest.mark.parametrize(
@@ -316,12 +316,15 @@ def test_salvage_recovers_large_object_followed_by_one_extra_brace() -> None:
 )
 def test_salvage_tolerates_only_closing_noise(suffix: str) -> None:
     spec = {"city": "Añasco", "q": "a}b]c", "n": [1, 2, {"k": None}]}
-    raw = json.dumps(spec, ensure_ascii=False) + suffix
-    assert salvage_tool_arguments(raw) == SalvagedArguments(spec, len(suffix))
+    encoded = json.dumps(spec, ensure_ascii=False)
+    assert salvage_tool_arguments(encoded + suffix) == SalvagedArguments(
+        spec, len(encoded), len(suffix)
+    )
 
 
 def test_salvage_tolerates_leading_whitespace() -> None:
-    assert salvage_tool_arguments('\n  {"a": 1}}') == SalvagedArguments({"a": 1}, 1)
+    """Leading whitespace is skipped and counted as neither parsed nor discarded."""
+    assert salvage_tool_arguments('\n  {"a": 1}}') == SalvagedArguments({"a": 1}, 8, 1)
 
 
 def test_salvage_leaves_valid_json_to_the_schema_validator() -> None:
@@ -409,7 +412,9 @@ def test_salvage_fuzz_round() -> None:
 
         assert salvage_tool_arguments(encoded) is None
         assert salvage_tool_arguments(encoded + "  ") is None
-        assert salvage_tool_arguments(encoded + noise) == SalvagedArguments(spec, len(noise))
+        assert salvage_tool_arguments(encoded + noise) == SalvagedArguments(
+            spec, len(encoded), len(noise)
+        )
         assert salvage_tool_arguments(encoded + noise + encoded) is None
         assert salvage_tool_arguments(encoded[: rng.randrange(1, len(encoded))]) is None
         if len(spec) > 1:

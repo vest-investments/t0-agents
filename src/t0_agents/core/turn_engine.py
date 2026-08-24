@@ -285,11 +285,14 @@ _DECODER: Final[json.JSONDecoder] = json.JSONDecoder()
 class SalvagedArguments(NamedTuple):
     """Outcome of :func:`salvage_tool_arguments`.
 
-    ``arguments`` is the recovered object; ``discarded`` counts the trailing
-    characters dropped after it.  Callers log that count — never the payload.
+    ``arguments`` is the recovered object; ``parsed`` is the length of its
+    JSON text and ``discarded`` counts the trailing characters dropped after
+    it — leading whitespace is in neither.  Callers log the counts, never
+    the payload.
     """
 
     arguments: dict[str, Any]
+    parsed: int
     discarded: int
 
 
@@ -332,7 +335,7 @@ def salvage_tool_arguments(raw: str) -> SalvagedArguments | None:
     remainder = stripped[end:]
     if not remainder.strip(_JSON_WHITESPACE) or remainder.strip(_TRAILING_NOISE):
         return None
-    return SalvagedArguments(value, len(remainder))
+    return SalvagedArguments(value, end, len(remainder))
 
 
 def mine_final_text(blocks: list[Any]) -> tuple[str, Literal["text", "thought"]]:
