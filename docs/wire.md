@@ -128,15 +128,20 @@ async for name, data in public_allowlist(frames):
   once per contiguous reasoning block, suppressed after any tool call;
   the terminal `DoneFrame`/`ErrorFrame` re-arms, a recoverable error
   frame only ends the current thought block.
-- **`with_text_fallback(frames)`** — the reasoning fallback +
-  never-blank belt: when a `DoneFrame` arrives and no non-blank
-  `TextDeltaFrame` streamed this run, synthesises a
+- **`with_text_fallback(frames, *, thought_fallback="emit")`** — the
+  reasoning fallback + never-blank belt: when a `DoneFrame` arrives and
+  no non-blank `TextDeltaFrame` streamed this run, synthesises a
   `TextDeltaFrame` + `TextEndFrame` pair before it — from
   `response_text` when non-blank, else from `EMPTY_TURN_RETRY_TEXT`.
   Block id: last inference id, else `FALLBACK_BLOCK_ID`. The tracked
   state re-arms at run boundaries (`DoneFrame`, *terminal*
   `ErrorFrame` — recognised by `detail["exc_class"]` — and
   `InitFrame`); a recoverable error passthrough never resets it.
+  `thought_fallback="suppress"` belts a `response_source == "thought"`
+  answer instead of publishing it — the opt-in for providers that
+  stream unsummarised chain-of-thought where a summary channel would
+  put the answer. The `DoneFrame` is unchanged either way, so a
+  consumer can read `response_source` and re-drive the turn itself.
 - **`public_allowlist(frames)`** — the privacy guard and the terminal
   stage: yields `PublicEvent(name, data)` pairs under exactly eight
   frozen names. Tool activity, reasoning, and turn markers are
