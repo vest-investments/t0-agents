@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import random
 from typing import Any, cast
 from uuid import UUID
 
@@ -11,6 +13,7 @@ from tensorzero.types import ChatInferenceResponse, TensorZeroError, ThoughtSumm
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
 from t0_agents.core.turn_engine import (
+    SalvagedArguments,
     TurnState,
     build_agent_result,
     build_inference_kwargs,
@@ -20,6 +23,7 @@ from t0_agents.core.turn_engine import (
     mine_final_text,
     raise_max_turns,
     raise_missing_tool_provider,
+    salvage_tool_arguments,
     seed_messages,
     strip_thoughts,
     validate_run_inputs,
@@ -276,3 +280,126 @@ def test_build_agent_result_copies_inference_ids() -> None:
 def test_raise_max_turns() -> None:
     with pytest.raises(MaxTurnsExceededError):
         raise_max_turns(5, "ep")
+
+
+# ---------------------------------------------------------------------------
+# salvage_tool_arguments
+# ---------------------------------------------------------------------------
+
+_CLOSING_NOISE = "}] \t\n\r"
+
+
+def _chart_spec() -> dict[str, Any]:
+    """A ~2 KB chart-like payload — the size class observed in the wild."""
+    return {
+        "type": "line",
+        "title": "Portfolio value vs. benchmark, last 40 sessions",
+        "x": [f"2026-0{1 + i // 28}-{1 + i % 28:02d}" for i in range(40)],
+        "series": [
+            {"name": name, "y": [round(100 + i * k * 0.37, 2) for i in range(40)]}
+            for k, name in enumerate(("portfolio", "benchmark", "cash", "bonds"), start=1)
+        ],
+    }
+
+
+def test_salvage_recovers_large_object_followed_by_one_extra_brace() -> None:
+    spec = _chart_spec()
+    raw = json.dumps(spec)
+    assert len(raw) > 1800
+    assert salvage_tool_arguments(raw + "}") == SalvagedArguments(spec, 1)
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["}", "]", "}}}}", "\n}\n", " } ] \r\n", "  ", ""],
+    ids=["brace", "bracket", "braces", "newline-brace", "mixed", "whitespace", "clean"],
+)
+def test_salvage_tolerates_only_closing_noise(suffix: str) -> None:
+    spec = {"city": "Añasco", "q": "a}b]c", "n": [1, 2, {"k": None}]}
+    raw = json.dumps(spec, ensure_ascii=False) + suffix
+    assert salvage_tool_arguments(raw) == SalvagedArguments(spec, len(suffix))
+
+
+def test_salvage_tolerates_leading_whitespace() -> None:
+    assert salvage_tool_arguments('\n  {"a": 1}}') == SalvagedArguments({"a": 1}, 1)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"a": 1, "b": 2 "c": 3}}',
+        '{"a": 1',
+        '"hello"}',
+        "[1, 2]}",
+        '{"a": 1}{"b": 2}',
+        '{"a": 1},',
+        '{"a": 1}, {"b": 2}',
+        '{"a": 1} done',
+        'here: {"a": 1}',
+        '{"a": 1}"',
+        '{"a": 1}}x',
+        "",
+        "   ",
+    ],
+    ids=[
+        "missing-comma",
+        "truncated",
+        "string",
+        "array",
+        "second-object",
+        "trailing-comma",
+        "comma-then-object",
+        "prose-after",
+        "prose-before",
+        "stray-quote",
+        "brace-then-text",
+        "empty",
+        "blank",
+    ],
+)
+def test_salvage_refuses_everything_else(raw: str) -> None:
+    assert salvage_tool_arguments(raw) is None
+
+
+_FUZZ_ALPHABET = 'ab{}[]",:\\ ñ'
+
+
+def _random_value(rng: random.Random, depth: int) -> Any:
+    kind = rng.randrange(7 if depth else 5)
+    if kind == 0:
+        return rng.randint(-10_000, 10_000)
+    if kind == 1:
+        return round(rng.uniform(-1e6, 1e6), rng.randrange(4))
+    if kind == 2:
+        return "".join(rng.choice(_FUZZ_ALPHABET) for _ in range(rng.randrange(12)))
+    if kind == 3:
+        return rng.choice([True, False, None])
+    if kind == 4:
+        return [rng.randint(0, 9) for _ in range(rng.randrange(6))]
+    if kind == 5:
+        return [_random_value(rng, depth - 1) for _ in range(rng.randrange(4))]
+    return _random_object(rng, depth - 1)
+
+
+def _random_object(rng: random.Random, depth: int) -> dict[str, Any]:
+    return {f"k{i}": _random_value(rng, depth) for i in range(rng.randrange(1, 6))}
+
+
+def _without_member_commas(spec: dict[str, Any]) -> str:
+    members = [f"{json.dumps(k)}: {json.dumps(v)}" for k, v in spec.items()]
+    return "{" + " ".join(members) + "}"
+
+
+def test_salvage_fuzz_round() -> None:
+    """Closing noise after a complete object is salvaged; damage inside never is."""
+    rng = random.Random(20260824)
+    for _ in range(300):
+        spec = _random_object(rng, depth=2)
+        encoded = json.dumps(spec, ensure_ascii=rng.random() < 0.5)
+        noise = "".join(rng.choice(_CLOSING_NOISE) for _ in range(rng.randrange(1, 9)))
+
+        assert salvage_tool_arguments(encoded + noise) == SalvagedArguments(spec, len(noise))
+        assert salvage_tool_arguments(encoded + noise + encoded) is None
+        assert salvage_tool_arguments(encoded[: rng.randrange(1, len(encoded))]) is None
+        if len(spec) > 1:
+            assert salvage_tool_arguments(_without_member_commas(spec) + noise) is None
