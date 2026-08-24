@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -28,12 +29,19 @@ from tests._fake_t0 import (
 
 
 async def _drain(chunks: list[ChatChunk]) -> list[AgentEvent]:
+    _assembler, events = await _drain_with_assembler(chunks)
+    return events
+
+
+async def _drain_with_assembler(
+    chunks: list[ChatChunk],
+) -> tuple[TurnStreamAssembler, list[AgentEvent]]:
     async def _gen() -> AsyncIterator[ChatChunk]:
         for chunk in chunks:
             yield chunk
 
     assembler = TurnStreamAssembler()
-    return [event async for event in assembler.assemble(_gen())]
+    return assembler, [event async for event in assembler.assemble(_gen())]
 
 
 async def test_assembler_text_only() -> None:
@@ -222,6 +230,89 @@ async def test_assembler_invalid_tool_args_json() -> None:
     assert errors and "invalid tool-call JSON" in errors[0].message
     # Empty-args ToolCallEvent is still emitted so consumers see the id.
     assert calls and calls[0].arguments == {} and calls[0].id == "c1"
+
+
+def _large_spec() -> dict[str, Any]:
+    return {
+        "type": "line",
+        "x": [f"2026-08-{1 + i % 28:02d}" for i in range(40)],
+        "series": [
+            {"name": name, "y": [round(100 + i * k * 0.37, 2) for i in range(40)]}
+            for k, name in enumerate(("portfolio", "benchmark", "cash", "bonds"), start=1)
+        ],
+    }
+
+
+async def test_assembler_salvages_object_followed_by_extra_brace() -> None:
+    """A complete object plus one trailing ``}`` executes with its FULL arguments.
+
+    No ``ErrorEvent``, and the id is not recorded as invalid — so the
+    runner dispatches the recovered dict instead of the no-dispatch error.
+    """
+    spec = _large_spec()
+    raw = json.dumps(spec) + "}"
+    assert len(raw) > 1800
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([tool_call_chunk(raw_name="present_chart", block_id="c1")]),
+            chat_chunk([tool_call_chunk(raw_arguments=raw[:900], block_id="c1")]),
+            chat_chunk([tool_call_chunk(raw_arguments=raw[900:], block_id="c1")]),
+            final_chunk(),
+        ]
+    )
+    assert [e for e in events if isinstance(e, ErrorEvent)] == []
+    (call,) = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert call.id == "c1" and call.name == "present_chart"
+    assert call.arguments == spec
+    assert assembler.invalid_tool_args == {}
+
+
+async def test_assembler_salvages_closing_noise_arriving_in_its_own_chunk() -> None:
+    events = await _drain(
+        [
+            chat_chunk(
+                [tool_call_chunk(raw_name="add", raw_arguments='{"a": 2, "b": 3}', block_id="c1")]
+            ),
+            chat_chunk([tool_call_chunk(raw_arguments="\n]}", block_id="c1")]),
+            final_chunk(),
+        ]
+    )
+    assert [e for e in events if isinstance(e, ErrorEvent)] == []
+    (call,) = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert call.arguments == {"a": 2, "b": 3}
+
+
+async def test_assembler_missing_comma_keeps_the_error_path() -> None:
+    """Interior corruption is never salvaged — today's error path, byte for byte."""
+    raw = '{"a": 1, "b": 2 "c": 3}}'
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([tool_call_chunk(raw_name="add", raw_arguments=raw, block_id="c1")]),
+            final_chunk(),
+        ]
+    )
+    (error,) = [e for e in events if isinstance(e, ErrorEvent)]
+    assert error.message.startswith("invalid tool-call JSON arguments: Expecting ',' delimiter")
+    assert error.detail == {"tool_call_id": "c1", "name": "add"}
+    (call,) = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert call.arguments == {}
+    assert assembler.invalid_tool_args == {"c1": raw}
+
+
+async def test_assembler_second_object_is_not_salvaged() -> None:
+    """Two objects are ambiguous about which arguments the model meant."""
+    raw = '{"a": 1}{"b": 2}'
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([tool_call_chunk(raw_name="add", raw_arguments=raw, block_id="c1")]),
+            final_chunk(),
+        ]
+    )
+    (error,) = [e for e in events if isinstance(e, ErrorEvent)]
+    assert error.message.startswith("invalid tool-call JSON arguments: Extra data")
+    (call,) = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert call.arguments == {}
+    assert assembler.invalid_tool_args == {"c1": raw}
 
 
 async def test_assembler_tool_args_non_object() -> None:
