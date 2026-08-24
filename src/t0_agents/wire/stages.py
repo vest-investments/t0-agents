@@ -32,7 +32,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final, NamedTuple, assert_never
+from typing import Any, Final, Literal, NamedTuple, assert_never
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
 from t0_agents.stream.events import (
@@ -326,6 +326,8 @@ async def with_status(
 
 async def with_text_fallback(
     frames: AsyncIterator[WireFrame],
+    *,
+    thought_fallback: Literal["emit", "suppress"] = "emit",
 ) -> AsyncIterator[WireFrame]:
     """Guarantee every successful run ends with visible text.
 
@@ -341,6 +343,21 @@ async def with_text_fallback(
     (never-blank belt). The synthesised block id is the last inference
     id, or :data:`FALLBACK_BLOCK_ID` when there is none — matching the
     public ``done`` payload id.
+
+    ``thought_fallback`` decides what a *thought-sourced* answer is
+    worth on the public wire, because two provider classes arrive here
+    under the same ``response_source == "thought"``. Summary channels
+    (OpenAI o-series, ``gpt-oss`` via Harmony) put a publishable
+    summary in that slot, and ``"emit"`` synthesises it — the default,
+    for backwards compatibility and because those providers are the
+    common case. Providers that stream unsummarised chain-of-thought
+    (DeepSeek's reasoning models) put private reasoning in the same
+    slot, and ``"suppress"`` substitutes :data:`EMPTY_TURN_RETRY_TEXT`
+    so it never becomes assistant text. The stage does not sniff the
+    provider — the consumer knows its variant and states the policy.
+    Neither policy touches the :class:`DoneFrame` itself, so a consumer
+    reading ``response_source`` can still recognise a thought-only turn
+    and re-drive it.
 
     ``saw_text`` re-arms at every run boundary so each run on a
     long-lived stream gets its own fallback decision: after a
@@ -361,10 +378,13 @@ async def with_text_fallback(
                 if delta.strip():
                     saw_text = True
                 yield frame
-            case DoneFrame(response_text=text, inference_ids=ids):
+            case DoneFrame(
+                response_text=text, inference_ids=ids, response_source=source
+            ):
                 if not saw_text:
                     msg_id = ids[-1] if ids else FALLBACK_BLOCK_ID
-                    body = text if text.strip() else EMPTY_TURN_RETRY_TEXT
+                    suppressed = source == "thought" and thought_fallback == "suppress"
+                    body = text if text.strip() and not suppressed else EMPTY_TURN_RETRY_TEXT
                     yield TextDeltaFrame(block_id=msg_id, delta=body)
                     yield TextEndFrame(block_id=msg_id)
                 saw_text = False
