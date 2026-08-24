@@ -309,6 +309,27 @@ _PER_SEQUENCE_FIXTURES: list[tuple[str, list[AgentEvent]]] = [
             ),
         ],
     ),
+    (
+        "seq_text_recoverable_error_text_done",
+        [
+            TextDeltaEvent(id="b1", delta="Let me check"),
+            TextEndEvent(id="b1"),
+            ErrorEvent(
+                message="invalid tool-call JSON arguments: Extra data",
+                detail={"tool_call_id": "t1", "name": "search"},
+            ),
+            TextDeltaEvent(id="b2", delta="Here is the answer."),
+            TextEndEvent(id="b2"),
+            DoneEvent(
+                result=AgentResult(
+                    response="Here is the answer.",
+                    turns=2,
+                    inference_ids=["inf-1", "inf-2"],
+                    response_source="text",
+                )
+            ),
+        ],
+    ),
 ]
 
 
@@ -354,6 +375,15 @@ async def test_dropped_events_produce_zero_output_in_both_pipelines() -> None:
             continue
         assert await _collect_public(events) == [], fixture_id
         assert _collect_golden(events) == [], fixture_id
+
+
+async def test_a_recoverable_error_mid_run_yields_no_public_error() -> None:
+    """The sequence that motivated the contract revision, asserted
+    directly rather than merely equal to the snapshot: the anomaly is
+    internal, the answer streams on, and ``done`` lands."""
+    events = dict(_ALL_FIXTURES)["seq_text_recoverable_error_text_done"]
+    names = [name for name, _ in await _collect_public(events)]
+    assert names == ["chunk", "end", "chunk", "end", "done"]
 
 
 # ---------------------------------------------------------------------------

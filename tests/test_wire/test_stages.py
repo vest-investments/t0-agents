@@ -549,6 +549,26 @@ class TestWithTextFallback:
             _done(text="the answer", ids=("inf-1",)),
         ]
 
+    async def test_a_stamped_recoverable_error_passes_through_without_rearming(
+        self,
+    ) -> None:
+        """The stamp :func:`project` adds carries no ``exc_class``, so the
+        fallback stage treats the frame exactly as before: relayed
+        untouched, ``saw_text`` intact."""
+        stamped = ErrorFrame(message="transient", detail={"recoverable": True})
+        out = await _fallback(
+            [
+                TextDeltaFrame(block_id="b1", delta="the answer"),
+                stamped,
+                _done(text="the answer", ids=("inf-1",)),
+            ]
+        )
+        assert out == [
+            TextDeltaFrame(block_id="b1", delta="the answer"),
+            stamped,
+            _done(text="the answer", ids=("inf-1",)),
+        ]
+
     async def test_an_init_frame_rearms_for_the_new_session(self) -> None:
         out = await _fallback(
             [
@@ -715,3 +735,62 @@ class TestPublicAllowlist:
             ]
         )
         assert out == []
+
+
+async def _public_wire(events: AsyncIterator[AgentEvent]) -> list[PublicEvent]:
+    """The canonical composition from the module docstring, end to end."""
+    frames = as_terminal_safe(project(events))
+    frames = with_status(frames)
+    frames = with_text_fallback(frames)
+    return [event async for event in public_allowlist(frames)]
+
+
+class TestErrorIsTerminalOnThePublicWire:
+    async def test_a_recoverable_error_mid_run_never_renders_and_done_lands(self) -> None:
+        """The malformed-arguments path: the assembler flags the call, the
+        loop feeds the model an error result, and the run goes on to a real
+        answer. A compliant client seals its view on ``error``, so the
+        anomaly must stay internal and ``done`` must still arrive."""
+        run = ScriptedAgent(
+            events=[
+                TextDeltaEvent(id="b1", delta="Let me check"),
+                TextEndEvent(id="b1"),
+                ErrorEvent(
+                    message="invalid tool-call JSON arguments: Extra data",
+                    detail={"tool_call_id": "t1", "name": "search"},
+                ),
+                ToolCallEvent(id="t1", name="search", arguments={}),
+                ToolResultEvent(
+                    id="t1",
+                    name="search",
+                    result="ERROR: invalid JSON arguments",
+                    is_error=True,
+                ),
+                TurnEndEvent(turn=1),
+                TextDeltaEvent(id="b2", delta="Here is the answer."),
+                TextEndEvent(id="b2"),
+            ],
+            result="Here is the answer.",
+        ).invoke("q")
+
+        out = await _public_wire(run.events())
+
+        assert [name for name, _ in out] == [
+            "chunk",
+            "end",
+            "status",
+            "chunk",
+            "end",
+            "done",
+        ]
+
+    async def test_a_terminal_failure_still_ends_the_wire_with_error(self) -> None:
+        run = ScriptedAgent(
+            events=[TextDeltaEvent(id="b1", delta="partial")],
+            raises=MaxTurnsExceededError(20),
+        ).invoke("q")
+
+        out = await _public_wire(run.events())
+
+        assert [name for name, _ in out] == ["chunk", "error"]
+        assert out[-1].data["detail"]["exc_class"] == "MaxTurnsExceededError"
