@@ -310,7 +310,11 @@ def salvage_tool_arguments(raw: str) -> SalvagedArguments | None:
     a second value (``{"a": 1}{"b": 2}``, ``{"a": 1}, …``) is ambiguous about
     which arguments the model meant, prose is not arguments, and interior
     corruption (a missing comma, a truncated object) never reaches a
-    successful ``raw_decode`` in the first place.  Deliberately narrower than
+    successful ``raw_decode`` in the first place.  Syntactically valid JSON
+    returns ``None`` as well: no parser rejected it, so a caller holding
+    ``arguments=None`` for such a string was told so by schema validation
+    (TensorZero zeroes arguments that fail the tool's parameter schema), and
+    a schema verdict is not this helper's to overrule.  Deliberately narrower than
     :func:`~t0_agents.core.structured.permissive_parse`, which mines JSON out
     of prose and fences — the right tolerance for reading an answer, the wrong
     one for choosing the arguments of a call that has side effects.
@@ -326,7 +330,7 @@ def salvage_tool_arguments(raw: str) -> SalvagedArguments | None:
     if not isinstance(value, dict):
         return None
     remainder = stripped[end:]
-    if remainder.strip(_TRAILING_NOISE):
+    if not remainder.strip(_JSON_WHITESPACE) or remainder.strip(_TRAILING_NOISE):
         return None
     return SalvagedArguments(value, len(remainder))
 

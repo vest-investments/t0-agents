@@ -311,8 +311,8 @@ def test_salvage_recovers_large_object_followed_by_one_extra_brace() -> None:
 
 @pytest.mark.parametrize(
     "suffix",
-    ["}", "]", "}}}}", "\n}\n", " } ] \r\n", "  ", ""],
-    ids=["brace", "bracket", "braces", "newline-brace", "mixed", "whitespace", "clean"],
+    ["}", "]", "}}}}", "\n}\n", " } ] \r\n"],
+    ids=["brace", "bracket", "braces", "newline-brace", "mixed"],
 )
 def test_salvage_tolerates_only_closing_noise(suffix: str) -> None:
     spec = {"city": "Añasco", "q": "a}b]c", "n": [1, 2, {"k": None}]}
@@ -322,6 +322,13 @@ def test_salvage_tolerates_only_closing_noise(suffix: str) -> None:
 
 def test_salvage_tolerates_leading_whitespace() -> None:
     assert salvage_tool_arguments('\n  {"a": 1}}') == SalvagedArguments({"a": 1}, 1)
+
+
+def test_salvage_leaves_valid_json_to_the_schema_validator() -> None:
+    """No parser rejected valid JSON — ``arguments=None`` for it means TensorZero's
+    schema validation refused the call, and the salvage must not overrule that."""
+    assert salvage_tool_arguments('{"a": 1}') is None
+    assert salvage_tool_arguments('  {"a": 1}\n\t') is None
 
 
 @pytest.mark.parametrize(
@@ -396,8 +403,12 @@ def test_salvage_fuzz_round() -> None:
     for _ in range(300):
         spec = _random_object(rng, depth=2)
         encoded = json.dumps(spec, ensure_ascii=rng.random() < 0.5)
-        noise = "".join(rng.choice(_CLOSING_NOISE) for _ in range(rng.randrange(1, 9)))
+        chars = [rng.choice("}]"), *(rng.choice(_CLOSING_NOISE) for _ in range(rng.randrange(8)))]
+        rng.shuffle(chars)
+        noise = "".join(chars)
 
+        assert salvage_tool_arguments(encoded) is None
+        assert salvage_tool_arguments(encoded + "  ") is None
         assert salvage_tool_arguments(encoded + noise) == SalvagedArguments(spec, len(noise))
         assert salvage_tool_arguments(encoded + noise + encoded) is None
         assert salvage_tool_arguments(encoded[: rng.randrange(1, len(encoded))]) is None
