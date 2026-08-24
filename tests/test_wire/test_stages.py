@@ -626,6 +626,43 @@ class TestWithTextFallback:
             f.delta for f in out if isinstance(f, TextDeltaFrame)
         )
 
+    async def test_emit_is_the_default_spelled_out(self) -> None:
+        source = [
+            ThoughtDeltaFrame(id="th1", delta="hmm"),
+            _done(text="The answer.", ids=("inf-1",), source="thought"),
+        ]
+        out = await _fallback_policy(source, thought_fallback="emit")
+        assert out == await _fallback(source)
+        assert TextDeltaFrame(block_id="inf-1", delta="The answer.") in out
+
+    async def test_suppress_leaves_a_text_sourced_answer_alone(self) -> None:
+        out = await _fallback_policy(
+            [_done(text="The answer.", ids=("inf-1",))],
+            thought_fallback="suppress",
+        )
+        assert out[0] == TextDeltaFrame(block_id="inf-1", delta="The answer.")
+
+    @pytest.mark.parametrize("policy", ["emit", "suppress"])
+    async def test_a_blank_thought_answer_belts_under_either_policy(
+        self, policy: Literal["emit", "suppress"]
+    ) -> None:
+        out = await _fallback_policy(
+            [_done(text="  \n\t ", ids=("inf-9",), source="thought")],
+            thought_fallback=policy,
+        )
+        assert out[:2] == [
+            TextDeltaFrame(block_id="inf-9", delta=EMPTY_TURN_RETRY_TEXT),
+            TextEndFrame(block_id="inf-9"),
+        ]
+
+    async def test_suppress_never_touches_text_that_already_streamed(self) -> None:
+        source = [
+            TextDeltaFrame(block_id="b1", delta="the streamed answer"),
+            TextEndFrame(block_id="b1"),
+            _done(text="the streamed answer", ids=("inf-1",)),
+        ]
+        assert await _fallback_policy(source, thought_fallback="suppress") == source
+
 
 async def _public(frames: Iterable[WireFrame]) -> list[PublicEvent]:
     return [event async for event in public_allowlist(_stream_frames(frames))]
