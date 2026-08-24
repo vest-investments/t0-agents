@@ -11,7 +11,11 @@ the dict level is the exact library-owned slice of that contract.
 
 ``_GoldenMapper`` is a **frozen snapshot** ported verbatim from the
 production gate. If this test fails, fix the stages — NEVER the
-snapshot.
+snapshot. The one sanctioned exception is a deliberate revision of the
+contract itself, recorded here so the snapshot's history stays honest:
+a recoverable ``ErrorEvent`` is internal telemetry and produces **no**
+public event — the public ``error`` is terminal — so the mapper drops
+it and the former ``error`` fixture is ``dropped_recoverable_error``.
 """
 
 from __future__ import annotations
@@ -89,11 +93,7 @@ class _GoldenMapper:
         if isinstance(event, TextEndEvent):
             return [PublicEvent("end", {"type": "end", "id": event.id})]
         if isinstance(event, ErrorEvent):
-            return [
-                PublicEvent(
-                    "error", {"message": event.message, "detail": event.detail}
-                )
-            ]
+            return []
         if isinstance(event, DoneEvent):
             return self._done_frames(event)
         return []
@@ -162,7 +162,6 @@ _PER_EVENT_FIXTURES: list[tuple[str, list[AgentEvent]]] = [
     ("text_delta_normal", [TextDeltaEvent(id="b1", delta="Hola — ñandú")]),
     ("text_delta_empty", [TextDeltaEvent(id="b1", delta="")]),
     ("text_end", [TextEndEvent(id="b1")]),
-    ("error", [ErrorEvent(message="boom", detail={"k": "v"})]),
     (
         "done_text_not_seen_with_response",
         [
@@ -227,6 +226,10 @@ _PER_EVENT_FIXTURES: list[tuple[str, list[AgentEvent]]] = [
     ("dropped_thought", [ThoughtEvent(id="th", text="x")]),
     ("dropped_thought_delta", [ThoughtDeltaEvent(id="th", delta="x")]),
     ("dropped_turn_end", [TurnEndEvent(turn=1)]),
+    (
+        "dropped_recoverable_error",
+        [ErrorEvent(message="boom", detail={"k": "v"})],
+    ),
 ]
 
 

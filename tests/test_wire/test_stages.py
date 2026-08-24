@@ -150,9 +150,17 @@ class TestProjectMapping:
             inference_ids=("inf-1", "inf-2"),
         )
 
-    async def test_recoverable_error_passes_through(self) -> None:
+    async def test_recoverable_error_is_stamped_at_birth(self) -> None:
         [frame] = await _project([ErrorEvent(message="boom", detail={"k": "v"})])
-        assert frame == ErrorFrame(message="boom", detail={"k": "v"})
+        assert frame == ErrorFrame(
+            message="boom", detail={"k": "v", "recoverable": True}
+        )
+
+    async def test_the_recoverable_stamp_wins_over_the_event_detail(self) -> None:
+        [frame] = await _project(
+            [ErrorEvent(message="boom", detail={"recoverable": False})]
+        )
+        assert frame == ErrorFrame(message="boom", detail={"recoverable": True})
 
     async def test_elicitation_requested_maps_to_request_frame(self) -> None:
         [frame] = await _project(
@@ -569,6 +577,57 @@ class TestPublicAllowlist:
             PublicEvent("init", {"conversation_id": "conv-1"}),
             PublicEvent("error", {"message": "boom", "detail": {"k": "v"}}),
             PublicEvent("status", {"text": "Thinking…", "server": None, "tool": None}),
+        ]
+
+    async def test_a_recoverable_error_frame_is_dropped(self) -> None:
+        out = await _public(
+            [
+                ErrorFrame(
+                    message="invalid tool-call JSON arguments: Extra data",
+                    detail={"tool_call_id": "t1", "name": "search", "recoverable": True},
+                )
+            ]
+        )
+        assert out == []
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            pytest.param(
+                ErrorFrame(message="TimeoutError", detail={"exc_class": "TimeoutError"}),
+                id="generic",
+            ),
+            pytest.param(
+                ErrorFrame(
+                    message="max_turns_exceeded",
+                    detail={"max_turns": 20, "exc_class": "MaxTurnsExceededError"},
+                ),
+                id="max_turns",
+            ),
+            pytest.param(
+                ErrorFrame(
+                    message="Run was cancelled before completion",
+                    detail={"exc_class": "RunCancelledError"},
+                ),
+                id="cancelled",
+            ),
+        ],
+    )
+    async def test_terminal_error_frames_render_with_their_detail(
+        self, frame: ErrorFrame
+    ) -> None:
+        assert await _public([frame]) == [
+            PublicEvent("error", {"message": frame.message, "detail": frame.detail})
+        ]
+
+    async def test_a_consumer_synthesised_bare_error_frame_still_renders(self) -> None:
+        """The drop keys on the positive stamp, never on a missing
+        ``exc_class``: a consumer that synthesises its own terminal error
+        (a backpressure drop, a first-frame timeout) carries an empty
+        ``detail`` and must keep rendering."""
+        out = await _public([ErrorFrame(message="stream_backpressure", detail={})])
+        assert out == [
+            PublicEvent("error", {"message": "stream_backpressure", "detail": {}})
         ]
 
     async def test_text_frames_project_as_chunk_and_end(self) -> None:

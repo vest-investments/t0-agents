@@ -196,12 +196,15 @@ class ErrorFrame:
     """Anomaly on the stream — recoverable or terminal.
 
     A recoverable :class:`t0_agents.stream.events.ErrorEvent` maps here
-    verbatim; terminal failures (a raised exception or a
-    :class:`t0_agents.stream.events.RunErrorEvent`) map here with
-    ``detail["exc_class"]`` carrying the exception class name as a
-    machine-readable discriminator. The wire ``kind`` stays ``error``
-    for both — whether the stream continues is answered by whether more
-    frames follow.
+    with ``detail["recoverable"]`` set to ``True`` by
+    :func:`t0_agents.wire.stages.project`; terminal failures (a raised
+    exception or a :class:`t0_agents.stream.events.RunErrorEvent`) map
+    here with ``detail["exc_class"]`` carrying the exception class
+    name. Both discriminators live in ``detail``, so the wire ``kind``
+    stays ``error`` and the codec is untouched; a frame carrying
+    neither is a consumer-synthesised terminal error. Only terminal
+    frames reach the public wire
+    (:func:`t0_agents.wire.stages.public_allowlist`).
     """
 
     kind: ClassVar[str] = "error"
