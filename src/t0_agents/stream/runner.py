@@ -387,6 +387,11 @@ class StreamingAgentLoop:
         failed JSON parsing become ``arguments=None`` — both route
         dispatch through ``_execute_single_tool_call``'s no-dispatch
         error branches, keeping the two loops' contracts identical.
+        Arguments the assembler salvaged (a complete object plus closing
+        noise) never appear in ``invalid_tool_args``, so they take the
+        ordinary branch: ``arguments`` is the recovered dict and
+        ``raw_arguments`` its canonical serialisation — the same bytes
+        :func:`~t0_agents.wire.stages.project` puts on ``arguments_json``.
         """
         blocks: list[Any] = []
         for _tid, text in assembler.text_blocks.items():

@@ -180,6 +180,28 @@ class TestExecuteToolCalls:
         # Verify call_tool was NOT invoked when arguments is None.
         assert client.call_tool_invocations == []
 
+    async def test_arguments_none_with_closing_noise_is_salvaged(self) -> None:
+        """A complete object plus a trailing ``}`` is dispatched with the
+        recovered dict — the same input the streaming assembler accepts."""
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        results = await execute_tool_calls(
+            cast(Client[Any], client),
+            [_tool_call(null_args=True, raw_arguments='{"a": 2, "b": 3}}')],
+        )
+        assert client.call_tool_invocations == [("add", {"a": 2, "b": 3}, 30.0)]
+        assert results[0].result == "5"
+
+    async def test_schema_zeroed_valid_json_is_not_dispatched(self) -> None:
+        """Valid JSON with ``arguments=None`` failed TensorZero's schema check;
+        the salvage never overrules that — today's error result, no dispatch."""
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        results = await execute_tool_calls(
+            cast(Client[Any], client),
+            [_tool_call(null_args=True, raw_arguments='{"a": "two", "b": 3}')],
+        )
+        assert client.call_tool_invocations == []
+        assert results[0].result == 'ERROR: invalid JSON arguments from LLM: {"a": "two", "b": 3}'
+
     async def test_tool_error_caught(self) -> None:
         """ToolError → error ToolResult, loop continues."""
         client = FakeMCPClient(call_results={"add": ToolError("division by zero")})
@@ -394,6 +416,16 @@ class TestExecuteToolCallsDetailed:
         )
         assert outcomes[0].is_error is True
         assert outcomes[0].duration_ms is None
+
+    async def test_salvaged_dispatch_is_timed_and_not_an_error(self) -> None:
+        client = FakeMCPClient(call_results={"add": _make_result(data=5)})
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], client),
+            [_tool_call(call_id="c1", null_args=True, raw_arguments='{"a": 2, "b": 3}]')],
+        )
+        assert outcomes[0].is_error is False
+        assert outcomes[0].duration_ms is not None
+        assert outcomes[0].result.result == "5"
 
     async def test_typed_is_error_ignores_error_prefixed_success_string(self) -> None:
         # The typed flag is CallToolResult.is_error, not a sniff of the

@@ -9,13 +9,17 @@ non-streaming loop, where TensorZero zeroes those fields itself.
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.stream.events import ToolResultEvent
+from t0_agents.stream.events import AgentEvent, ErrorEvent, ToolResultEvent
 from t0_agents.stream.runner import StreamingAgentLoop
+from t0_agents.wire.frames import ToolCallFrame
+from t0_agents.wire.stages import project
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0, chat_chunk, final_chunk, text_chunk, tool_call_chunk
 from tests.test_parity._scenario import _tool_result
@@ -108,3 +112,48 @@ async def test_empty_args_tool_call_still_dispatches() -> None:
     (result,) = [e for e in events if isinstance(e, ToolResultEvent)]
     assert result.is_error is False
     assert result.result == "3"
+
+
+async def test_salvaged_args_dispatch_with_full_arguments_and_no_error_event() -> None:
+    """A complete object plus closing noise is dispatched as if it were clean.
+
+    The recovered dict reaches the tool, no recoverable ``ErrorEvent`` is
+    emitted, and the replayed assistant block carries the dict with its
+    canonical serialisation — not the noisy raw string.
+    """
+    fake_t0, client, events = await _run_one_tool_turn("add", '{"a": 2, "b": 3}}')
+
+    assert client.call_tool_invocations == [("add", {"a": 2, "b": 3}, 30.0)]
+    assert [e for e in events if isinstance(e, ErrorEvent)] == []
+
+    (result,) = [e for e in events if isinstance(e, ToolResultEvent)]
+    assert result.is_error is False
+    assert result.result == "3"
+
+    replayed_assistant = fake_t0.calls[1]["input"]["messages"][1]
+    (tool_call,) = replayed_assistant["content"]
+    assert tool_call.arguments == {"a": 2, "b": 3}
+    assert tool_call.raw_arguments == '{"a": 2, "b": 3}'
+
+
+async def test_salvaged_call_wire_arguments_equal_what_the_tool_received() -> None:
+    """Runtime ≡ replay ≡ wire for a salvaged call — the parity this fix exists for.
+
+    The wire's ``arguments_json`` must parse to exactly the dict the tool
+    executed with and be byte-identical to the replayed ``raw_arguments``,
+    non-ASCII included.
+    """
+    raw = '{"a": 2, "b": 3, "note": "Añasco"}\n}'
+    fake_t0, client, events = await _run_one_tool_turn("add", raw)
+
+    async def _events() -> AsyncIterator[AgentEvent]:
+        for event in events:
+            yield event
+
+    (frame,) = [f async for f in project(_events()) if isinstance(f, ToolCallFrame)]
+    (invocation,) = client.call_tool_invocations
+    (tool_call,) = fake_t0.calls[1]["input"]["messages"][1]["content"]
+
+    assert frame.truncated_from is None
+    assert json.loads(frame.arguments_json) == invocation[1] == tool_call.arguments
+    assert frame.arguments_json == tool_call.raw_arguments == '{"a": 2, "b": 3, "note": "Añasco"}'

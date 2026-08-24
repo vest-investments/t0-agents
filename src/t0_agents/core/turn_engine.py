@@ -29,11 +29,12 @@ import-direction constraints — this module never imports ``mcp/`` or
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn
 
 from tensorzero import Message, Text, Thought
 
@@ -270,6 +271,71 @@ def raise_missing_tool_provider(*, entry_point: str) -> NoReturn:
         f"`fastmcp.Client` to `{entry_point}(..., tool_provider=...)` "
         "if your agent is expected to dispatch tools."
     )
+
+
+_JSON_WHITESPACE: Final[str] = " \t\n\r"
+"""RFC 8259 insignificant whitespace — the same set ``json.loads`` skips."""
+
+_TRAILING_NOISE: Final[str] = "}]" + _JSON_WHITESPACE
+"""Every character :func:`salvage_tool_arguments` tolerates after the object."""
+
+_DECODER: Final[json.JSONDecoder] = json.JSONDecoder()
+
+
+class SalvagedArguments(NamedTuple):
+    """Outcome of :func:`salvage_tool_arguments`.
+
+    ``arguments`` is the recovered object; ``parsed`` is the length of its
+    JSON text and ``discarded`` counts the trailing characters dropped after
+    it — leading whitespace is in neither.  Callers log the counts, never
+    the payload.
+    """
+
+    arguments: dict[str, Any]
+    parsed: int
+    discarded: int
+
+
+def salvage_tool_arguments(raw: str) -> SalvagedArguments | None:
+    """Recover tool-call arguments from a complete object followed by closing noise.
+
+    Some providers emit a correct JSON object and then keep going — an extra
+    ``}`` or ``]`` after the final brace is the dominant shape.  Strict parsing
+    rejects the whole call and the model is re-prompted for arguments it
+    already produced.  This helper accepts exactly that class and nothing
+    wider:
+
+    * the value must start at the first non-whitespace character and be a
+      complete JSON **object** (``raw_decode`` succeeds with a ``dict``);
+    * the remainder after it may contain only ``}``, ``]`` and JSON whitespace.
+
+    Anything else returns ``None`` and the caller keeps its strict error path:
+    a second value (``{"a": 1}{"b": 2}``, ``{"a": 1}, …``) is ambiguous about
+    which arguments the model meant, prose is not arguments, and interior
+    corruption (a missing comma, a truncated object) never reaches a
+    successful ``raw_decode`` in the first place.  Syntactically valid JSON
+    returns ``None`` as well: no parser rejected it, so a caller holding
+    ``arguments=None`` for such a string was told so by schema validation
+    (TensorZero zeroes arguments that fail the tool's parameter schema), and
+    a schema verdict is not this helper's to overrule.  Deliberately narrower than
+    :func:`~t0_agents.core.structured.permissive_parse`, which mines JSON out
+    of prose and fences — the right tolerance for reading an answer, the wrong
+    one for choosing the arguments of a call that has side effects.
+
+    Shared by the streaming assembler and the dispatch executor so the two
+    loops accept the same inputs — the parity this module exists for.
+    """
+    stripped = raw.lstrip(_JSON_WHITESPACE)
+    try:
+        value, end = _DECODER.raw_decode(stripped)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    remainder = stripped[end:]
+    if not remainder.strip(_JSON_WHITESPACE) or remainder.strip(_TRAILING_NOISE):
+        return None
+    return SalvagedArguments(value, end, len(remainder))
 
 
 def mine_final_text(blocks: list[Any]) -> tuple[str, Literal["text", "thought"]]:

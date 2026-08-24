@@ -47,6 +47,7 @@ from t0_agents.core.turn_engine import (
     mine_final_text,
     raise_max_turns,
     raise_missing_tool_provider,
+    salvage_tool_arguments,
     seed_messages,
     strip_thoughts,
     validate_run_inputs,
@@ -154,8 +155,13 @@ async def _execute_single_tool_call(
       payload, never invoking ``call_tool``.
     * ``arguments is None`` (T0 marks invalid LLM JSON with
       ``arguments=None``, but ``raw_arguments`` always carries the raw string)
-      → ``ToolResult`` with an ``"ERROR: invalid JSON arguments..."`` payload
-      that the LLM can read on the next turn and (potentially) retry from.
+      → first :func:`~t0_agents.core.turn_engine.salvage_tool_arguments` on
+      ``raw_arguments``: a complete object followed only by closing noise
+      dispatches with the recovered dict (WARNING, sizes only); anything
+      else → ``ToolResult`` with an ``"ERROR: invalid JSON arguments..."``
+      payload that the LLM can read on the next turn and (potentially)
+      retry from.  The streaming assembler applies the same rule before
+      its rebuild, so both loops accept and refuse the same inputs.
     * ``ToolError`` (the tool itself raised) → ``"ERROR: tool execution
       failed: <e>"``.
     * ``McpError`` (MCP protocol error, including timeout code
@@ -190,10 +196,21 @@ async def _execute_single_tool_call(
     if block.name is None:
         logger.error("Tool %r: name not in schema", block.raw_name)
         return _error(f"ERROR: tool name {block.raw_name!r} is not in the schema")
-    if block.arguments is None:
-        logger.error("Tool %r: invalid JSON arguments: %s", name, block.raw_arguments)
-        return _error(f"ERROR: invalid JSON arguments from LLM: {block.raw_arguments}")
-    logger.debug("Executing tool %r with args: %s", name, block.arguments)
+    arguments = block.arguments
+    if arguments is None:
+        salvaged = salvage_tool_arguments(block.raw_arguments)
+        if salvaged is None:
+            logger.error("Tool %r: invalid JSON arguments: %s", name, block.raw_arguments)
+            return _error(f"ERROR: invalid JSON arguments from LLM: {block.raw_arguments}")
+        logger.warning(
+            "Tool %r: salvaged tool-call JSON arguments "
+            "(%d chars parsed, %d trailing chars discarded)",
+            name,
+            salvaged.parsed,
+            salvaged.discarded,
+        )
+        arguments = salvaged.arguments
+    logger.debug("Executing tool %r with args: %s", name, arguments)
     start = time.monotonic()
     try:
         # The kwarg is only passed when progress is actually wired, so
@@ -201,12 +218,12 @@ async def _execute_single_tool_call(
         # progress-free path (run_agent, streaming without a sink).
         if progress_callback is None:
             mcp_result = await tool_provider.call_tool(
-                block.name, block.arguments, timeout=timeout
+                block.name, arguments, timeout=timeout
             )
         else:
             mcp_result = await tool_provider.call_tool(
                 block.name,
-                block.arguments,
+                arguments,
                 timeout=timeout,
                 progress_handler=_progress_handler_for(block.id, progress_callback),
             )

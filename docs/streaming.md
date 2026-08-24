@@ -642,7 +642,7 @@ The streaming surface encodes three tiers of error:
 
 | Kind | Surface | Examples |
 |---|---|---|
-| Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable; the call is **not** dispatched — the model receives the same `ERROR: invalid JSON arguments...` result as on the non-streaming path); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
+| Non-fatal | `ErrorEvent` yielded inline; stream continues | invalid tool-call JSON (emits `ErrorEvent` + a `ToolCallEvent` with `arguments={}` so the `id` is still observable; the call is **not** dispatched — the model receives the same `ERROR: invalid JSON arguments...` result as on the non-streaming path). A complete object followed only by closing noise (`}` / `]` / whitespace) is **salvaged** instead: no `ErrorEvent`, the `ToolCallEvent` carries the recovered dict, the tool runs with it, and the wire's `arguments_json` is its canonical form — see [error-handling.md](error-handling.md); unknown TensorZero chunk type; recoverable `TensorZeroError` corrective retry |
 | Fatal, default | Raised out of the async iterator (`on_error="raise"`) | `MaxTurnsExceededError`, `GuardrailBlockedError`, non-recoverable `TensorZeroError`, or any `T0AgentsFatalError` subclass |
 | Fatal, terminal-event | One terminal `RunErrorEvent` ends the stream (`on_error="event"`) | the same failures, converted: `error_type` carries the exception class name, `detail` carries structured extras (`{"max_turns": 20}`), `exception` carries the original for in-process consumers.  **Invariant: exactly one `DoneEvent \| RunErrorEvent` per stream.**  Cancellation always raises. |
 

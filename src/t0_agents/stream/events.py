@@ -51,10 +51,13 @@ class ToolCallDeltaEvent:
 class ToolCallEvent:
     """Assembled tool-call ready for dispatch.
 
-    ``arguments`` is the parsed JSON dict.  When the LLM produced invalid
-    JSON the assembler emits an :class:`ErrorEvent` and yields a
-    ``ToolCallEvent`` with ``arguments={}`` so the correlation ``id`` is
-    still observable by consumers.
+    ``arguments`` is the parsed JSON dict.  A complete object followed only
+    by closing noise (``}`` / ``]`` / whitespace) is salvaged by the
+    assembler and arrives here as ordinary parsed arguments.  When the LLM
+    produced any other invalid JSON the assembler emits an
+    :class:`ErrorEvent` and yields a ``ToolCallEvent`` with
+    ``arguments={}`` so the correlation ``id`` is still observable by
+    consumers.
     """
 
     id: str

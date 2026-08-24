@@ -27,6 +27,7 @@ from tensorzero.types import (
     UnknownChunk,
 )
 
+from t0_agents.core.turn_engine import salvage_tool_arguments
 from t0_agents.stream.events import (
     AgentEvent,
     ErrorEvent,
@@ -87,7 +88,9 @@ class TurnStreamAssembler:
         the same no-dispatch error contract as the non-streaming loop
         (TensorZero marks invalid LLM JSON with ``arguments=None``).
         An empty ``raw_arguments`` is a legitimate no-args call, never
-        recorded here.
+        recorded here; neither is a call salvaged by
+        :func:`~t0_agents.core.turn_engine.salvage_tool_arguments` — its
+        recovered dict flows through as ordinary parsed arguments.
         """
         return self._invalid_args
 
@@ -184,9 +187,18 @@ class TurnStreamAssembler:
 
         On valid JSON: yields one :class:`ToolCallEvent` with parsed args.
 
-        On invalid JSON or non-object JSON: yields an :class:`ErrorEvent`
-        describing the parse failure **and** a :class:`ToolCallEvent` with
-        empty args so the downstream loop still observes the id.
+        On a complete object followed only by closing noise (``}`` / ``]``
+        / whitespace): salvages it via
+        :func:`~t0_agents.core.turn_engine.salvage_tool_arguments` and
+        yields the same :class:`ToolCallEvent` — no :class:`ErrorEvent`,
+        nothing recorded in :attr:`invalid_tool_args` — so the runtime
+        dispatches the recovered arguments and the wire carries their
+        canonical form.  Logged at WARNING with sizes only.
+
+        On any other invalid JSON, or non-object JSON: yields an
+        :class:`ErrorEvent` describing the parse failure **and** a
+        :class:`ToolCallEvent` with empty args so the downstream loop
+        still observes the id.
         """
         name = state["raw_name"]
         raw_args = state["raw_arguments"]
@@ -196,6 +208,18 @@ class TurnStreamAssembler:
         try:
             parsed = json.loads(raw_args)
         except json.JSONDecodeError as exc:
+            salvaged = salvage_tool_arguments(raw_args)
+            if salvaged is not None:
+                logger.warning(
+                    "Salvaged tool-call JSON arguments (id=%s, name=%s): "
+                    "%d chars parsed, %d trailing chars discarded",
+                    tool_id,
+                    name,
+                    salvaged.parsed,
+                    salvaged.discarded,
+                )
+                yield ToolCallEvent(id=tool_id, name=name, arguments=salvaged.arguments)
+                return
             logger.error(
                 "Invalid tool-call JSON arguments (id=%s, name=%s): %s",
                 tool_id,
