@@ -575,6 +575,30 @@ class TestWithTextFallback:
         )
         assert TextDeltaFrame(block_id="inf-2", delta="run two answer") in out
 
+    async def test_a_bare_terminal_rearm_reaches_the_belt_under_suppress(
+        self,
+    ) -> None:
+        """The same boundary under the ``suppress`` policy: run two's
+        thought-sourced answer is belted rather than published, which is
+        the point — but it only gets a fallback decision at all because
+        the bare terminal frame re-armed."""
+        out = await _fallback_policy(
+            [
+                TextDeltaFrame(block_id="b1", delta="run one text"),
+                ErrorFrame(message="stream_died", detail={}),
+                ThoughtDeltaFrame(id="th1", delta="private reasoning"),
+                _done(
+                    text="private reasoning", ids=("inf-2",), source="thought"
+                ),
+            ],
+            thought_fallback="suppress",
+        )
+        assert TextDeltaFrame(block_id="inf-2", delta=EMPTY_TURN_RETRY_TEXT) in out
+        assert not any(
+            isinstance(f, TextDeltaFrame) and f.delta == "private reasoning"
+            for f in out
+        )
+
     async def test_a_stamped_recoverable_error_passes_through_without_rearming(
         self,
     ) -> None:
