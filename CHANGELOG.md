@@ -4,6 +4,74 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.7] — 2026-08-24
+
+This release is about what a consumer sees at the end of a run. The
+public wire makes two promises — `error` is terminal, and every
+successful run ends in visible text — and both had holes. A
+recoverable artefact (a malformed tool payload, an unknown chunk, a
+corrective retry) crossed `project()` as a bare `ErrorFrame` and
+rendered mid-run, so a client that seals its view on `error`
+truncated an answer that was still streaming. The dominant shape of
+that malformed payload turned out to be recoverable in the first
+place: a complete argument object followed by a stray closing brace.
+And the never-blank belt, which keeps a thought-only run from
+arriving empty, could be defeated from either side — by publishing
+raw reasoning as the answer on providers that stream it, or by
+staying disarmed across a run boundary it failed to recognise.
+
+### Added
+
+- **`with_text_fallback(thought_fallback=…)` lets the consumer choose
+  what a thought-sourced answer is worth.** Two provider classes
+  reach the stage under the same `response_source == "thought"`:
+  summary channels put a publishable summary in that slot, while
+  providers that stream unsummarised chain-of-thought put private
+  reasoning there. `"emit"` (the default, unchanged) synthesises it
+  as the answer; `"suppress"` substitutes the never-blank belt text
+  so a monologue is never published as assistant text. The stage
+  does not sniff the provider — the consumer knows its variant and
+  states the policy. Neither policy touches the `DoneFrame`, so a
+  consumer reading `response_source` can still recognise a
+  thought-only run and re-drive it.
+
+### Fixed
+
+- **Recoverable stream artefacts no longer render as a public
+  `error` event.** `project()` now stamps such frames
+  `detail["recoverable"] = True` and `public_allowlist` drops them;
+  only failures that end the run (`exc_class`-bearing, or
+  consumer-synthesised with an empty `detail`) reach the public
+  wire. `with_status` no longer treats a recoverable frame as a run
+  boundary, so a tool call keeps the "Thinking…" hint suppressed
+  across a mid-run retry. The public golden moved with the
+  contract: a recoverable `ErrorEvent` is now a dropped fixture.
+- **Tool-call arguments that form a complete object followed only by
+  closing braces, brackets or whitespace are salvaged.** One bounded
+  rule, applied by both the streaming assembler and the shared
+  dispatch executor, so the call executes with its full arguments
+  and the wire's `arguments_json` matches the runtime's
+  `raw_arguments` exactly. Syntactically valid JSON that the gateway
+  zeroed for schema reasons is still refused — the rule recovers
+  from trailing garbage, never from a schema verdict — and anything
+  else still error-feeds the model without touching the public wire.
+- **A bare terminal `ErrorFrame` re-arms the never-blank belt.**
+  `with_text_fallback` recognised a run boundary by
+  `detail["exc_class"]`, which a consumer-synthesised terminal frame
+  does not carry. A run that streamed text and then died on such a
+  frame left `saw_text` set, so the next run on the same long-lived
+  stream got no fallback at all and a thought-only completion
+  arrived blank. The stage now uses the discriminator `with_status`
+  already uses, `not detail.get("recoverable")`.
+
+### Notes
+
+- The `thought_fallback` default is `"emit"`: no behaviour change for
+  existing consumers.
+- The salvage rule is deliberately narrow. `permissive_parse` mines
+  JSON out of prose and would accept two concatenated objects; tool
+  arguments get the strict rule instead.
+
 ## [2.2.6] — 2026-08-21
 
 A small surface release. Stopping an in-flight run was reachable only
