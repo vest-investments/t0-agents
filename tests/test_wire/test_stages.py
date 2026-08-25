@@ -556,22 +556,48 @@ class TestWithTextFallback:
         )
         assert TextDeltaFrame(block_id="inf-2", delta="run two answer") in out
 
-    async def test_a_recoverable_error_does_not_reset_mid_run(self) -> None:
-        """A recoverable ErrorEvent passthrough (no exc_class) must not
-        re-arm saw_text: the run continues, and a reset would make the
-        fallback duplicate the text that already streamed."""
+    async def test_a_bare_terminal_error_rearms_for_the_next_run(self) -> None:
+        """A consumer that ends a run itself synthesises an
+        :class:`ErrorFrame` with an empty ``detail`` — no ``exc_class``
+        to key on. Downstream of :func:`project` a bare frame can only
+        be that, since every recoverable birth carries the
+        ``recoverable`` stamp, so it is a run boundary and must re-arm.
+        Without this, a run that streamed text and then died on such a
+        frame leaves ``saw_text`` set and the next run arrives blank —
+        the mirror of :func:`with_status`'s own bare-frame re-arm."""
         out = await _fallback(
             [
-                TextDeltaFrame(block_id="b1", delta="the answer"),
-                ErrorFrame(message="transient", detail={}),
-                _done(text="the answer", ids=("inf-1",)),
+                TextDeltaFrame(block_id="b1", delta="run one text"),
+                ErrorFrame(message="stream_died", detail={}),
+                ThoughtDeltaFrame(id="th1", delta="run two thinks"),
+                _done(text="run two answer", ids=("inf-2",), source="thought"),
             ]
         )
-        assert out == [
-            TextDeltaFrame(block_id="b1", delta="the answer"),
-            ErrorFrame(message="transient", detail={}),
-            _done(text="the answer", ids=("inf-1",)),
-        ]
+        assert TextDeltaFrame(block_id="inf-2", delta="run two answer") in out
+
+    async def test_a_bare_terminal_rearm_reaches_the_belt_under_suppress(
+        self,
+    ) -> None:
+        """The same boundary under the ``suppress`` policy: run two's
+        thought-sourced answer is belted rather than published, which is
+        the point — but it only gets a fallback decision at all because
+        the bare terminal frame re-armed."""
+        out = await _fallback_policy(
+            [
+                TextDeltaFrame(block_id="b1", delta="run one text"),
+                ErrorFrame(message="stream_died", detail={}),
+                ThoughtDeltaFrame(id="th1", delta="private reasoning"),
+                _done(
+                    text="private reasoning", ids=("inf-2",), source="thought"
+                ),
+            ],
+            thought_fallback="suppress",
+        )
+        assert TextDeltaFrame(block_id="inf-2", delta=EMPTY_TURN_RETRY_TEXT) in out
+        assert not any(
+            isinstance(f, TextDeltaFrame) and f.delta == "private reasoning"
+            for f in out
+        )
 
     async def test_a_stamped_recoverable_error_passes_through_without_rearming(
         self,

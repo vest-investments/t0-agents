@@ -362,14 +362,18 @@ async def with_text_fallback(
     ``saw_text`` re-arms at every run boundary so each run on a
     long-lived stream gets its own fallback decision: after a
     :class:`DoneFrame`, after a *terminal* :class:`ErrorFrame`, and on
-    an :class:`InitFrame` (a new session). A terminal error frame is
-    recognised by ``detail["exc_class"]`` — the discriminator both
-    terminal paths always set — while a recoverable
-    :class:`~t0_agents.stream.events.ErrorEvent` passthrough carries no
-    ``exc_class`` and must NOT re-arm: the run continues, and resetting
-    mid-run would make the fallback duplicate text that already
-    streamed. Elicitation frames never touch ``saw_text`` — a prompt is
-    not assistant text and must not suppress the fallback.
+    an :class:`InitFrame` (a new session). Terminal is the negative of
+    the ``detail["recoverable"]`` stamp :func:`project` applies — the
+    same discriminator :func:`with_status` reads. A recoverable
+    :class:`~t0_agents.stream.events.ErrorEvent` passthrough therefore
+    does NOT re-arm: the run continues, and resetting mid-run would
+    make the fallback duplicate text that already streamed. A frame a
+    *consumer* synthesised to end a run does re-arm, even though it
+    carries no ``exc_class`` — otherwise a run that streamed text and
+    then died on one would leave ``saw_text`` set, and the next run on
+    the same stream would get no fallback at all. Elicitation frames
+    never touch ``saw_text`` — a prompt is not assistant text and must
+    not suppress the fallback.
     """
     saw_text = False
     async for frame in frames:
@@ -393,7 +397,7 @@ async def with_text_fallback(
                 saw_text = False
                 yield frame
             case ErrorFrame(detail=detail):
-                if "exc_class" in detail:
+                if not detail.get("recoverable"):
                     saw_text = False
                 yield frame
             case (
