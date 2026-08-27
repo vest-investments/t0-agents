@@ -102,9 +102,16 @@ class MemoryMiddleware:
       and skip the load entirely.
 
     Save runs in ``finally`` so the record is persisted even on
-    exception paths when the run produced a result; failures of either
-    load or save are logged but never propagate (memory is a
-    best-effort layer).
+    exception paths when the run produced a result; ``load`` and
+    ``save`` failures are logged but never propagate, because they
+    inform a prompt rather than constitute it.  Two exceptions to that
+    best-effort rule: a :class:`T0AgentsFatalError` from the backend
+    propagates — that is the documented escape hatch for a store whose
+    unavailability invalidates the run — and the ``"messages"``
+    history read raises
+    :class:`~t0_agents.core.exceptions.MemoryHistoryUnavailableError`
+    from :meth:`Agent._prepare_memory_injection`, since a turn cannot
+    thread a conversation it could not read.
 
     The memory record stores the **original** user message
     (``ctx.run.input.user_message``), not the memory-injected effective
@@ -154,6 +161,8 @@ class MemoryMiddleware:
             try:
                 raw_records = await provider.load(ctx.episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
+            except T0AgentsFatalError:
+                raise
             except Exception:
                 logger.warning(
                     "Memory load failed for episode %s; proceeding without context",
@@ -209,6 +218,11 @@ class MemoryMiddleware:
                 )
                 try:
                     await provider.save(record)
+                except T0AgentsFatalError:
+                    # Reachable only when the run succeeded (``result is
+                    # not None``), so re-raising from ``finally`` cannot
+                    # mask an exception already in flight.
+                    raise
                 except Exception:
                     logger.warning(
                         "Memory save failed for episode %s; run result is still valid",
