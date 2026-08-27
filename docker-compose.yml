@@ -20,9 +20,9 @@ services:
       timeout: 1s
 
   gateway:
-    # Pinned to match the SDK pinned in pyproject.toml (tensorzero==2026.4.0).
-    # Newer SDKs send fields older gateways reject ("unknown field `namespace`").
-    image: tensorzero/gateway:2026.4.0
+    # Pinned to the SDK floor in pyproject.toml (tensorzero>=2026.6.0); move the
+    # two together — see docs/production.md § Gateway version compatibility.
+    image: tensorzero/gateway:2026.6.0
     volumes:
       - ./config:/app/config:ro
     command: --config-file /app/config/tensorzero.toml

@@ -3,6 +3,13 @@
 [gateway]
 bind_address = "0.0.0.0:3000"
 
+# TensorZeroMemory reads the previous turn back out of ClickHouse on the
+# next one. Gateway 2026.4.1+ persists asynchronously by default, which
+# lets that read race the write; synchronous writes keep read-after-write
+# exact (docs/memory.md § Read-after-write timing).
+[gateway.observability]
+async_writes = false
+
 [models.gpt_oss_20]
 routing = ["groq"]
 
