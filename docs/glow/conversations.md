@@ -148,7 +148,8 @@ for c in recent:
 Each row is a `ConversationSummary` (`conversation_id`, `title`, `preview`,
 `turn_count`, `updated_at` in epoch-ms). By default this is **dev-grade**: it
 groups a bounded window of recent inferences by episode client-side (there is
-no server-side per-episode aggregation in TensorZero 2026.4.0), so a
+no server-side per-episode aggregation in TensorZero through 2026.6.0,
+its last release), so a
 conversation whose latest turn falls outside the window is not listed, and
 `turn_count` is exact only under `memory_strategy="messages"`. See
 [`TensorZeroMemory.list_conversations`](../memory.md) for the precise guarantees.

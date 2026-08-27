@@ -12,7 +12,7 @@ ClickHouse-backed observability for you.  Two surfaces, one engine:
 `t0_agents.glow` for the four-line decorator path, the canonical
 `Agent` surface for the moments you need every escape hatch.
 
-> **Status**: Alpha. APIs are stabilising. Pinned against `tensorzero >= 2026.4.0` and `fastmcp >= 3.2.3`.
+> **Status**: Alpha. APIs are stabilising. Pinned against `tensorzero >= 2026.6.0` and `fastmcp >= 3.2.3`.
 
 ## Four lines, one agent.
 

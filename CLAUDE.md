@@ -20,7 +20,7 @@ uv run ruff check --fix src/       # Lint with auto-fix
 uv run mypy src/                   # Type check (strict mode)
 
 # Local TensorZero gateway (needed for integration tests and examples)
-docker compose up -d               # Boots gateway:2026.4.0 + clickhouse:lts; needs GROQ_API_KEY in .env
+docker compose up -d               # Boots gateway:2026.6.0 + clickhouse:lts; needs GROQ_API_KEY in .env
 docker compose down                # Stop containers (ClickHouse data persists in named volume)
 ```
 

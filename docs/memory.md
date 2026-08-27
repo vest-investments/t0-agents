@@ -512,7 +512,8 @@ returns `[]` unless opted in via `experimental_search=True`.
 `list_conversations(*, tags=None, limit=20, window=…)` is a **dev-grade**
 conversation index: it groups a bounded window of recent inferences by
 `episode_id` client-side (there is no server-side per-episode aggregation in
-TensorZero 2026.4.0) and returns newest-first `ConversationSummary` rows
+TensorZero through 2026.6.0, its last release) and returns newest-first
+`ConversationSummary` rows
 (`conversation_id`, `title`, `preview`, `turn_count`, `updated_at`). It is
 honest about the cost — O(window), conversations older than the window are not
 listed, and `turn_count` is exact only under `memory_strategy="messages"` (where

@@ -289,7 +289,8 @@ class AgentConfig:
             )
         # model= routes through the gateway's built-in chat passthrough
         # (``tensorzero::default``), which ignores per-call output_schema
-        # (verified against gateway 2026.4.0) — JSON-function output modes
+        # (verified against gateways 2026.4.0 and 2026.6.0) — JSON-function
+        # output modes
         # can never be satisfied on that path.
         if self.model is not None and getattr(
             self.output, "requires_json_function", False

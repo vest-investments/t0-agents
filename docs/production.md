@@ -27,7 +27,7 @@ client = Client("https://mcp.example.com/mcp")
 **Development**: use Docker Compose. The project includes a compose file that boots the gateway and ClickHouse.
 
 ```bash
-docker compose up -d  # gateway:2026.4.0 + clickhouse:lts
+docker compose up -d  # gateway:2026.6.0 + clickhouse:lts
 ```
 
 **Production**:
@@ -42,7 +42,7 @@ docker run -d \
   -v ./config/tensorzero.toml:/app/config/tensorzero.toml:ro \
   -e GROQ_API_KEY="$GROQ_API_KEY" \
   -p 3000:3000 \
-  tensorzero/gateway:2026.4.0
+  tensorzero/gateway:2026.6.0
 ```
 
 ## System prompts for tool-use reliability

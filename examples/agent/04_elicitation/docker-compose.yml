@@ -15,7 +15,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
 
   gateway:
-    image: tensorzero/gateway:${T0_GATEWAY_VERSION:-2026.4.0}
+    image: tensorzero/gateway:${T0_GATEWAY_VERSION:-2026.6.0}
     ports:
       - "3000:3000"
     volumes:
