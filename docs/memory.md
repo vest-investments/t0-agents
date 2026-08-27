@@ -798,14 +798,23 @@ the private `_build_filters` method if you want full control).
 
 ### Read-after-write timing
 
-TensorZero's writer is asynchronous on the gateway side. Under heavy
-local-Docker load, the row for an inference may not be visible to
-`list_inferences` for a fraction of a second. Production paths read
-the *prior* turn's history, not the inference that just happened, so
-this is not normally observable. Tests that immediately read after
-writing should sleep ~1 s before the read; never sleep in production
-code — make the consumer of `load_history` resilient to occasional
-empty results instead.
+Whether the row for an inference is visible to `list_inferences` when
+the next turn reads it is decided by one gateway setting,
+`observability.async_writes`. Measured against a local ClickHouse, 50
+episodes per arm, each calling `load_history` the moment the previous
+inference returned:
+
+| Gateway  | `async_writes`                  | Empty first read | Row visible after           |
+|----------|---------------------------------|------------------|-----------------------------|
+| 2026.6.0 | `true` (default since 2026.4.1) | **34 / 50**      | 20–153 ms (p50 80, p90 121) |
+| 2026.6.0 | `false`                         | 0 / 50           | immediately                 |
+| 2026.4.0 | `false` (its default)           | 0 / 50           | immediately                 |
+
+Production paths read the *prior* turn's history, not the inference
+that just happened, so a human-paced conversation rarely lands in that
+window — a retry, a fast follow-up or an automated caller does. Tests
+that read right after writing should sleep ~1 s before the read; never
+sleep in production code — set the gateway option instead.
 
 > ⚠️ **This is the one amnesia shape `MemoryHistoryUnavailableError`
 > cannot catch, and it is a gateway setting rather than a library
@@ -813,8 +822,9 @@ empty results instead.
 > history, which is by construction indistinguishable from a new
 > episode — no exception is raised and the turn proceeds with no prior
 > context. From gateway **2026.4.1** onwards `observability.async_writes`
-> defaults to **`true`**, which widens that window from "heavy local
-> load" to "every turn". If your episodes span turns, set
+> defaults to **`true`**, which turns that window from a local-load
+> artefact into two reads out of three (table above). If your episodes
+> span turns, set
 > `async_writes = false` in `[gateway.observability]`; the library
 > cannot detect the difference on your behalf.
 
