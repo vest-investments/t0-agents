@@ -804,10 +804,24 @@ class Agent:
         if strategy == "messages":
             if memory is None or episode_id is None:
                 return user_message, {}
-            try:
-                history = await memory.load_history(  # type: ignore[attr-defined]
-                    episode_id,
+            # ``AgentConfig.__post_init__`` validates ``load_history``,
+            # but neither override seam does: ``invoke(memory=…)`` checks
+            # only the MemoryProvider protocol, and glow's
+            # ``conversation(memory=…)`` checks only inside ``hydrate``.
+            # Without this guard an override lacking it arrives as an
+            # AttributeError, which the belt below would report as a
+            # failed read — mislabelling a programming error.
+            load_history = getattr(memory, "load_history", None)
+            if load_history is None:
+                raise ConfigurationError(
+                    f"memory_strategy='messages' requires the memory "
+                    f"provider to implement load_history(episode_id) -> "
+                    f"list[Message] | None. "
+                    f"{type(memory).__name__} does not — extend it or "
+                    f"swap to TensorZeroMemory."
                 )
+            try:
+                history = await load_history(episode_id)
             except T0AgentsFatalError:
                 # A backend that declares its own fatal error keeps its
                 # class on the wire — re-wrapping would erase exactly the
