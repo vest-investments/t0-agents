@@ -13,6 +13,8 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
+    MemoryHistoryUnavailableError,
+    T0AgentsFatalError,
 )
 from t0_agents.core.middleware.base import RunContext, build_pipeline
 from t0_agents.core.output import (
@@ -787,6 +789,14 @@ class Agent:
             is empty for the ``"prepended_message"`` strategy, contains
             ``system_arguments`` for the ``"system_template"`` strategy,
             and contains ``prior_messages`` for the ``"messages"`` strategy.
+
+        Raises:
+            MemoryHistoryUnavailableError: ``load_history`` raised under
+                the ``"messages"`` strategy.  That strategy is defined by
+                the history it threads, so the turn ends rather than
+                answering as if the conversation had never happened.  The
+                ``load`` / ``save`` legs stay best-effort — they inform a
+                prompt, they do not constitute it.
         """
         strategy = self._resolve_memory_strategy()
         memory = provider if provider is not None else self._config.memory
@@ -798,15 +808,21 @@ class Agent:
                 history = await memory.load_history(  # type: ignore[attr-defined]
                     episode_id,
                 )
-            except Exception:
-                logger.warning(
-                    "Memory load_history failed for episode %s; proceeding "
-                    "without prior context",
-                    episode_id,
-                    exc_info=True,
-                )
-                return user_message, {}
+            except T0AgentsFatalError:
+                # A backend that declares its own fatal error keeps its
+                # class on the wire — re-wrapping would erase exactly the
+                # discriminator the consumer keys its policy on.
+                raise
+            except Exception as exc:
+                raise MemoryHistoryUnavailableError(
+                    f"memory.load_history failed for episode {episode_id}; "
+                    f"refusing to answer without the prior conversation"
+                ) from exc
             if not history:
+                # An empty episode is NOT a failed read: the strategy
+                # starts a fresh session clean.  The two collapsed onto
+                # this same branch until 2.2.8, which is how an
+                # unreadable history became an amnesiac answer.
                 return user_message, {}
             return user_message, {"prior_messages": list(history)}
 

@@ -14,7 +14,10 @@ from tensorzero import AsyncTensorZeroGateway, Text
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.exceptions import (
+    ConfigurationError,
+    MemoryHistoryUnavailableError,
+)
 from t0_agents.core.types import MemoryProvider, ToolProvider
 from t0_agents.memory.base import MemoryRecord
 from t0_agents.memory.in_memory import InMemoryMemory
@@ -496,8 +499,8 @@ class TestMessagesStrategyInjection:
         first_messages = t0.calls[0]["input"]["messages"]
         assert first_messages == [{"role": "user", "content": "hello"}]
 
-    async def test_load_history_failure_is_non_fatal(self) -> None:
-        """If load_history raises, run still completes with empty history."""
+    async def test_load_history_failure_ends_the_turn(self) -> None:
+        """A failed history read must not produce an amnesiac answer."""
 
         class FailingHistoryMem:
             async def load(self, episode_id: str) -> list[MemoryRecord]:
@@ -521,11 +524,15 @@ class TestMessagesStrategyInjection:
             memory=cast(InMemoryMemory, mem),
             memory_strategy="messages",
         )
-        result = await agent.invoke("hello", episode_id=str(_EPISODE))
-        assert result.response == "ok"
-        first_messages = t0.calls[0]["input"]["messages"]
-        # Falls through to the no-history path: single user message.
-        assert first_messages == [{"role": "user", "content": "hello"}]
+        with pytest.raises(MemoryHistoryUnavailableError) as excinfo:
+            await agent.invoke("hello", episode_id=str(_EPISODE))
+        assert str(_EPISODE) in str(excinfo.value)
+        # The provider's own failure stays reachable for logging.
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        # The load-bearing assertion: no inference was ever issued, so no
+        # answer could have been returned without the history.  The
+        # exception type alone would not prove that.
+        assert t0.calls == []
 
     async def test_caller_system_arguments_pass_through_messages(self) -> None:
         """messages strategy + caller args → both reach the inference call."""
