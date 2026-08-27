@@ -17,10 +17,13 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
     MemoryHistoryUnavailableError,
+    T0AgentsFatalError,
 )
 from t0_agents.core.types import MemoryProvider, ToolProvider
 from t0_agents.memory.base import MemoryRecord
 from t0_agents.memory.in_memory import InMemoryMemory
+from t0_agents.stream.events import RunErrorEvent
+from t0_agents.wire import ErrorFrame, project
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0
 
@@ -59,6 +62,46 @@ def _make_agent(
         t0=cast(AsyncTensorZeroGateway, t0 or FakeT0([_text_response()])),
         tool_provider=cast(ToolProvider, client or FakeMCPClient()),
     )
+
+
+class _StoreUnavailableError(T0AgentsFatalError):
+    """A backend declaring its own failure fatal — the documented escape hatch."""
+
+
+class _HistoryMem:
+    """A ``messages``-strategy provider with a scriptable history read.
+
+    *history* is either the value ``load_history`` returns or an exception
+    instance it raises, so one class covers every arm of the empty /
+    populated / unreadable trichotomy the strategy now distinguishes.
+    """
+
+    def __init__(self, history: Any) -> None:
+        self._history = history
+        self.history_calls = 0
+
+    async def load(self, episode_id: str) -> list[MemoryRecord]:
+        return []
+
+    async def save(self, record: MemoryRecord) -> None:
+        pass
+
+    async def search(self, query: str, *, limit: int = 5) -> list[MemoryRecord]:
+        return []
+
+    async def load_history(self, episode_id: str) -> list[Any] | None:
+        self.history_calls += 1
+        if isinstance(self._history, BaseException):
+            raise self._history
+        return cast("list[Any] | None", self._history)
+
+
+def _messages_agent(mem: Any, t0: FakeT0) -> Agent:
+    return _make_agent(t0=t0, memory=cast(InMemoryMemory, mem), memory_strategy="messages")
+
+
+async def _drain(events: Any) -> list[Any]:
+    return [item async for item in events]
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +359,49 @@ class TestMemoryErrorGracefulDegradation:
         result = await agent.invoke("hello")
         assert result.response == "ok"
 
+    async def test_load_fatal_error_propagates(self) -> None:
+        """docs/memory.md's escape hatch: a fatal backend error is not swallowed."""
+
+        class FatalLoadMemory:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                raise _StoreUnavailableError("store gone")
+
+            async def save(self, record: MemoryRecord) -> None:
+                pass
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+        mem = FatalLoadMemory()
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(t0=t0, memory=cast(InMemoryMemory, mem))
+        with pytest.raises(_StoreUnavailableError):
+            await agent.invoke("hello", episode_id="ep-1")
+        assert t0.calls == []
+
+    async def test_save_fatal_error_propagates(self) -> None:
+        """Same hatch on the write leg, which runs inside ``finally``."""
+
+        class FatalSaveMemory:
+            async def load(self, episode_id: str) -> list[MemoryRecord]:
+                return []
+
+            async def save(self, record: MemoryRecord) -> None:
+                raise _StoreUnavailableError("store gone")
+
+            async def search(
+                self, query: str, *, limit: int = 5
+            ) -> list[MemoryRecord]:
+                return []
+
+        mem = FatalSaveMemory()
+        t0 = FakeT0([_text_response("ok")])
+        agent = _make_agent(t0=t0, memory=cast(InMemoryMemory, mem))
+        with pytest.raises(_StoreUnavailableError):
+            await agent.invoke("hello")
+
 
 class TestMemoryValidation:
     def test_invalid_memory_strategy_raises(self) -> None:
@@ -347,6 +433,24 @@ class TestMessagesStrategyValidation:
                 function_name="agent",
                 memory_strategy="messages",
                 memory=InMemoryMemory(),
+            )
+
+    async def test_override_provider_without_load_history_raises(self) -> None:
+        """``invoke(memory=…)`` skips the construction-time check.
+
+        It validates only the MemoryProvider protocol, so a provider with
+        no ``load_history`` reaches the read.  That is a caller mistake,
+        not a failed read, and must not be reported as one.
+        """
+        agent = _make_agent(
+            memory=cast(InMemoryMemory, _HistoryMem(None)),
+            memory_strategy="messages",
+        )
+        with pytest.raises(ConfigurationError, match="load_history"):
+            await agent.invoke(
+                "hello",
+                episode_id=str(_EPISODE),
+                memory=cast(MemoryProvider, InMemoryMemory()),
             )
 
     def test_provider_with_load_history_accepts(self) -> None:
@@ -470,32 +574,36 @@ class TestMessagesStrategyInjection:
         first_messages = t0.calls[0]["input"]["messages"]
         assert first_messages == [{"role": "user", "content": "hello"}]
 
-    async def test_load_history_returns_none_no_seeding(self) -> None:
-        """Empty episode → fall through to the no-history path."""
+    async def test_load_history_returns_none_starts_clean(self) -> None:
+        """Empty episode → a fresh session, no error.
 
-        class EmptyHistoryMem:
-            async def load(self, episode_id: str) -> list[MemoryRecord]:
-                return []
-
-            async def save(self, record: MemoryRecord) -> None:
-                pass
-
-            async def search(
-                self, query: str, *, limit: int = 5
-            ) -> list[MemoryRecord]:
-                return []
-
-            async def load_history(self, episode_id: str) -> list[Any] | None:
-                return None
-
-        mem = EmptyHistoryMem()
+        This is the case a careless fail-loud fix breaks, and the only
+        empty shape that pins the guard: ``None`` reaching
+        ``list(history)`` would raise.
+        """
+        mem = _HistoryMem(None)
         t0 = FakeT0([_text_response("ok")])
-        agent = _make_agent(
-            t0=t0,
-            memory=cast(InMemoryMemory, mem),
-            memory_strategy="messages",
-        )
-        await agent.invoke("hello", episode_id=str(_EPISODE))
+        agent = _messages_agent(mem, t0)
+        result = await agent.invoke("hello", episode_id=str(_EPISODE))
+        assert result.response == "ok"
+        assert mem.history_calls == 1
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [{"role": "user", "content": "hello"}]
+
+    async def test_load_history_returns_empty_list_starts_clean(self) -> None:
+        """The other empty shape behaves identically.
+
+        A contract test, not a mutation-killer: ``[]`` survives the guard
+        either way, because the middleware only seeds a truthy
+        ``prior_messages``.  Pinned because the strategy's contract now
+        turns on "empty versus unreadable" and both empties must stay on
+        the clean side of that line.
+        """
+        mem = _HistoryMem([])
+        t0 = FakeT0([_text_response("ok")])
+        agent = _messages_agent(mem, t0)
+        result = await agent.invoke("hello", episode_id=str(_EPISODE))
+        assert result.response == "ok"
         first_messages = t0.calls[0]["input"]["messages"]
         assert first_messages == [{"role": "user", "content": "hello"}]
 
@@ -532,6 +640,20 @@ class TestMessagesStrategyInjection:
         # The load-bearing assertion: no inference was ever issued, so no
         # answer could have been returned without the history.  The
         # exception type alone would not prove that.
+        assert t0.calls == []
+
+    async def test_backend_fatal_error_propagates_unwrapped(self) -> None:
+        """A backend's own fatal class survives instead of being re-wrapped.
+
+        The class name *is* the discriminator a consumer keys its policy
+        on, so wrapping it in ours would erase the very thing the
+        backend went out of its way to declare.
+        """
+        mem = _HistoryMem(_StoreUnavailableError("store gone"))
+        t0 = FakeT0([_text_response("ok")])
+        agent = _messages_agent(mem, t0)
+        with pytest.raises(_StoreUnavailableError):
+            await agent.invoke("hello", episode_id=str(_EPISODE))
         assert t0.calls == []
 
     async def test_caller_system_arguments_pass_through_messages(self) -> None:
@@ -640,3 +762,43 @@ class TestMessagesStrategyStreamParity:
         assert first_messages[0]["content"] == "seed"
         assert first_messages[1]["role"] == "user"
         assert first_messages[1]["content"] == "now"
+
+
+class TestMessagesStrategyConsumerSurface:
+    """An unreadable history must be tellable apart from a provider failure.
+
+    The consumer decides whether to re-drive, and re-driving a dead store
+    is pointless while re-driving a flaky provider is not — so a generic
+    terminal error is not enough.  These pin the two surfaces a consumer
+    actually reads.
+    """
+
+    async def test_failure_arrives_as_a_terminal_run_error_event(self) -> None:
+        mem = _HistoryMem(RuntimeError("gateway down"))
+        t0 = FakeT0([_text_response("ok")])
+        agent = _messages_agent(mem, t0)
+        events = await _drain(
+            agent.invoke("hello", episode_id=str(_EPISODE)).events(on_error="event")
+        )
+        assert len(events) == 1
+        terminal = events[0]
+        assert isinstance(terminal, RunErrorEvent)
+        assert terminal.error_type == "MemoryHistoryUnavailableError"
+        assert isinstance(terminal.exception, MemoryHistoryUnavailableError)
+
+    async def test_failure_reaches_the_wire_with_its_exc_class(self) -> None:
+        mem = _HistoryMem(RuntimeError("gateway down"))
+        t0 = FakeT0([_text_response("ok")])
+        agent = _messages_agent(mem, t0)
+        frames = await _drain(
+            project(
+                agent.invoke("hello", episode_id=str(_EPISODE)).events(on_error="event")
+            )
+        )
+        assert len(frames) == 1
+        [frame] = frames
+        assert isinstance(frame, ErrorFrame)
+        assert frame.detail["exc_class"] == "MemoryHistoryUnavailableError"
+        # Terminal, not a recoverable in-stream artefact: a consumer that
+        # seals its view on `error` is right to do so here.
+        assert "recoverable" not in frame.detail
