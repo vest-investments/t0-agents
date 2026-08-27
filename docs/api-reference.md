@@ -650,7 +650,7 @@ chain that wraps a single terminal callable.
 |--------|---------|
 | `Middleware` | Runtime-checkable Protocol; `name: str` + `async __call__(ctx, next_) -> AgentResult`. |
 | `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, output, t0, tool_provider, on_inference, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `replace_tool_provider(tp)`. |
-| `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour). |
+| `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour).  `load` / `save` failures are logged and swallowed; a `T0AgentsFatalError` from the backend propagates, and under `strategy="messages"` a failed `load_history` raises `MemoryHistoryUnavailableError` and ends the turn — see [Error handling](error-handling.md#memoryhistoryunavailableerror). |
 | `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
 | `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |
 | `SubAgentMiddleware(sub_agents)` | Wraps `tool_provider` with `_OrchestrationToolProvider`; binds `parent_episode_id` ContextVar. |

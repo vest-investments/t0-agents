@@ -29,6 +29,11 @@ error string in the `result` field. The five cases:
 | `McpError` | MCP protocol error or transport timeout (code `-32000`) | `"ERROR: MCP protocol error (possibly timeout): <e>"` | MCP transport layer failure, including per-call timeout expiry |
 | Unexpected exception | Any other exception type | `"ERROR: unexpected <ExceptionType>: <e>"` | Catch-all safety net so a single misbehaving tool cannot crash the loop |
 
+Those five are *tool* errors, which never end the run. Two exceptions
+end it instead, before or around the loop:
+[`MaxTurnsExceededError`](#maxturnsexceedederror) and
+[`MemoryHistoryUnavailableError`](#memoryhistoryunavailableerror).
+
 **One taxonomy, both loops.** The turn-level logic around dispatch —
 input validation, the corrective retry, the assistant append, final-text
 mining, `AgentResult`, the max-turns guard — is shared by `run_agent`
@@ -138,6 +143,55 @@ The `max_turns` attribute carries the limit that was exceeded. The loop does
 not return a partial `AgentResult` -- it raises unconditionally. Callers that
 need the intermediate state (episode ID, inference IDs) should track those
 externally or wrap the call in a try/except.
+
+---
+
+## `MemoryHistoryUnavailableError`
+
+Raised when `memory_strategy="messages"` cannot read the prior
+conversation -- `memory.load_history(episode_id)` raised. The turn ends
+**before any inference is issued**, so the caller never receives an
+answer produced without the history.
+
+```python
+class MemoryHistoryUnavailableError(T0AgentsFatalError):
+    ...
+```
+
+Everything else in the memory layer is best-effort: `load` and `save`
+failures are logged and the run continues. This one is not, because the
+`"messages"` strategy *is* the prior conversation rather than a hint
+appended to the prompt -- which is why `AgentConfig` refuses to build
+without a provider that can supply it. Answering anyway is a worse
+failure than not answering: a caller can retry an error, but cannot
+un-see an amnesiac reply.
+
+**An empty episode is not this error.** `load_history` returning `None`
+or `[]` means "no inferences yet", and a fresh session still starts
+clean. Only a raised read ends the turn; the two used to collapse onto
+the same value, which is the defect this class exists to prevent.
+
+### Telling it apart from a provider failure
+
+A consumer's re-drive policy needs to distinguish "the store could not
+be read" (re-driving immediately just fails again) from "the model call
+failed" (re-driving often saves the turn). The class name is the
+discriminator, and it is available on all three surfaces without any
+wire change:
+
+| Surface | Where to read it |
+|---|---|
+| the exception | `except MemoryHistoryUnavailableError` -- the provider's own error is chained on `__cause__` |
+| `Run.events(on_error="event")` | the terminal `RunErrorEvent.error_type == "MemoryHistoryUnavailableError"` (and `.exception` in-process) |
+| `t0_agents.wire` | the terminal `ErrorFrame`'s `detail["exc_class"]`, from both `project` and `as_terminal_safe` |
+
+### What it does not cover
+
+A read that *succeeds* against a lagging observability store returns an
+empty history that is indistinguishable from a new episode -- no
+exception, and the turn proceeds with no prior context. That is a
+gateway setting, not a library concern: see
+[Memory § Read-after-write timing](memory.md#read-after-write-timing).
 
 ---
 
