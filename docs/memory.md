@@ -216,7 +216,10 @@ agent.invoke(message, episode_id=<id or None>)
    │                   └─ strategy "messages":
    │                        memory.load_history(episode_id) ─► list[Message]
    │                        threaded through input.messages verbatim;
-   │                        records are NOT used on this path
+   │                        records are NOT used on this path.
+   │                        None / [] → fresh session, continue;
+   │                        RAISED    → MemoryHistoryUnavailableError,
+   │                                    the turn ends here (no inference)
    │
    ├─ 3. Run           run_agent(...)        ← regular loop, no memory knowledge
    │
@@ -272,15 +275,36 @@ end-of-session signal that never comes. The side effect: memory is
 always current, and each turn is independently recoverable if the
 process crashes.
 
-### Failure is non-fatal
+### Failure is non-fatal — except the history a turn is made of
 
 If `memory.load()` raises, the `Agent` logs a warning and runs with an
 empty context. If `memory.save()` raises, the `Agent` logs a warning
-and returns the unchanged `AgentResult`. Memory is a *side effect* of
-a run, not an output: losing a write must not invalidate an otherwise
-successful inference. If you want hard failure on persistence errors,
-wrap your backend and raise a `T0AgentsFatalError` subclass (see
-[Error handling](#error-handling)).
+and returns the unchanged `AgentResult`. Those two are a *side effect*
+of a run, not an output: they inform a prompt, and losing a write must
+not invalidate an otherwise successful inference. If you want hard
+failure on them, wrap your backend and raise a `T0AgentsFatalError`
+subclass (see [Error handling](#error-handling)).
+
+**`memory_strategy="messages"` is the exception, from 2.2.8 on.** That
+strategy does not merely enrich the prompt — it *is* the prior
+conversation, which is why `AgentConfig` refuses to build without a
+provider that can supply it. So a `load_history` that raises ends the
+turn with
+[`MemoryHistoryUnavailableError`](error-handling.md#memoryhistoryunavailableerror)
+instead of answering as though the conversation had never happened.
+Before 2.2.8 it logged a warning and answered anyway, which is a worse
+failure than not answering: a caller can retry an error, but cannot
+un-see an amnesiac reply.
+
+An **empty** episode is not a failure. `load_history` returning `None`
+or `[]` means "no inferences yet", and a fresh session still starts
+clean — that distinction is the whole fix, since the two used to
+collapse onto the same value.
+
+If you genuinely want the old best-effort behaviour, you do not need a
+flag: wrap the provider and return `None` on failure, which opts into
+"treat an unreadable history as a new conversation" explicitly, where a
+reader can see it.
 
 ### `search` is a seam, not a built-in retriever
 
@@ -516,7 +540,7 @@ class AgentConfig:
 | Field | Type | Default | Behaviour |
 |---|---|---|---|
 | `memory` | `MemoryProvider \| None` | `None` | When `None`, the `Agent` skips load and save entirely. When set, `Agent.__init__` validates the instance against the Protocol and raises `ConfigurationError` on mismatch. |
-| `memory_strategy` | `Literal["auto", "system_template", "prepended_message", "messages"]` | `"auto"` | How loaded records are injected. Validated at `AgentConfig.__post_init__`; an invalid value raises `ConfigurationError`, as does picking `"messages"` against a backend that does not implement `load_history`. |
+| `memory_strategy` | `Literal["auto", "system_template", "prepended_message", "messages"]` | `"auto"` | How loaded records are injected. Validated at `AgentConfig.__post_init__`; an invalid value raises `ConfigurationError`, as does picking `"messages"` against a backend that does not implement `load_history` (also checked on the `invoke(memory=…)` override seam, which construction-time validation never sees). Under `"messages"`, a failed history read ends the turn — see [Failure is non-fatal](#failure-is-non-fatal--except-the-history-a-turn-is-made-of). |
 
 ---
 
@@ -767,7 +791,7 @@ the private `_build_filters` method if you want full control).
 | Method | Behaviour |
 |---|---|
 | `load(episode_id)` | Issues `list_inferences(limit=load_limit, order_by=DESC)` and returns one `MemoryRecord` per chat inference that emitted text. JSON-output and tool-call-only inferences are skipped. Reversed to oldest-first to match `InMemoryMemory` / `SqliteMemory`. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids` is a single-element list — this backend exposes one record per inference, not per agent run. |
-| `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes. |
+| `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes — a fresh session, not an error. A gateway failure propagates and ends the turn (`MemoryHistoryUnavailableError`). |
 | `save(record)` | No-op. The gateway already persisted the row at inference time; calling `save` again would duplicate the observability entry. |
 | `search(query, *, limit=5)` | Returns `[]` by default. Pass `experimental_search=True` to the constructor to opt in; the query is forwarded to TZ's `search_query_experimental` field. The gateway flags that endpoint as experimental and warns it may cause full-table scans, so it is not appropriate for low-latency request paths. |
 
@@ -781,6 +805,17 @@ this is not normally observable. Tests that immediately read after
 writing should sleep ~1 s before the read; never sleep in production
 code — make the consumer of `load_history` resilient to occasional
 empty results instead.
+
+> ⚠️ **This is the one amnesia shape `MemoryHistoryUnavailableError`
+> cannot catch, and it is a gateway setting rather than a library
+> concern.** A lagging store answers *successfully* with an empty
+> history, which is by construction indistinguishable from a new
+> episode — no exception is raised and the turn proceeds with no prior
+> context. From gateway **2026.4.1** onwards `observability.async_writes`
+> defaults to **`true`**, which widens that window from "heavy local
+> load" to "every turn". If your episodes span turns, set
+> `async_writes = false` in `[gateway.observability]`; the library
+> cannot detect the difference on your behalf.
 
 ### Lifetime
 
@@ -977,27 +1012,31 @@ for the resource-based variant.
 
 ## Error handling
 
-Persistence failures are non-fatal by design. The `Agent` wraps both
-calls in a `try / except Exception`, logs a warning, and continues.
+*Persistence* failures are non-fatal by design: the `Agent` wraps
+`load` and `save` in a `try / except Exception`, logs a warning, and
+continues. The `"messages"` history read is not persistence — it is the
+turn's input — and fails loud.
 
 | Failure | Effect | Log level | Can I observe it? |
 |---|---|---|---|
 | `memory.load` raises | Run proceeds with an empty context. | `WARNING` (with traceback). | Yes — `logging.getLogger("t0_agents")` or a child logger. |
-| `memory.load_history` raises (`memory_strategy="messages"`) | Run proceeds with no prior messages. | `WARNING` (with traceback). | Yes — same logger. |
+| `memory.load_history` raises (`memory_strategy="messages"`) | **The turn ends** with `MemoryHistoryUnavailableError`; no inference is issued. | Not logged — it is raised. | Yes — as an exception, `RunErrorEvent.error_type`, or `detail["exc_class"]`. |
+| `memory.load_history` returns `None` / `[]` | Fresh session; the run proceeds with no prior messages. | — | Not an anomaly, so nothing is emitted. |
 | `memory.save` raises | `AgentResult` is still returned unchanged. | `WARNING` (with traceback). | Yes — same logger. |
 
-If you want hard failure instead, wrap your backend and raise
-`T0AgentsFatalError` (or a subclass you define). Any exception
-subclassed from `T0AgentsFatalError` propagates past the `Agent`'s
-non-fatal handler — this is the same contract guardrails use for
-hard aborts.
+To make `load` or `save` fatal too, wrap your backend and raise
+`T0AgentsFatalError` (or a subclass you define). Every broad
+`except Exception` belt in the library re-raises that class first, so it
+propagates past the `Agent`'s non-fatal handler — the same contract
+guardrails use for hard aborts. (Before 2.2.8 the memory belts caught
+it along with everything else, so this hatch did not actually work.)
 
 ```python
 from t0_agents import T0AgentsFatalError
 from t0_agents.memory import MemoryRecord, MemoryProvider
 
 
-class MemoryUnavailable(T0AgentsFatalError):
+class MemoryUnavailableError(T0AgentsFatalError):
     pass
 
 
@@ -1009,7 +1048,7 @@ class StrictBackend:
         try:
             return await self._inner.load(episode_id)
         except Exception as exc:
-            raise MemoryUnavailable(
+            raise MemoryUnavailableError(
                 f"Cannot load memory for {episode_id}: {exc}",
             ) from exc
 
@@ -1017,7 +1056,7 @@ class StrictBackend:
         try:
             await self._inner.save(record)
         except Exception as exc:
-            raise MemoryUnavailable(
+            raise MemoryUnavailableError(
                 f"Cannot save memory for {record.episode_id}: {exc}",
             ) from exc
 
@@ -1027,9 +1066,14 @@ class StrictBackend:
         return await self._inner.search(query, limit=limit)
 ```
 
+`load_history` needs no wrapper to fail loud — it already does. Wrap it
+only to go the other way, returning `None` so an unreadable history is
+deliberately treated as a fresh session.
+
 For the broader error taxonomy and how memory warnings sit alongside
-`MaxTurnsExceededError`, `GuardrailBlockedError`, `ConfigurationError`,
-and tool-level `McpError` / `ToolError` wrapping, see
+`MemoryHistoryUnavailableError`, `MaxTurnsExceededError`,
+`GuardrailBlockedError`, `ConfigurationError`, and tool-level
+`McpError` / `ToolError` wrapping, see
 [Error handling](error-handling.md).
 
 ---

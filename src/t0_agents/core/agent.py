@@ -13,6 +13,8 @@ from tensorzero import AsyncTensorZeroGateway
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import (
     ConfigurationError,
+    MemoryHistoryUnavailableError,
+    T0AgentsFatalError,
 )
 from t0_agents.core.middleware.base import RunContext, build_pipeline
 from t0_agents.core.output import (
@@ -766,6 +768,7 @@ class Agent:
         *,
         episode_id: str | None,
         provider: MemoryProvider | None = None,
+        caller_supplied_history: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """Build the effective user message and extra kwargs for run_agent.
 
@@ -782,31 +785,67 @@ class Agent:
         a per-run override threaded by :class:`MemoryMiddleware` — and
         falls back to ``config.memory`` when ``None``.
 
+        ``caller_supplied_history`` reports that the caller already
+        provided ``prior_messages`` (``invoke(prior_messages=…)`` or
+        :meth:`Run.fork`).  Those take precedence over anything a
+        strategy derives, so under ``"messages"`` the history read is
+        skipped: its result would be discarded by construction, and a
+        failed read must not abort a run that needs nothing from the
+        store.
+
         Returns:
             A ``(effective_message, extra_kwargs)`` tuple.  *extra_kwargs*
             is empty for the ``"prepended_message"`` strategy, contains
             ``system_arguments`` for the ``"system_template"`` strategy,
             and contains ``prior_messages`` for the ``"messages"`` strategy.
+
+        Raises:
+            MemoryHistoryUnavailableError: ``load_history`` raised under
+                the ``"messages"`` strategy.  That strategy is defined by
+                the history it threads, so the turn ends rather than
+                answering as if the conversation had never happened.  The
+                ``load`` / ``save`` legs stay best-effort — they inform a
+                prompt, they do not constitute it.
         """
         strategy = self._resolve_memory_strategy()
         memory = provider if provider is not None else self._config.memory
 
         if strategy == "messages":
-            if memory is None or episode_id is None:
+            if memory is None or episode_id is None or caller_supplied_history:
                 return user_message, {}
+            # ``AgentConfig.__post_init__`` validates ``load_history``,
+            # but neither override seam does: ``invoke(memory=…)`` checks
+            # only the MemoryProvider protocol, and glow's
+            # ``conversation(memory=…)`` checks only inside ``hydrate``.
+            # Without this guard an override lacking it arrives as an
+            # AttributeError, which the belt below would report as a
+            # failed read — mislabelling a programming error.
+            load_history = getattr(memory, "load_history", None)
+            if load_history is None:
+                raise ConfigurationError(
+                    f"memory_strategy='messages' requires the memory "
+                    f"provider to implement load_history(episode_id) -> "
+                    f"list[Message] | None. "
+                    f"{type(memory).__name__} does not — extend it or "
+                    f"swap to TensorZeroMemory."
+                )
             try:
-                history = await memory.load_history(  # type: ignore[attr-defined]
-                    episode_id,
-                )
-            except Exception:
-                logger.warning(
-                    "Memory load_history failed for episode %s; proceeding "
-                    "without prior context",
-                    episode_id,
-                    exc_info=True,
-                )
-                return user_message, {}
+                history = await load_history(episode_id)
+            except T0AgentsFatalError:
+                # A backend that declares its own fatal error keeps its
+                # class on the wire — re-wrapping would erase exactly the
+                # discriminator the consumer keys its policy on.
+                raise
+            except Exception as exc:
+                raise MemoryHistoryUnavailableError(
+                    f"memory.load_history failed for episode {episode_id}; "
+                    f"refusing to answer without the prior conversation"
+                ) from exc
             if not history:
+                # An empty episode is NOT a failed read: the strategy
+                # starts a fresh session clean.  The two collapsed onto
+                # this same branch until 2.2.8, which is how an
+                # unreadable history became an amnesiac answer.
                 return user_message, {}
             return user_message, {"prior_messages": list(history)}
 

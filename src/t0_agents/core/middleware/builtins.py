@@ -99,12 +99,21 @@ class MemoryMiddleware:
     - ``"messages"`` — populates ``ctx.prior_messages`` via
       ``memory.load_history(episode_id)``.  Caller-explicit
       ``prior_messages`` (e.g. from :meth:`Run.fork`) take precedence
-      and skip the load entirely.
+      and skip the read entirely — threaded down as
+      ``caller_supplied_history`` so the skip happens before the I/O
+      rather than by discarding its result afterwards.
 
     Save runs in ``finally`` so the record is persisted even on
-    exception paths when the run produced a result; failures of either
-    load or save are logged but never propagate (memory is a
-    best-effort layer).
+    exception paths when the run produced a result; ``load`` and
+    ``save`` failures are logged but never propagate, because they
+    inform a prompt rather than constitute it.  Two exceptions to that
+    best-effort rule: a :class:`T0AgentsFatalError` from the backend
+    propagates — that is the documented escape hatch for a store whose
+    unavailability invalidates the run — and the ``"messages"``
+    history read raises
+    :class:`~t0_agents.core.exceptions.MemoryHistoryUnavailableError`
+    from :meth:`Agent._prepare_memory_injection`, since a turn cannot
+    thread a conversation it could not read.
 
     The memory record stores the **original** user message
     (``ctx.run.input.user_message``), not the memory-injected effective
@@ -154,6 +163,8 @@ class MemoryMiddleware:
             try:
                 raw_records = await provider.load(ctx.episode_id)
                 memory_records = cast(list[MemoryRecord], raw_records)
+            except T0AgentsFatalError:
+                raise
             except Exception:
                 logger.warning(
                     "Memory load failed for episode %s; proceeding without context",
@@ -164,12 +175,16 @@ class MemoryMiddleware:
         # --- 2. Prepare injection ---
         # Reuse the existing helper on Agent so middleware behaviour
         # tracks any future refinement to the strategy dispatch
-        # without two places drifting apart.
+        # without two places drifting apart — hence the flag rather
+        # than a second strategy branch here.  It carries the fact the
+        # discard below already encodes: caller-explicit
+        # ``prior_messages`` win, so deriving history is wasted work.
         effective_message, extra_kwargs = await agent._prepare_memory_injection(
             original_user_message,
             memory_records,
             episode_id=ctx.episode_id,
             provider=provider,
+            caller_supplied_history=ctx.prior_messages is not None,
         )
         ctx.user_message = effective_message
 
@@ -209,6 +224,11 @@ class MemoryMiddleware:
                 )
                 try:
                     await provider.save(record)
+                except T0AgentsFatalError:
+                    # Reachable only when the run succeeded (``result is
+                    # not None``), so re-raising from ``finally`` cannot
+                    # mask an exception already in flight.
+                    raise
                 except Exception:
                     logger.warning(
                         "Memory save failed for episode %s; run result is still valid",
