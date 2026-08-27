@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.3.0] — 2026-08-27
+
+This release moves the library's TensorZero floor from 2026.4.0 to
+2026.6.0, the final upstream release before the project was archived,
+and it does so with evidence rather than a version edit. Every
+gateway behaviour the library leans on was re-run against a real
+2026.6.0 gateway before the floor moved: the `list_inferences` reads
+behind `TensorZeroMemory`, client-minted UUIDv7 episode ids, the
+`finish_reason` enum in ClickHouse, per-provider `extra_body`,
+`reasoning_content` round-trips, and `json_mode` degradation. None
+of them changed. What did change is the default the gateway writes
+with, and that is the reason to read this entry.
+
+### Changed
+
+- **`tensorzero >= 2026.6.0` is the new floor.** The Python client
+  surface the library uses is identical between 2026.4.0 and
+  2026.6.0 (the only additions are an optional `gateway_http_headers`
+  keyword on `inference()` and typing refinements), so no code
+  changed. The floor moves because the gateway side did: 2026.5.1
+  treats SSE body decoding errors as fatal instead of retrying the
+  decode in a loop, and 2026.6.0 closes GHSA-824w-x939-6cmc. Both
+  matter to anyone running the gateway the library talks to. The
+  upstream repository is archived, so the floor is left open rather
+  than capped: no newer upstream release can appear, and a fork that
+  publishes under the same name is expected to run this suite.
+
+- **The bundled `docker-compose.yml` and every example pin
+  `tensorzero/gateway:2026.6.0`**, and the development gateway
+  config sets `observability.async_writes = false` explicitly.
+  Gateway 2026.4.1 flipped that default to `true`, which is a
+  latency win for a plain proxy and a correctness bug for anyone
+  using `TensorZeroMemory`: the next turn's `load_history` can read
+  before the previous turn's row exists and start the conversation
+  over. Measured in this release; see the Notes.
+
+### Added
+
+- **Two integration tests pin the client-minted episode id
+  contract**: `inference(episode_id=str(uuid7()))` is stored under
+  that id and found by `list_inferences`, and a UUID that is not v7
+  is rejected with HTTP 400. Every conversation glow opens depends on
+  the first; nothing in the suite had exercised either against a
+  real gateway before.
+
+### Notes
+
+- **`async_writes = true` measured, not described.** With the
+  2026.6.0 default, 34 of 50 `load_history` reads issued right
+  after the previous inference returned came back empty; the row
+  became visible after p50 80 ms / p90 121 ms / max 153 ms. With
+  `async_writes = false`, 0 of 50. Set it under
+  `[gateway.observability]` wherever episodes span turns;
+  `docs/memory.md` § Read-after-write timing carries the numbers.
+
+- **The `weight` field on variants still boots as a deprecation
+  warning on 2026.6.0, not an error**, and the legacy static-weights
+  path is still compiled in. Migrate to
+  `[functions.<name>.experimentation]` at leisure, not under
+  pressure.
+
 ## [2.2.8] — 2026-08-27
 
 This release is about one question: what should a turn do when it
