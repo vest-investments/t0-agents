@@ -4,6 +4,90 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.8] — 2026-08-27
+
+This release is about one question: what should a turn do when it
+cannot read the conversation it is supposed to continue? Until now,
+answer anyway. `memory_strategy="messages"` exists to thread the prior
+conversation through `input.messages` — `AgentConfig` refuses to build
+without a provider that can supply it — yet a failed `load_history`
+logged a warning and continued, replying as though the conversation
+had never happened. That fired three times in seven seconds against a
+dead gateway on 2026-08-25; had any of those attempts connected,
+someone would have received that reply. A caller can retry an error.
+Nobody can un-see an amnesiac answer.
+
+### Changed
+
+- **A failed `load_history` under `memory_strategy="messages"` now
+  ends the turn** with the new `MemoryHistoryUnavailableError`, raised
+  before any inference is issued. The failure and the empty episode
+  had collapsed onto one value; they are now distinct — `load_history`
+  returning `None` or `[]` still means "no inferences yet" and a fresh
+  session still starts clean. A backend raising its own
+  `T0AgentsFatalError` propagates unwrapped, keeping its class as the
+  discriminator. `load` and `save` are unchanged and stay best-effort:
+  they inform a prompt, they do not constitute it.
+
+  The class name is the whole consumer contract, and it needs no wire
+  change — it arrives as a typed `except`, as
+  `RunErrorEvent.error_type`, and as `detail["exc_class"]` on the
+  terminal `ErrorFrame`, so a re-drive policy can tell "the store
+  could not be read" from "the model call failed".
+
+  No opt-out flag ships. A caller who wants the old behaviour wraps
+  the provider and returns `None` on failure, which states in code
+  that an unreadable history is to be treated as a new conversation.
+
+### Fixed
+
+- **Caller-explicit `prior_messages` now skip the history read rather
+  than discarding its result afterwards.** `MemoryMiddleware` has
+  always documented that `invoke(prior_messages=…)` and `Run.fork`
+  "take precedence and skip the load entirely"; they took precedence,
+  but the read ran regardless and what it returned was dropped.
+  Harmless while that read was best-effort — not once the change above
+  makes it fatal, since a fork holding the entire transcript would
+  then abort on a store it needs nothing from. Threaded down as
+  `caller_supplied_history` so the skip happens before the I/O, and so
+  the strategy dispatch stays in one place.
+- **A `T0AgentsFatalError` raised by a memory backend now actually
+  propagates.** `docs/memory.md` has documented that escape hatch —
+  "the same contract guardrails use for hard aborts" — since the
+  strategy shipped, but the broad `except Exception` around `load` and
+  around `save` caught the very class the doc promised would escape,
+  so wrapping a backend to fail hard did nothing. Both belts re-raise
+  it first now, the idiom `mcp/loop.py`, `guardrails/runtime.py` and
+  `delegation/provider.py` already use.
+
+- **A `messages`-strategy provider without `load_history` reaching the
+  read is reported as the configuration error it is.**
+  `AgentConfig.__post_init__` checks for it, but neither override seam
+  repeats the check — `invoke(memory=…)` validates only the
+  MemoryProvider protocol, and glow's `conversation(memory=…)`
+  validates only inside `hydrate`. Such an override arrived as an
+  `AttributeError` that the belt above would have reported as a failed
+  read, pointing the operator at the gateway for a fault in their own
+  call.
+
+### Notes
+
+- **One amnesia shape is out of reach of this error, and it is a
+  gateway setting.** A read that *succeeds* against a lagging
+  observability store returns an empty history that is by construction
+  indistinguishable from a new episode: nothing raises, and the turn
+  proceeds with no prior context. Gateway **2026.4.1** flipped
+  `observability.async_writes` to `true` by default, widening that
+  window from "heavy local load" to "every turn". If your episodes
+  span turns, set `async_writes = false` under
+  `[gateway.observability]`. See `docs/memory.md` § Read-after-write
+  timing.
+
+- Behaviour change for any consumer that relied on the history read
+  being best-effort. In practice a turn that used to answer badly now
+  fails visibly, which is the point — but it moves a failure count
+  rather than a success count.
+
 ## [2.2.7] — 2026-08-24
 
 This release is about what a consumer sees at the end of a run. The
