@@ -642,6 +642,34 @@ class TestMessagesStrategyInjection:
         # exception type alone would not prove that.
         assert t0.calls == []
 
+    async def test_explicit_prior_messages_skips_the_history_read(self) -> None:
+        """A caller who supplied the transcript must not depend on the store.
+
+        ``Run.fork`` and ``invoke(prior_messages=…)`` already hold the whole
+        conversation, and the middleware discards a strategy-derived history
+        in that case by construction — so reading it is pure I/O, and a
+        failed read must not abort a run that needs nothing from the store.
+        This is the contract ``MemoryMiddleware``'s own docstring states:
+        caller-explicit ``prior_messages`` "take precedence and skip the
+        load entirely".
+        """
+        mem = _HistoryMem(RuntimeError("db down"))
+        t0 = FakeT0([_text_response("ok")])
+        agent = _messages_agent(mem, t0)
+        result = await agent.invoke(
+            "hello",
+            episode_id=str(_EPISODE),
+            prior_messages=[{"role": "user", "content": "seed"}],
+        )
+        assert result.response == "ok"
+        assert mem.history_calls == 0
+        # The caller's transcript is what reached the gateway, unmodified.
+        first_messages = t0.calls[0]["input"]["messages"]
+        assert first_messages == [
+            {"role": "user", "content": "seed"},
+            {"role": "user", "content": "hello"},
+        ]
+
     async def test_backend_fatal_error_propagates_unwrapped(self) -> None:
         """A backend's own fatal class survives instead of being re-wrapped.
 

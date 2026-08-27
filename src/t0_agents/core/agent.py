@@ -768,6 +768,7 @@ class Agent:
         *,
         episode_id: str | None,
         provider: MemoryProvider | None = None,
+        caller_supplied_history: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """Build the effective user message and extra kwargs for run_agent.
 
@@ -783,6 +784,14 @@ class Agent:
         ``provider`` is the effective memory provider for this run —
         a per-run override threaded by :class:`MemoryMiddleware` — and
         falls back to ``config.memory`` when ``None``.
+
+        ``caller_supplied_history`` reports that the caller already
+        provided ``prior_messages`` (``invoke(prior_messages=…)`` or
+        :meth:`Run.fork`).  Those take precedence over anything a
+        strategy derives, so under ``"messages"`` the history read is
+        skipped: its result would be discarded by construction, and a
+        failed read must not abort a run that needs nothing from the
+        store.
 
         Returns:
             A ``(effective_message, extra_kwargs)`` tuple.  *extra_kwargs*
@@ -802,7 +811,7 @@ class Agent:
         memory = provider if provider is not None else self._config.memory
 
         if strategy == "messages":
-            if memory is None or episode_id is None:
+            if memory is None or episode_id is None or caller_supplied_history:
                 return user_message, {}
             # ``AgentConfig.__post_init__`` validates ``load_history``,
             # but neither override seam does: ``invoke(memory=…)`` checks

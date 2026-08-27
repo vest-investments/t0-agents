@@ -99,7 +99,9 @@ class MemoryMiddleware:
     - ``"messages"`` — populates ``ctx.prior_messages`` via
       ``memory.load_history(episode_id)``.  Caller-explicit
       ``prior_messages`` (e.g. from :meth:`Run.fork`) take precedence
-      and skip the load entirely.
+      and skip the read entirely — threaded down as
+      ``caller_supplied_history`` so the skip happens before the I/O
+      rather than by discarding its result afterwards.
 
     Save runs in ``finally`` so the record is persisted even on
     exception paths when the run produced a result; ``load`` and
@@ -173,12 +175,16 @@ class MemoryMiddleware:
         # --- 2. Prepare injection ---
         # Reuse the existing helper on Agent so middleware behaviour
         # tracks any future refinement to the strategy dispatch
-        # without two places drifting apart.
+        # without two places drifting apart — hence the flag rather
+        # than a second strategy branch here.  It carries the fact the
+        # discard below already encodes: caller-explicit
+        # ``prior_messages`` win, so deriving history is wasted work.
         effective_message, extra_kwargs = await agent._prepare_memory_injection(
             original_user_message,
             memory_records,
             episode_id=ctx.episode_id,
             provider=provider,
+            caller_supplied_history=ctx.prior_messages is not None,
         )
         ctx.user_message = effective_message
 
