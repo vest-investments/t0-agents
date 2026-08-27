@@ -37,7 +37,7 @@ the `core` + `mcp` foundation.
 
 - Python >= 3.11
 - `fastmcp >= 3.2.3`
-- `tensorzero >= 2026.4.0`
+- `tensorzero >= 2026.6.0`
 - A TensorZero gateway (Docker Compose + a provider API key) to run
   the examples end-to-end, same as any other agent.
 

@@ -32,7 +32,7 @@ until one lands, no glow workaround.
 
 The functionless path routes through the gateway's built-in chat
 passthrough (`tensorzero::default`), which **ignores the per-call
-`output_schema`** (verified against gateway 2026.4.0) — so
+`output_schema`** (verified against gateways 2026.4.0 and 2026.6.0) — so
 `JsonOutput`/`StructuredOutput` can never be satisfied there.
 Declaring `@app.agent(model=..., ...)` on a function with a structured
 return annotation raises `ConfigurationError` at first build, with a

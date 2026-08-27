@@ -365,8 +365,9 @@ class TensorZeroMemory:
     ) -> list[ConversationSummary]:
         """List recent conversations, newest first — a **dev-grade** index.
 
-        TensorZero 2026.4.0 exposes no server-side per-episode aggregation, so
-        this groups a **bounded window** of the most recent inferences by
+        TensorZero exposes no server-side per-episode aggregation (through
+        2026.6.0, its last release), so this groups a **bounded window** of
+        the most recent inferences by
         ``episode_id`` entirely client-side.  It is honest about the resulting
         limits:
 

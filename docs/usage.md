@@ -288,7 +288,7 @@ Three facets are **delegated to TensorZero** rather than built into
 t0-agents — they are gateway configuration (or SQL), not library code.
 The recipes below are **copy-pasteable** and were validated against the
 TensorZero docs in **June 2026**; the project's gateway pins
-`tensorzero==2026.4.0`.  TOML keys can evolve — verify against the
+`tensorzero==2026.6.0`.  TOML keys can evolve — verify against the
 [configuration reference](https://www.tensorzero.com/docs/gateway/configuration-reference)
 for your gateway version.
 

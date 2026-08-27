@@ -7,7 +7,7 @@ M3 (glow v2) adds ``model``/``variant``/``params``/``cache``:
   ``variant_name`` for ``model``-routed inference.
 - ``model`` + a JSON-function output mode raises at construction with a
   ready-to-paste tensorzero.toml stanza (the functionless passthrough
-  ignores ``output_schema``; verified against gateway 2026.4.0).
+  ignores ``output_schema``; verified against gateways 2026.4.0 and 2026.6.0).
 """
 
 from __future__ import annotations

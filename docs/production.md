@@ -27,7 +27,7 @@ client = Client("https://mcp.example.com/mcp")
 **Development**: use Docker Compose. The project includes a compose file that boots the gateway and ClickHouse.
 
 ```bash
-docker compose up -d  # gateway:2026.4.0 + clickhouse:lts
+docker compose up -d  # gateway:2026.6.0 + clickhouse:lts
 ```
 
 **Production**:
@@ -42,8 +42,33 @@ docker run -d \
   -v ./config/tensorzero.toml:/app/config/tensorzero.toml:ro \
   -e GROQ_API_KEY="$GROQ_API_KEY" \
   -p 3000:3000 \
-  tensorzero/gateway:2026.4.0
+  tensorzero/gateway:2026.6.0
 ```
+
+## Gateway version compatibility
+
+The library's floor is `tensorzero >= 2026.6.0` — the last upstream
+release (the repository was archived in June 2026). The Python client
+surface the library uses did not change between 2026.4.0 and 2026.6.0;
+the gateway did, so every gateway behaviour the library leans on was
+re-run against a real 2026.6.0 gateway before the floor moved:
+
+| Behaviour | On 2026.6.0 | Checked by |
+|---|---|---|
+| `list_inferences` by `episode_id` + tag filters + `order_by` + `limit` (all of `TensorZeroMemory`) | unchanged | the `integration` suite |
+| A client-minted UUIDv7 `episode_id` is stored verbatim; any other UUID version is HTTP 400 | unchanged | `tests/test_memory/test_tensorzero_integration.py` |
+| `ModelInference.finish_reason` is `Nullable(Enum8('stop','length','tool_call','content_filter','unknown','stop_sequence'))`; `model_name` is the TensorZero alias, `model_provider_name` the provider | unchanged | `DESCRIBE` on a 2026.6.0-migrated ClickHouse plus one live row |
+| `json_mode = "strict"` and `"on"` both return parsed JSON output (Groq); the DeepSeek provider still downgrades `strict` to `json_object` with a warning | unchanged | the `integration` suite; gateway binary |
+| The `model=` passthrough ignores a per-call `output_schema` | unchanged | one inference |
+| A provider-side HTTP 400 surfaces as HTTP 502 with the provider's message embedded (what `RECOVERABLE_INFERENCE_STATUS_CODES` relies on) | unchanged | `temperature = 5.0` against Groq, both versions |
+| `extra_body` declared on a provider reaches only that provider's request | unchanged | `raw_request` in ClickHouse |
+| `weight` on a variant | still a boot-time deprecation warning, not an error | boot logs, both versions |
+| 2026.6.0 client ↔ 2026.4.0 gateway, and the reverse | compatible | inference, `list_inferences`, `load_history` |
+| ClickHouse schema 2026.4.0 → 2026.6.0 | one migration (`Migration0053`); a 2026.4.0 gateway still boots on the migrated schema, writes to it and reads it back, warning about "extra migrations" | boot logs; rows written and read from both versions |
+| `observability.async_writes` | **defaults to `true` since 2026.4.1** — set `false` under `[gateway.observability]` wherever `TensorZeroMemory` is in use | [Memory — read-after-write timing](memory.md#read-after-write-timing) |
+
+The last row is the one behaviour that changed, and it is why the
+bundled `docker-compose.yml` sets `async_writes = false`.
 
 ## System prompts for tool-use reliability
 

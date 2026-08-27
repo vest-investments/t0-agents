@@ -27,7 +27,8 @@ from typing import cast
 
 import pytest
 from tensorzero import AsyncTensorZeroGateway, InferenceFilterTime
-from tensorzero.types import ChatInferenceResponse
+from tensorzero.types import ChatInferenceResponse, TensorZeroError
+from tensorzero.util import uuid7
 
 from t0_agents.memory import TensorZeroMemory
 
@@ -219,3 +220,55 @@ async def test_experimental_search_round_trip(
     # at least one hit is required.
     assert len(hits) >= 1
     assert any(needle in r.user_message for r in hits)
+
+
+async def test_client_minted_episode_id_round_trips(
+    gateway: AsyncTensorZeroGateway,
+) -> None:
+    """An episode_id minted by the CLIENT is stored under that id and read back.
+
+    glow's ``conversation()`` mints ``str(uuid7())`` before the first turn and
+    every later read (``load_history``, ``list_inferences``) keys on it, so the
+    gateway must persist the caller's id verbatim rather than mint its own.
+    """
+    customer = _fresh_customer_id()
+    minted = str(uuid7())
+
+    ep, inference_id = await _inference(
+        gateway,
+        episode_id=minted,
+        customer_id=customer,
+        user_text="Reply with just OK.",
+    )
+    assert ep == minted
+    await asyncio.sleep(_TZ_FLUSH_DELAY_SECONDS)
+
+    memory = TensorZeroMemory(
+        gateway,
+        function_name="agent",
+        tag_filter={"customer_id": customer},
+    )
+    records = await memory.load(minted)
+    assert [r.inference_ids for r in records] == [[inference_id]]
+    history = await memory.load_history(minted)
+    assert history is not None
+    assert len(history) >= 2  # the user turn plus the assistant reply
+
+
+async def test_non_v7_episode_id_is_rejected(
+    gateway: AsyncTensorZeroGateway,
+) -> None:
+    """The gateway accepts only UUIDv7 episode ids; a v4 is a 400, not a fresh episode.
+
+    Pinned so a consumer minting ids with ``uuid.uuid4()`` learns it from the
+    suite rather than from a gateway error in production.
+    """
+    with pytest.raises(TensorZeroError) as excinfo:
+        await gateway.inference(
+            function_name="agent",
+            episode_id=str(uuid.uuid4()),
+            input={"messages": [{"role": "user", "content": "Reply with just OK."}]},
+            dryrun=True,
+        )
+    assert excinfo.value.status_code == 400
+    assert "v7" in (excinfo.value.text or "")
