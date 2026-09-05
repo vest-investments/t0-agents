@@ -94,6 +94,7 @@ class StreamingAgentLoop:
         tool_timeout: float | None = 30.0,
         parallel_tools: bool = False,
         terminal_tools: tuple[str, ...] = (),
+        replay_thoughts: bool = False,
         dryrun: bool = False,
         tool_choice: ToolChoice | None = None,
         tags: dict[str, str] | None = None,
@@ -146,6 +147,15 @@ class StreamingAgentLoop:
         its :class:`ToolResultEvent` s with the ordinary terminal
         :class:`DoneEvent` — no further inference, and no synthesised
         text block (the round streamed its own).
+
+        ``replay_thoughts`` likewise mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        kwarg of the same name: this turn's ``Thought`` blocks stay in
+        the replay transcript instead of being stripped before the next
+        round's request, for providers that expect their own reasoning
+        back while the turn still carries tools.  The streamed
+        :class:`~t0_agents.core.events.ThoughtEvent` s are unaffected —
+        the flag governs what the next request carries, not what a
+        consumer sees.
 
         ``progress_sink`` receives a :class:`ToolProgressEvent` for every
         server-side progress notification a tool emits while executing.
@@ -274,6 +284,7 @@ class StreamingAgentLoop:
                 content_blocks=assistant_blocks,
                 response=synthetic,
                 on_inference=on_inference,
+                replay_thoughts=replay_thoughts,
             )
 
             logger.info(
