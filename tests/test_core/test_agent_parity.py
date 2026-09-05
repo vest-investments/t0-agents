@@ -263,6 +263,26 @@ class TestAgentParity:
         assert done.result.response_source == run_result.response_source
 
 
+    async def test_replay_thoughts_reaches_run_agent(self) -> None:
+        """AgentConfig.replay_thoughts drives the replayed turn, not just the kwarg."""
+        thought = Thought(text="weighing it up")
+        tc = _tool_call(name="add", call_id="c1")
+        t0 = FakeT0([
+            FakeChatResponse(content=[thought, tc]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("add")],
+            call_results={"add": _make_result(data=5)},
+        )
+        agent = _agent(t0, client, replay_thoughts=True)
+
+        result = await agent.invoke("compute 2+3")
+
+        assert result.response == "done"
+        assistant = t0.calls[1]["input"]["messages"][1]
+        assert assistant["content"] == [thought, tc]
+
     async def test_terminal_tools(self) -> None:
         """Mirrors test_terminal_round_ends_the_turn_after_one_inference."""
         t0 = FakeT0([

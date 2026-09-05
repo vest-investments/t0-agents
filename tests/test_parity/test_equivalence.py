@@ -58,6 +58,77 @@ async def test_loop_and_runner_produce_equivalent_runs() -> None:
     assert loop_calls == stream_calls
 
 
+async def test_loop_and_runner_replay_reasoning_equivalently() -> None:
+    """Replaying reasoning must look the same from both loops.
+
+    The scenario's turn 1 already carries a ``Thought``, so the flag
+    changes what turns 2 and 3 are sent without changing the
+    conversation.  The second half is the control: the same scenario
+    with the flag off must produce a *different* request stack, or this
+    test would pass on a knob that does nothing.
+    """
+    t0_loop = FakeT0(responses=make_nonstreaming_responses())
+    loop_result = await run_agent(
+        cast(Any, t0_loop),
+        cast(Any, make_mcp_client()),
+        USER_MESSAGE,
+        FUNCTION_NAME,
+        replay_thoughts=True,
+    )
+
+    t0_stream = FakeT0(responses=make_streaming_responses())
+    events = [
+        e
+        async for e in StreamingAgentLoop().stream(
+            cast(Any, t0_stream),
+            cast(Any, make_mcp_client()),
+            USER_MESSAGE,
+            FUNCTION_NAME,
+            replay_thoughts=True,
+        )
+    ]
+    (done,) = [e for e in events if isinstance(e, DoneEvent)]
+
+    assert result_to_dict(loop_result) == result_to_dict(done.result)
+
+    replayed = [call_to_dict(c) for c in t0_loop.calls]
+    stream_calls = [call_to_dict(c) for c in t0_stream.calls]
+    assert all(c.pop("stream") is None for c in replayed)
+    assert all(c.pop("stream") is True for c in stream_calls)
+    assert replayed == stream_calls
+
+    t0_stripped = FakeT0(responses=make_nonstreaming_responses())
+    await run_agent(
+        cast(Any, t0_stripped),
+        cast(Any, make_mcp_client()),
+        USER_MESSAGE,
+        FUNCTION_NAME,
+    )
+    stripped = [call_to_dict(c) for c in t0_stripped.calls]
+    for c in stripped:
+        c.pop("stream")
+
+    assert replayed != stripped
+    rounds_replaying_turn_one = 2
+    assert (
+        _thought_kinds(replayed)
+        == ["I should add first."] * rounds_replaying_turn_one
+    )
+    assert _thought_kinds(stripped) == []
+
+
+def _thought_kinds(calls: list[dict[str, Any]]) -> list[str]:
+    """Every replayed assistant thought across a run's requests, in order."""
+    return [
+        block["text"]
+        for call in calls
+        for message in call["messages"]
+        if message["role"] == "assistant"
+        for block in message["content"]
+        if block["kind"] == "thought"
+    ]
+
+
 async def test_loop_and_runner_end_a_terminal_round_equivalently() -> None:
     """A round that ends on its tools must look the same from both loops."""
     t0_loop = FakeT0(responses=make_terminal_nonstreaming_responses())

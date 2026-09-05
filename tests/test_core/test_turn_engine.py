@@ -213,6 +213,38 @@ async def test_complete_assistant_turn_hook_fires_before_capture() -> None:
     assert [type(b).__name__ for b in appended["content"]] == ["Text"]
 
 
+async def test_complete_assistant_turn_drops_reasoning_from_the_replayed_turn() -> None:
+    state = TurnState(messages=[])
+    call = _tool_call()
+    await complete_assistant_turn(
+        state,
+        content_blocks=[
+            Thought(type="thought", text="weigh the two"),
+            Text(type="text", text="checking"),
+            call,
+        ],
+        response=None,
+        on_inference=None,
+    )
+    (appended,) = state.messages
+    assert appended["content"] == [Text(type="text", text="checking"), call]
+
+
+async def test_complete_assistant_turn_replays_reasoning_when_asked() -> None:
+    state = TurnState(messages=[])
+    thought = Thought(type="thought", text="weigh the two")
+    call = _tool_call()
+    await complete_assistant_turn(
+        state,
+        content_blocks=[thought, Text(type="text", text="checking"), call],
+        response=None,
+        on_inference=None,
+        replay_thoughts=True,
+    )
+    (appended,) = state.messages
+    assert appended["content"] == [thought, Text(type="text", text="checking"), call]
+
+
 async def test_complete_assistant_turn_without_response_appends_only() -> None:
     state = TurnState(messages=[], episode_id="keep")
     await complete_assistant_turn(
