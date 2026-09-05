@@ -417,6 +417,69 @@ async def test_streaming_replay_keeps_the_thought_when_replay_thoughts_is_on() -
     assert done[0].result.turns == 2
 
 
+async def test_streaming_rebuild_carries_the_reasoning_signature() -> None:
+    """A replayed thought keeps the signature and provider the chunks carried.
+
+    A provider that verifies its own reasoning rejects a replayed block
+    whose signature is missing or altered, so the rebuild has to carry
+    what arrived rather than reconstruct text alone. The metadata can
+    land on any chunk of the block — here, the last.
+    """
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [
+                        thought_chunk(text="weighing ", block_id="th1"),
+                        thought_chunk(
+                            text="the options",
+                            block_id="th1",
+                            signature="sig-abc",
+                            provider_type="acme",
+                        ),
+                        tool_call_chunk(
+                            raw_name="add", raw_arguments="{}", block_id="c1"
+                        ),
+                    ]
+                ),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="t1")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"add": _tool_result("3")},
+    )
+
+    runner = StreamingAgentLoop()
+    async for _ in runner.stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "What is 1+2?",
+        "agent",
+        replay_thoughts=True,
+    ):
+        pass
+
+    assistant = next(
+        m for m in fake_t0.calls[1]["input"]["messages"] if m["role"] == "assistant"
+    )
+    (thought,) = [b for b in assistant["content"] if isinstance(b, Thought)]
+    assert thought.text == "weighing the options"
+    assert thought.signature == "sig-abc"
+    assert thought.provider_type == "acme"
+
+
 async def test_streaming_loop_max_turns_raises() -> None:
     """Exhausting max_turns surfaces MaxTurnsExceededError."""
     # Each turn emits one tool call that the client can dispatch indefinitely.

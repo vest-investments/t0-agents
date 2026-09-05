@@ -441,7 +441,15 @@ class StreamingAgentLoop:
         """
         blocks: list[Any] = []
         for _tid, thought in assembler.thought_blocks.items():
-            blocks.append(Thought(type="thought", text=thought))
+            meta = assembler.thought_metadata.get(_tid, {})
+            blocks.append(
+                Thought(
+                    type="thought",
+                    text=thought,
+                    signature=meta.get("signature"),
+                    provider_type=meta.get("provider_type"),
+                )
+            )
         for _tid, text in assembler.text_blocks.items():
             blocks.append(Text(type="text", text=text))
         for tc in tool_calls:

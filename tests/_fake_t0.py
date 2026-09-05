@@ -115,6 +115,8 @@ def thought_chunk(
     *,
     summary_text: str | None = None,
     block_id: str = "th-1",
+    signature: str | None = None,
+    provider_type: str | None = None,
 ) -> ThoughtChunk:
     """Build a ``ThoughtChunk`` carrying reasoning content.
 
@@ -128,6 +130,8 @@ def thought_chunk(
         text=text,
         summary_text=summary_text,
         type="thought",
+        signature=signature,
+        provider_type=provider_type,
     )
 
 
