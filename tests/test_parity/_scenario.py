@@ -156,6 +156,54 @@ def make_streaming_responses() -> list[Any]:
     ]
 
 
+TERMINAL_TOOLS = ("greet",)
+TERMINAL_TEXT = "Saying hello now."
+
+
+def make_terminal_nonstreaming_responses() -> list[Any]:
+    """One turn: text plus a terminal tool call, and nothing scripted after it.
+
+    FakeT0 raises once its queue is empty, so the single entry is itself
+    the assertion that no second inference is issued.
+    """
+    return [
+        FakeChatResponse(
+            content=[
+                Text(type="text", text=TERMINAL_TEXT),
+                ToolCall(
+                    type="tool_call",
+                    id="tc-1",
+                    name="greet",
+                    raw_name="greet",
+                    arguments={"name": "x"},
+                    raw_arguments='{"name": "x"}',
+                ),
+            ],
+            episode_id=EPISODE_ID,
+            inference_id=INFERENCE_ID_TURN_1,
+        ),
+    ]
+
+
+def make_terminal_streaming_responses() -> list[Any]:
+    """The same terminal turn as a chunk script (same pinned ids, same order)."""
+    return [
+        [
+            chat_chunk(
+                [text_chunk(TERMINAL_TEXT, block_id="t-1")],
+                episode_id=EPISODE_ID,
+                inference_id=INFERENCE_ID_TURN_1,
+            ),
+            chat_chunk(
+                [tool_call_chunk("greet", '{"name": "x"}', block_id="tc-1")],
+                episode_id=EPISODE_ID,
+                inference_id=INFERENCE_ID_TURN_1,
+            ),
+            final_chunk(episode_id=EPISODE_ID, inference_id=INFERENCE_ID_TURN_1),
+        ],
+    ]
+
+
 def block_to_dict(block: Any) -> dict[str, Any]:
     """Stable dict projection of a TensorZero content block for snapshots."""
     if isinstance(block, Text):

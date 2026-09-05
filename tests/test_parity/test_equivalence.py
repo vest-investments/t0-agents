@@ -19,11 +19,14 @@ from t0_agents.stream.runner import StreamingAgentLoop
 from tests._fake_t0 import FakeT0
 from tests.test_parity._scenario import (
     FUNCTION_NAME,
+    TERMINAL_TOOLS,
     USER_MESSAGE,
     call_to_dict,
     make_mcp_client,
     make_nonstreaming_responses,
     make_streaming_responses,
+    make_terminal_nonstreaming_responses,
+    make_terminal_streaming_responses,
     result_to_dict,
 )
 
@@ -50,6 +53,41 @@ async def test_loop_and_runner_produce_equivalent_runs() -> None:
 
     loop_calls = [call_to_dict(c) for c in t0_loop.calls]
     stream_calls = [call_to_dict(c) for c in t0_stream.calls]
+    assert all(c.pop("stream") is None for c in loop_calls)
+    assert all(c.pop("stream") is True for c in stream_calls)
+    assert loop_calls == stream_calls
+
+
+async def test_loop_and_runner_end_a_terminal_round_equivalently() -> None:
+    """A round that ends on its tools must look the same from both loops."""
+    t0_loop = FakeT0(responses=make_terminal_nonstreaming_responses())
+    loop_result = await run_agent(
+        cast(Any, t0_loop),
+        cast(Any, make_mcp_client()),
+        USER_MESSAGE,
+        FUNCTION_NAME,
+        terminal_tools=TERMINAL_TOOLS,
+    )
+
+    t0_stream = FakeT0(responses=make_terminal_streaming_responses())
+    events = [
+        e
+        async for e in StreamingAgentLoop().stream(
+            cast(Any, t0_stream),
+            cast(Any, make_mcp_client()),
+            USER_MESSAGE,
+            FUNCTION_NAME,
+            terminal_tools=TERMINAL_TOOLS,
+        )
+    ]
+    (done,) = [e for e in events if isinstance(e, DoneEvent)]
+
+    assert result_to_dict(loop_result) == result_to_dict(done.result)
+    assert loop_result.turns == 1
+
+    loop_calls = [call_to_dict(c) for c in t0_loop.calls]
+    stream_calls = [call_to_dict(c) for c in t0_stream.calls]
+    assert len(loop_calls) == len(stream_calls) == 1
     assert all(c.pop("stream") is None for c in loop_calls)
     assert all(c.pop("stream") is True for c in stream_calls)
     assert loop_calls == stream_calls
