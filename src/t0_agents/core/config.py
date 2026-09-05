@@ -96,6 +96,13 @@ class AgentConfig:
             already produced text, the loop runs the tools and returns
             without a further inference — the round's own text is the
             answer.  The default ``()`` never terminates a round early.
+        replay_thoughts: Keep the assistant's ``Thought`` blocks in the
+            replay transcript within a turn, instead of stripping them
+            before the next round's request.  Set it when the configured
+            provider expects the previous rounds' reasoning back inside
+            a tool-carrying turn; leave it ``False`` otherwise.  Scoped
+            to the turn — reasoning from earlier turns is stripped on the
+            cross-turn replay path regardless.
         dryrun: Forward ``dryrun=True`` to every ``t0.inference()`` call.
         tool_choice: Tool-choice directive (``"auto"``, ``"required"``, ``"off"``,
             or ``{"specific": "<name>"}``).
@@ -197,6 +204,7 @@ class AgentConfig:
     params: dict[str, Any] | None = None
     cache: dict[str, Any] | None = None
     terminal_tools: tuple[str, ...] = ()
+    replay_thoughts: bool = False
 
     def __post_init__(self) -> None:
         if not self.name:
