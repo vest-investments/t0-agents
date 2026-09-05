@@ -457,6 +457,17 @@ def test_terminal_round_is_off_when_no_tool_is_declared_terminal() -> None:
     )
 
 
+def test_terminal_round_needs_tool_calls() -> None:
+    """A text-only round is an ordinary turn end, not a terminal round."""
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=[],
+        errored=[],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
 def test_terminal_round_needs_text_from_this_round() -> None:
     assert not is_terminal_round(
         _RENDER,

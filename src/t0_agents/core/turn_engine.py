@@ -395,12 +395,14 @@ def is_terminal_round(
       the run blank — :func:`~t0_agents.wire.stages.with_text_fallback`
       would have to invent an apology in place of the answer.  A
       ``"thought"`` source is reasoning, not an answer, and does not
-      count.
+      count;
+    * a round with no tool calls at all is not a terminal round — it is
+      an ordinary text turn, which the loops already end on their own.
 
-    ``tool_names`` is assumed non-empty: callers reach this only on a
-    round that emitted tool calls.
+    An empty ``terminal_tools`` needs no case of its own: no name can
+    match an empty set of patterns, so nothing is ever terminal.
     """
-    if not terminal_tools or source != "text" or not text:
+    if source != "text" or not text or not tool_names:
         return False
     if any(errored):
         return False
