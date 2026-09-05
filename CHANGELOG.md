@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.5.0] — 2026-09-05
+
+Reasoning is not free, and some providers expect the reasoning a model
+produced earlier in a turn to come back with the next request while
+that turn still carries tools. The loop stripped it unconditionally,
+so every round after the first paid to derive its reasoning again —
+and on a provider that enforces the expectation rather than tolerating
+its absence, the request fails outright. `replay_thoughts` keeps a
+round's reasoning in the transcript the next round of the same turn is
+built from. It is off by default, and it stops at the turn boundary on
+purpose: replaying every past turn's reasoning would grow a long
+conversation's prompt without bound.
+
+### Added
+
+- **`replay_thoughts` on `AgentConfig`, and `replay_thoughts=` on
+  `@app.agent`.** When `True`, each assistant round keeps its
+  `Thought` blocks in the replay transcript instead of having them
+  stripped before the next round's request. The default `False` leaves
+  an agent behaving exactly as it did in 2.4.0, so this is opt-in per
+  agent and costs nothing to ignore.
+
+- The strip-or-keep decision lives in `complete_assistant_turn`, the
+  one post-inference boundary both loops already share, so the
+  streaming and non-streaming paths cannot come to disagree about what
+  a turn replays.
+
+- **The scope is a single turn, deliberately.** `load_history` and the
+  stored-output conversion strip reasoning unconditionally and ignore
+  the flag, so nothing from an earlier turn is ever replayed. Were a
+  provider to enforce the same expectation across turns, the bounded
+  answer is the previous turn's reasoning rather than all of it.
+
+### Fixed
+
+- **The streaming loop rebuilt an assistant turn in its own block
+  order** — every `Text`, then every `Thought` — while the
+  non-streaming path receives the provider's own order, reasoning
+  first. Both loops now describe a turn the same way. Nothing could
+  observe the difference while thoughts were stripped on the way to
+  the replay transcript, and replaying them is what puts the list on
+  the wire.
+
+- **A rebuilt `Thought` lost its `signature` and `provider_type`.**
+  The stream assembler accumulated reasoning as text alone, so a
+  provider that verifies its own reasoning on replay would have been
+  handed a block it has to reject, while the non-streaming path
+  carried both fields intact. They now survive the rebuild, and are
+  picked up from whichever chunk of the block carries them.
+
 ## [2.4.0] — 2026-09-05
 
 Some tool calls are the reply rather than a step toward it — a render,
