@@ -26,6 +26,7 @@ from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.delegation import SubAgentToolProvider
 from t0_agents.glow import App, MCPServer
 from t0_agents.glow.app import _resolve_tool_filter
+from t0_agents.glow.decorators import _tool_specs
 from t0_agents.testing import MockToolProvider
 from t0_agents.tooling import FilteredToolProvider
 
@@ -82,6 +83,24 @@ def test_dead_pattern_warns_naming_candidates() -> None:
     with pytest.warns(UserWarning, match="matched no available tool"):
         result = _resolve_tool_filter("ag", ["nonexistent_*"], {"weather"})
     assert result == set()
+
+
+def test_bare_string_tools_raises_instead_of_widening() -> None:
+    """`tools="get_*"` splits into characters, and the '*' matches all.
+
+    Left alone, the filter the caller wrote to narrow returns every tool —
+    including whichever one they mounted the server for and meant to keep
+    out of reach. Refused at the boundary that would do the splitting.
+    """
+    with pytest.raises(ConfigurationError, match="bare string"):
+        _tool_specs("@app.agent('ag')", "get_*")
+
+
+def test_tool_specs_passes_a_real_list_through() -> None:
+    entries = ["get_*", "place_order"]
+    assert _tool_specs("@app.agent('ag')", entries) == entries
+    assert _tool_specs("@app.agent('ag')", None) is None
+    assert _tool_specs("@app.agent('ag')", []) == []
 
 
 def test_mcp_server_without_namespace_raises() -> None:
@@ -174,6 +193,21 @@ async def test_dead_pattern_warns_at_build_time() -> None:
     with pytest.warns(UserWarning, match="matched no available tool"):
         async with app.lifespan():
             assert await _tool_names(typo) == set()
+
+
+def test_bare_string_at_the_decorator_fails_on_declaration() -> None:
+    """A list that lost its brackets is refused where it is written."""
+    app = App(t0=_fake_t0())
+
+    @app.tool
+    async def weather() -> str:
+        return "w"
+
+    with pytest.raises(ConfigurationError, match="bare string"):
+
+        @app.agent("typo", tools="weath*")  # type: ignore[arg-type]
+        async def typo(q: str) -> str:  # type: ignore[empty-body]
+            """Meant to see only the weather tool."""
 
 
 async def test_sub_agent_ask_survives_the_filter() -> None:
