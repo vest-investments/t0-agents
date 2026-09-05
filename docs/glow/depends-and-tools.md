@@ -105,10 +105,11 @@ order-placement server but omits those tools from the assistant agent's
 
 ## Ending a turn on its tools — `terminal_tools=`
 
-Some tool calls *are* the reply — a render, a hand-off, anything the model
-has nothing to add to.  By default the loop feeds their results back and
-spends a whole inference on a closing line.  `terminal_tools=` names them,
-and a round calling only those ends the turn right after the dispatch:
+Some tool calls *are* the reply — a render, a UI side effect, anything whose
+payload the caller displays and the model has nothing to add to.  By default
+the loop feeds their results back and spends a whole inference on a closing
+line.  `terminal_tools=` names them, and a round calling only those ends the
+turn right after the dispatch:
 
 ```python
 @app.agent("advisor", terminal_tools=["present_*"])
@@ -120,10 +121,16 @@ Entries are literal tool names and glob strings, and a pattern matching no
 live tool warns at `app.build()` exactly as `tools=` does.
 
 Three rounds deliberately keep going, because in each the model still has
-work left: one with **no text of its own** (ending it would leave the run
-blank), one where **any result came back an error** (the model has to see
-it to fix the call), and one that **batches a terminal tool with a data
-lookup** (it asked for the data because it wants it).
+work left: one with **no text of its own** (blank counts as none — ending it
+would leave the run blank), one where **any result came back an error** (the
+model has to see it to fix the call), and one that **batches a terminal tool
+with a data lookup** (it asked for the data because it wants it).
+
+This is not the tool to delegate with.  A terminal round answers with the text
+of that round, so a `<sub_agent>_ask` marked terminal would end the turn and
+throw the sub-agent's reply away — and delegation tools are attached after the
+filter, so they never appear in the live list a pattern is checked against
+anyway.
 
 ## When to use which
 
