@@ -4,6 +4,91 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.0] — 2026-09-05
+
+Some tool calls are the reply rather than a step toward it — a render,
+a hand-back to the caller, anything whose payload is what the person
+asked for. The loop had no way to know that: it fed every result back
+and spent another inference writing a closing line over the top of
+work that was already done. `terminal_tools` names those tools, and a
+round calling only them ends the turn where it stands. The release
+also closes a hole in the older `tools=` filter that could widen it to
+the entire tool surface, which is the part to read if you upgrade for
+nothing else.
+
+### Added
+
+- **`terminal_tools` on `AgentConfig`, and `terminal_tools=` on
+  `@app.agent`.** Entries are literal tool names or `fnmatch` globs,
+  the same string grammar `tools=` accepts. When every tool call in a
+  round matches one, no result is an error, and the round produced
+  text of its own, the loop executes the tools and returns instead of
+  running another inference. The round's text is the answer. The
+  default `()` never ends a round early, so an agent that does not
+  declare it behaves exactly as it did in 2.3.0.
+
+- The rule lives in `core.turn_engine.is_terminal_round` and both the
+  streaming and non-streaming loops consult it at the same point, so
+  the two cannot drift. `DoneEvent` remains the only turn terminator
+  and the event order is unchanged: tool calls, then results, then
+  `DoneEvent`, with no synthesised text block.
+
+- **Three rounds deliberately keep going**, and they are the contract
+  worth knowing. A round with no text of its own has said nothing yet,
+  and ending it would leave the run blank; blank counts as none, by
+  the same `strip()` rule the wire's never-blank belt uses, so a model
+  that emits only newlines before its tool call does not qualify. A
+  round where any result came back an error keeps going so the model
+  can see it and fix the call. And a round that batches a terminal
+  tool with a data lookup keeps going, because the model asked for
+  that data — with `parallel_tools=True` this is a routine shape.
+
+- A `terminal_tools` pattern matching no live tool warns at
+  `build()`, the same dead-pattern diagnostic `tools=` emits. The two
+  now share one warning, so their wording cannot drift apart.
+
+### Fixed
+
+- **A bare string passed to `tools=` widened the filter instead of
+  narrowing it.** `str` is itself a sequence, so `tools="lookup_*"`
+  satisfied the annotation at runtime and then `list()` split it into
+  its characters. One of them is `*`, and `*` matches every live tool,
+  so a filter written to restrict an agent returned the entire
+  surface. Because `tools=` is the control that keeps a sensitive tool
+  away from an agent whose server stays mounted for others, the
+  failure mattered more than the typo that caused it: the only signal
+  was a scatter of dead-pattern warnings, one per character, which
+  reads like noise rather than a breach. Both `@app.agent(tools=)` and
+  `conversation(tools=)` now refuse a bare string where it is written,
+  before anything is split. Typed callers were never exposed — every
+  declaration site already annotates `list[Any] | None` — so this
+  closes the runtime hole beneath the annotation.
+
+### Changed
+
+- **The declared `tensorzero` floor is `>= 2026.6.0`.** The 2.3.0
+  notes described this floor and the reasoning behind it, but the
+  package still declared `>= 2026.4.0`; the declaration now matches
+  the documentation.
+
+### Notes
+
+- `run_agent` dispatches through the same detailed executor the
+  streaming loop already used. Behaviour is unchanged — the public
+  `execute_tool_calls` and `execute_tool_calls_parallel` are thin
+  projections over it and are untouched — but the loop now reads each
+  call's typed error flag rather than inspecting the result text for
+  an `ERROR:` prefix, which is what makes the terminal rule
+  trustworthy.
+
+- A turn ended by its tools stores an assistant message whose tool
+  calls have no results, because there is no following inference to
+  carry them. That is the same shape `TensorZeroMemory.load_history`
+  has dropped since 2.2.3, so the two compose: the reply survives
+  replay, the unanswered calls do not, and the next turn runs over the
+  reconstructed history. Pinned by a test rather than left to be
+  rediscovered.
+
 ## [2.3.0] — 2026-08-27
 
 This release moves the library's TensorZero floor from 2026.4.0 to
