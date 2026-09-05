@@ -70,12 +70,15 @@ RECOVERABLE_INFERENCE_STATUS_CODES: frozenset[int] = frozenset({400, 502})
 def strip_thoughts(content_blocks: list[Any]) -> list[Any]:
     """Return ``content_blocks`` without any ``Thought`` blocks.
 
-    Applied to the assistant turn before it is appended to the replay
-    ``messages``: TensorZero rejects input thought blocks for thought-less
-    providers (e.g. groq) and drops them with a WARN, so replaying them is
-    never useful. Mirrors the cross-conversation strip-on-replay rule in
+    The default treatment of the assistant turn before it is appended to
+    the replay ``messages``: a thought-less provider rejects input
+    thought blocks and the gateway drops them with a WARN per request,
+    so a caller who gains nothing from replaying them pays only noise
+    for it.  A caller whose provider does expect them back within a turn
+    opts out through ``complete_assistant_turn(replay_thoughts=True)``.
+    Mirrors the cross-conversation strip-on-replay rule in
     ``t0_agents.memory.tensorzero`` (``_to_native_message`` /
-    ``_output_to_content_blocks``).
+    ``_output_to_content_blocks``), which has no such opt-out.
     """
     return [b for b in content_blocks if not isinstance(b, Thought)]
 
@@ -232,15 +235,40 @@ async def complete_assistant_turn(
     content_blocks: list[Any],
     response: ChatInferenceResponse | None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None,
+    replay_thoughts: bool = False,
 ) -> None:
     """Post-inference sequence shared by both loops.
 
     Fires ``on_inference`` (BEFORE tool dispatch, so cost guardrails can
     block the next tool call), captures the episode / inference ids, and
-    appends the thought-stripped assistant turn to the replay
-    ``messages``.  ``response`` is ``None`` only on the streaming
-    degenerate path where the stream ended without a usage chunk — the
-    assistant turn is still appended, ids are not captured.
+    appends the assistant turn to the replay ``messages``.  ``response``
+    is ``None`` only on the streaming degenerate path where the stream
+    ended without a usage chunk — the assistant turn is still appended,
+    ids are not captured.
+
+    ``replay_thoughts`` decides whether that appended turn keeps its
+    ``Thought`` blocks, and it is a statement about the provider the
+    caller has configured, not a guess this function makes:
+
+    * Some reasoning APIs treat the previous rounds' reasoning as part
+      of the request they expect back while a turn is still carrying
+      ``tools``, and answer a turn that omits it either by re-deriving
+      the reasoning from scratch — every round costing what the first
+      one did — or by rejecting the request outright.  Those callers
+      pass ``True``.
+    * A provider that cannot accept input thoughts is not harmed by
+      the choice: the gateway drops the blocks and logs a WARN per
+      request, so replaying costs log volume and nothing else.  The
+      default is ``False`` anyway, so such a caller does nothing.
+
+    The scope is **this turn only**.  Reasoning from earlier turns is
+    stripped unconditionally on the cross-turn replay path
+    (:meth:`~t0_agents.memory.tensorzero.TensorZeroMemory.load_history`),
+    because replaying every past turn's reasoning grows the prompt
+    without bound as a conversation deepens.  If a provider ever
+    enforces the same expectation across turns, the bounded answer is
+    to replay only the immediately preceding turn's reasoning — not the
+    whole history.
 
     Hook-before-capture is ``run_agent``'s historical order; the
     streaming loop appended the assistant turn before firing the hook.
@@ -252,9 +280,8 @@ async def complete_assistant_turn(
             await on_inference(response)
         state.episode_id = str(response.episode_id)
         state.inference_ids.append(str(response.inference_id))
-    state.messages.append(
-        Message(role="assistant", content=strip_thoughts(content_blocks))
-    )
+    content = content_blocks if replay_thoughts else strip_thoughts(content_blocks)
+    state.messages.append(Message(role="assistant", content=content))
 
 
 def raise_missing_tool_provider(*, entry_point: str) -> NoReturn:
