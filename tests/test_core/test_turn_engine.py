@@ -20,6 +20,7 @@ from t0_agents.core.turn_engine import (
     complete_assistant_turn,
     corrective_retry,
     is_recoverable,
+    is_terminal_round,
     mine_final_text,
     raise_max_turns,
     raise_missing_tool_provider,
@@ -419,3 +420,115 @@ def test_salvage_fuzz_round() -> None:
         assert salvage_tool_arguments(encoded[: rng.randrange(1, len(encoded))]) is None
         if len(spec) > 1:
             assert salvage_tool_arguments(_without_member_commas(spec) + noise) is None
+
+
+# ---- is_terminal_round ------------------------------------------------
+
+_RENDER = ("present_*",)
+
+
+def test_terminal_round_ends_a_text_plus_render_round() -> None:
+    assert is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart", "present_quick_replies"],
+        errored=[False, False],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
+def test_terminal_round_matches_a_literal_name() -> None:
+    assert is_terminal_round(
+        ("present_chart",),
+        tool_names=["present_chart"],
+        errored=[False],
+        text="Here it is.",
+        source="text",
+    )
+
+
+def test_terminal_round_is_off_when_no_tool_is_declared_terminal() -> None:
+    assert not is_terminal_round(
+        (),
+        tool_names=["present_chart"],
+        errored=[False],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
+def test_terminal_round_needs_tool_calls() -> None:
+    """A text-only round is an ordinary turn end, not a terminal round."""
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=[],
+        errored=[],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
+def test_terminal_round_needs_text_from_this_round() -> None:
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart"],
+        errored=[False],
+        text="",
+        source="text",
+    )
+
+
+def test_terminal_round_refuses_blank_text() -> None:
+    """A model that emits only newlines before its tool call has said nothing.
+
+    The wire counts a delta as text by ``delta.strip()``; terminating on a
+    blank round would leave the belt to write EMPTY_TURN_RETRY_TEXT under
+    the render the tool just produced.
+    """
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart"],
+        errored=[False],
+        text="   \n\n   ",
+        source="text",
+    )
+
+
+def test_terminal_round_refuses_a_thought_sourced_answer() -> None:
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart"],
+        errored=[False],
+        text="the user asked for a chart, so I will render one",
+        source="thought",
+    )
+
+
+def test_terminal_round_refuses_an_errored_terminal_result() -> None:
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart"],
+        errored=[True],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
+def test_terminal_round_refuses_a_round_that_also_fetches_data() -> None:
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart", "customers_retrieve_account_overview"],
+        errored=[False, False],
+        text="Here is your portfolio.",
+        source="text",
+    )
+
+
+def test_terminal_round_refuses_a_hallucinated_tool_name() -> None:
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=[None],
+        errored=[False],
+        text="Here is your portfolio.",
+        source="text",
+    )

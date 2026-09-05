@@ -750,3 +750,144 @@ async def test_streaming_loop_system_arguments_with_model_name_rejected() -> Non
         ):
             pass
     assert fake_t0.calls == []
+
+
+# --- terminal tools ---------------------------------------------------------
+
+
+_PRESENT = ("present_*",)
+
+
+def _render_tool(name: str = "present_chart") -> MCPTool:
+    return MCPTool(
+        name=name,
+        description="render something for the user",
+        inputSchema={"type": "object", "properties": {}},
+    )
+
+
+def _render_turn(text: str | None = "Here is your portfolio.") -> list[Any]:
+    blocks: list[Any] = []
+    if text is not None:
+        blocks.append(text_chunk(text, block_id="t1"))
+    blocks.append(
+        tool_call_chunk(raw_name="present_chart", raw_arguments="{}", block_id="c1")
+    )
+    return [chat_chunk(blocks), final_chunk()]
+
+
+async def _drive(
+    fake_t0: FakeT0, fake_client: FakeMCPClient, **kwargs: Any
+) -> list[Any]:
+    return [
+        event
+        async for event in StreamingAgentLoop().stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "show me my portfolio",
+            "agent",
+            **kwargs,
+        )
+    ]
+
+
+async def test_terminal_round_ends_the_stream_after_one_inference() -> None:
+    """The render is the reply: results, then Done, with no second inference."""
+    fake_t0 = FakeT0(responses=[_render_turn()])
+    fake_client = FakeMCPClient(
+        tools=[_render_tool()],
+        call_results={"present_chart": _tool_result("rendered")},
+    )
+
+    events = await _drive(fake_t0, fake_client, terminal_tools=_PRESENT)
+
+    assert [type(e).__name__ for e in events] == [
+        "TextDeltaEvent",
+        "ToolCallDeltaEvent",
+        "ToolCallEvent",
+        "TextEndEvent",
+        "TurnEndEvent",
+        "ToolResultEvent",
+        "DoneEvent",
+    ]
+    assert len(fake_t0.calls) == 1
+    done = events[-1]
+    assert isinstance(done, DoneEvent)
+    assert done.result.response == "Here is your portfolio."
+    assert done.result.response_source == "text"
+    assert done.result.turns == 1
+
+
+async def test_terminal_round_without_text_runs_another_inference() -> None:
+    fake_t0 = FakeT0(
+        responses=[
+            _render_turn(text=None),
+            [chat_chunk([text_chunk("there it is", block_id="t2")]), final_chunk()],
+        ]
+    )
+    fake_client = FakeMCPClient(
+        tools=[_render_tool()],
+        call_results={"present_chart": _tool_result("rendered")},
+    )
+
+    events = await _drive(fake_t0, fake_client, terminal_tools=_PRESENT)
+
+    assert len(fake_t0.calls) == 2
+    done = events[-1]
+    assert isinstance(done, DoneEvent)
+    assert done.result.response == "there it is"
+    assert done.result.turns == 2
+
+
+async def test_errored_terminal_result_runs_another_inference() -> None:
+    fake_t0 = FakeT0(
+        responses=[
+            _render_turn(),
+            [
+                chat_chunk([text_chunk("let me try that again", block_id="t2")]),
+                final_chunk(),
+            ],
+        ]
+    )
+    fake_client = FakeMCPClient(
+        tools=[_render_tool()],
+        call_results={
+            "present_chart": CallToolResult(
+                content=[TextContent(type="text", text="bad spec")],
+                structured_content=None,
+                data="bad spec",
+                is_error=True,
+                meta=None,
+            )
+        },
+    )
+
+    events = await _drive(fake_t0, fake_client, terminal_tools=_PRESENT)
+
+    assert len(fake_t0.calls) == 2
+    done = events[-1]
+    assert isinstance(done, DoneEvent)
+    assert done.result.response == "let me try that again"
+
+
+async def test_default_leaves_the_render_round_running() -> None:
+    """Without terminal_tools the same stream behaves exactly as before."""
+    fake_t0 = FakeT0(
+        responses=[
+            _render_turn(),
+            [chat_chunk([text_chunk("anything else?", block_id="t2")]), final_chunk()],
+        ]
+    )
+    fake_client = FakeMCPClient(
+        tools=[_render_tool()],
+        call_results={"present_chart": _tool_result("rendered")},
+    )
+
+    events = await _drive(fake_t0, fake_client)
+
+    assert len(fake_t0.calls) == 2
+    assert [t.turn for t in events if isinstance(t, TurnEndEvent)] == [1, 2]
+    done = events[-1]
+    assert isinstance(done, DoneEvent)
+    assert done.result.response == "anything else?"
+    assert done.result.turns == 2

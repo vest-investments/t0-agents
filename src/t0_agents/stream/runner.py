@@ -49,6 +49,7 @@ from t0_agents.core.turn_engine import (
     complete_assistant_turn,
     corrective_retry,
     is_recoverable,
+    is_terminal_round,
     mine_final_text,
     raise_max_turns,
     raise_missing_tool_provider,
@@ -92,6 +93,7 @@ class StreamingAgentLoop:
         max_turns: int = 20,
         tool_timeout: float | None = 30.0,
         parallel_tools: bool = False,
+        terminal_tools: tuple[str, ...] = (),
         dryrun: bool = False,
         tool_choice: ToolChoice | None = None,
         tags: dict[str, str] | None = None,
@@ -137,6 +139,13 @@ class StreamingAgentLoop:
         if left at their ``""`` defaults — those defaults exist solely
         as a Python-syntax workaround that lets ``tool_provider`` default
         to ``None`` at position 2.
+
+        ``terminal_tools`` mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        kwarg of the same name: a round calling only those tools, with no
+        errored result and text of its own, ends the stream right after
+        its :class:`ToolResultEvent` s with the ordinary terminal
+        :class:`DoneEvent` — no further inference, and no synthesised
+        text block (the round streamed its own).
 
         ``progress_sink`` receives a :class:`ToolProgressEvent` for every
         server-side progress notification a tool emits while executing.
@@ -318,6 +327,28 @@ class StreamingAgentLoop:
                     server=outcome.server,
                 )
             state.messages.append(Message(role="user", content=tool_results))
+
+            text, response_source = mine_final_text(assistant_blocks)
+            if is_terminal_round(
+                terminal_tools,
+                tool_names=[b.name for b in tool_call_blocks],
+                errored=[outcome.is_error for outcome in outcomes],
+                text=text,
+                source=response_source,
+            ):
+                logger.info(
+                    "Stream turn %d completed on a terminal tool round: "
+                    "tools=%d, episode_id=%s",
+                    turn + 1,
+                    len(tool_call_blocks),
+                    state.episode_id,
+                )
+                yield DoneEvent(
+                    result=build_agent_result(
+                        text, response_source, state=state, turns=turn + 1
+                    )
+                )
+                return
 
         raise_max_turns(max_turns, state.episode_id)
 

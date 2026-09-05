@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 from fastmcp.client.client import CallToolResult
 from mcp.types import TextContent
+from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
@@ -28,6 +29,7 @@ from tests._fake_t0 import (
     final_chunk,
     text_chunk,
     thought_chunk,
+    tool_call_chunk,
 )
 
 
@@ -416,3 +418,47 @@ async def test_agent_stream_system_with_system_template_strategy_rejected() -> N
         async for _ in agent.invoke("hi", system="raw").events():
             pass
     assert fake_t0.calls == []
+
+
+async def test_agent_stream_ends_on_a_terminal_tool_round() -> None:
+    """AgentConfig.terminal_tools reaches the streaming loop, not just run_agent."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([
+                    text_chunk("Here is your portfolio.", block_id="t1"),
+                    tool_call_chunk(
+                        raw_name="present_chart",
+                        raw_arguments="{}",
+                        block_id="c1",
+                    ),
+                ]),
+                final_chunk(),
+            ]
+        ]
+    )
+    client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="present_chart",
+                description="render a chart",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"present_chart": _tool_result("rendered")},
+    )
+    agent = Agent(
+        AgentConfig(
+            name="a", function_name="agent", terminal_tools=("present_*",)
+        ),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=cast(Any, client),
+    )
+
+    events = await _drain_stream(agent, "show me my portfolio")
+
+    assert len(fake_t0.calls) == 1
+    done = [e for e in events if isinstance(e, DoneEvent)]
+    assert len(done) == 1
+    assert done[0].result.response == "Here is your portfolio."
+    assert done[0].result.turns == 1

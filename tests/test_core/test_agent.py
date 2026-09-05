@@ -90,6 +90,17 @@ class TestAgentConfig:
         assert cfg.tool_choice is None
         assert cfg.tags is None
         assert cfg.namespace is None
+        assert cfg.terminal_tools == ()
+
+    def test_bare_string_terminal_tools_raises(self) -> None:
+        """str satisfies Sequence[str], and tuple() would shatter it into
+        characters — a lone '*' among them makes every tool terminal."""
+        with pytest.raises(ConfigurationError, match="bare string"):
+            AgentConfig(name="a", function_name="f", terminal_tools="present_*")
+
+    def test_empty_terminal_tool_pattern_raises(self) -> None:
+        with pytest.raises(ConfigurationError, match="terminal_tools"):
+            AgentConfig(name="a", function_name="f", terminal_tools=("present_*", ""))
 
     def test_empty_name_raises(self) -> None:
         with pytest.raises(ConfigurationError, match="name"):

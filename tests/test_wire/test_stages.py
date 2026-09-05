@@ -480,6 +480,31 @@ class TestWithTextFallback:
         ]
         assert await _fallback(source) == source
 
+    async def test_a_terminal_tool_round_keeps_the_belt_silent(self) -> None:
+        """A turn ending on its tools streamed its own text before them.
+
+        This is what makes ``terminal_tools`` safe on the public wire: the
+        belt fires on a run with no non-blank ``TextDeltaFrame``, and the
+        engine only ends a round early when that frame already went out.
+        Were the rule to drop the text condition, the reader would get
+        EMPTY_TURN_RETRY_TEXT in place of the answer.
+        """
+        source = [
+            TextDeltaFrame(block_id="b1", delta="Here is your portfolio."),
+            TextEndFrame(block_id="b1"),
+            TurnEndFrame(turn=1),
+            ToolResultFrame(
+                id="t1",
+                name="present_chart",
+                result="rendered",
+                is_error=False,
+                truncated_from=None,
+                raw_event_json="{}",
+            ),
+            _done(text="Here is your portfolio."),
+        ]
+        assert await _fallback(source) == source
+
     async def test_reasoning_fallback_synthesises_the_answer(self) -> None:
         out = await _fallback(
             [

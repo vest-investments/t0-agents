@@ -29,10 +29,11 @@ import-direction constraints — this module never imports ``mcp/`` or
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn
 
@@ -363,6 +364,56 @@ def mine_final_text(blocks: list[Any]) -> tuple[str, Literal["text", "thought"]]
     if thought_texts:
         return "\n".join(thought_texts), "thought"
     return "", "text"
+
+
+def is_terminal_round(
+    terminal_tools: tuple[str, ...],
+    *,
+    tool_names: Sequence[str | None],
+    errored: Sequence[bool],
+    text: str,
+    source: Literal["text", "thought"],
+) -> bool:
+    """Return ``True`` when this round's tool calls complete the assistant's reply.
+
+    A round ends the turn when every one of its tool calls names a
+    ``terminal_tools`` entry (a literal name or an :mod:`fnmatch` glob —
+    the same grammar glow's ``tools=`` uses for a string entry), no
+    result is an error, and the round already produced non-empty
+    ``Text``.  The loop executes the tools and returns without another
+    inference.
+
+    Each condition carries its own weight:
+
+    * a call outside the terminal set means the model still wants data,
+      so the turn continues — under ``parallel_tools`` one round can
+      batch a render tool with a lookup, and that round is not terminal;
+    * ``name is None`` is a name TensorZero zeroed because the model
+      hallucinated it, which the model has to be told about;
+    * an error result must reach the model so it can fix the call;
+    * with no text the turn has said nothing, and ending it would leave
+      the run blank — :func:`~t0_agents.wire.stages.with_text_fallback`
+      would have to invent an apology in place of the answer.  Blank
+      counts as none, and deliberately by the belt's own rule
+      (``delta.strip()``): a model that emits ``"\n\n"`` before its
+      tool call has still said nothing, and terminating there is what
+      would put the retry line under the render.  A ``"thought"``
+      source is reasoning, not an answer, and does not count either;
+    * a round with no tool calls at all is not a terminal round — it is
+      an ordinary text turn, which the loops already end on their own.
+
+    An empty ``terminal_tools`` needs no case of its own: no name can
+    match an empty set of patterns, so nothing is ever terminal.
+    """
+    if source != "text" or not text.strip() or not tool_names:
+        return False
+    if any(errored):
+        return False
+    return all(
+        name is not None
+        and any(fnmatch.fnmatchcase(name, pattern) for pattern in terminal_tools)
+        for name in tool_names
+    )
 
 
 def build_agent_result(

@@ -38,10 +38,12 @@ from tensorzero.generated_types import (
 )
 
 from t0_agents.core.types import MemoryProvider
+from t0_agents.mcp.loop import run_agent
 from t0_agents.memory import TensorZeroMemory
 from t0_agents.memory.base import MemoryRecord
 from t0_agents.memory.tensorzero import _output_to_content_blocks
-from tests._fake_t0 import FakeListInferencesResponse, FakeT0
+from tests._fake_mcp import FakeMCPClient
+from tests._fake_t0 import FakeChatResponse, FakeListInferencesResponse, FakeT0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1263,6 +1265,57 @@ class TestHelperBranches:
         assert isinstance(answered, list)
         assert isinstance(answered[0], ToolCall)
         assert answered[0].raw_arguments == '{"q": "bond ETF"}'
+
+    async def test_a_terminal_ended_episode_replays_into_a_working_turn(
+        self,
+    ) -> None:
+        """A turn ended by ``terminal_tools`` stores the dangling shape.
+
+        Its render calls never produce stored results — there is no next
+        inference to carry them — so the episode looks exactly like the
+        2026-08-17 poisoned shape and leans on the same drop.  What this
+        pins is the composition: the reply survives, the calls go, and the
+        following turn runs over the reconstructed history.
+        """
+        ep = str(uuid4())
+        inf = _stored_chat(
+            user_messages=[_user_text_msg("show me my portfolio")],
+            episode_id=ep,
+            output=[
+                ContentBlockChatOutputText(text="Here is your portfolio."),
+                ContentBlockChatOutputToolCall(
+                    id="r1",
+                    raw_arguments="{}",
+                    raw_name="present_chart",
+                    arguments={},
+                    name="present_chart",
+                ),
+            ],
+        )
+        t0_memory = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        history = await _make_memory(t0_memory).load_history(ep)
+        assert history is not None
+        assert [m["role"] for m in history] == ["user", "assistant"]
+        replayed_reply = history[-1]["content"]
+        assert isinstance(replayed_reply, list)
+        assert [type(b).__name__ for b in replayed_reply] == ["Text"]
+        assert replayed_reply[0].text == "Here is your portfolio."
+
+        t0_next = FakeT0([FakeChatResponse(content=[Text(text="Anything else?")])])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0_next),
+            cast(Any, FakeMCPClient(tools=[])),
+            "and my goals?",
+            "agent",
+            episode_id=ep,
+            prior_messages=history,
+        )
+        assert result.response == "Anything else?"
+        sent = t0_next.calls[0]["input"]["messages"]
+        assert [m["role"] for m in sent] == ["user", "assistant", "user"]
 
     async def test_output_thought_block_stripped_on_replay(self) -> None:
         """Output-side ``Thought`` blocks are dropped on replay; ``Text``
