@@ -579,6 +579,7 @@ async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
         max_turns=40,
         tool_timeout=60.0,
         parallel_tools=True,
+        replay_thoughts=True,
         dryrun=True,
         tags={"team": "cs"},
         namespace="prod",
@@ -592,6 +593,7 @@ async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
     assert cfg.max_turns == 40
     assert cfg.tool_timeout == 60.0
     assert cfg.parallel_tools is True
+    assert cfg.replay_thoughts is True
     assert cfg.dryrun is True
     assert cfg.tags == {"team": "cs"}
     assert cfg.namespace == "prod"
@@ -612,6 +614,7 @@ async def test_omitted_knobs_keep_agentconfig_defaults(
     assert cfg.max_turns == 20  # AgentConfig default, not overridden
     assert cfg.tool_timeout == 30.0
     assert cfg.parallel_tools is False
+    assert cfg.replay_thoughts is False
     assert cfg.tags is None
     assert cfg.namespace is None
 

@@ -94,6 +94,7 @@ class StreamingAgentLoop:
         tool_timeout: float | None = 30.0,
         parallel_tools: bool = False,
         terminal_tools: tuple[str, ...] = (),
+        replay_thoughts: bool = False,
         dryrun: bool = False,
         tool_choice: ToolChoice | None = None,
         tags: dict[str, str] | None = None,
@@ -146,6 +147,15 @@ class StreamingAgentLoop:
         its :class:`ToolResultEvent` s with the ordinary terminal
         :class:`DoneEvent` — no further inference, and no synthesised
         text block (the round streamed its own).
+
+        ``replay_thoughts`` likewise mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        kwarg of the same name: this turn's ``Thought`` blocks stay in
+        the replay transcript instead of being stripped before the next
+        round's request, for providers that expect their own reasoning
+        back while the turn still carries tools.  The streamed
+        :class:`~t0_agents.core.events.ThoughtEvent` s are unaffected —
+        the flag governs what the next request carries, not what a
+        consumer sees.
 
         ``progress_sink`` receives a :class:`ToolProgressEvent` for every
         server-side progress notification a tool emits while executing.
@@ -274,6 +284,7 @@ class StreamingAgentLoop:
                 content_blocks=assistant_blocks,
                 response=synthetic,
                 on_inference=on_inference,
+                replay_thoughts=replay_thoughts,
             )
 
             logger.info(
@@ -405,12 +416,16 @@ class StreamingAgentLoop:
     ) -> list[Any]:
         """Reconstruct the assistant turn's full ``content`` list.
 
-        Returns the turn's ``Text``, ``Thought`` and ``ToolCall`` blocks — the
+        Returns the turn's ``Thought``, ``Text`` and ``ToolCall`` blocks — the
         complete shape read locally by the final-answer / thought fallback
-        (:func:`_final_text`) and by the ``on_inference`` cost mirror. The
-        caller strips ``Thought`` before appending to the replay ``messages``
-        (parity with ``run_agent``: TensorZero rejects input thought blocks for
-        thought-less providers such as groq).
+        (:func:`_final_text`) and by the ``on_inference`` cost mirror.
+
+        Reasoning precedes the answer, which is the order the
+        non-streaming path receives whole from the gateway.  Every local
+        reader partitions by type and is indifferent to it, but a turn
+        replaying its reasoning (``replay_thoughts``) puts this list on
+        the wire, and the two loops must not describe the same turn
+        differently.
 
         The rebuild mirrors the two zeroings TensorZero applies on the
         non-streaming path but not on chunks: a name outside
@@ -425,10 +440,18 @@ class StreamingAgentLoop:
         :func:`~t0_agents.wire.stages.project` puts on ``arguments_json``.
         """
         blocks: list[Any] = []
+        for _tid, thought in assembler.thought_blocks.items():
+            meta = assembler.thought_metadata.get(_tid, {})
+            blocks.append(
+                Thought(
+                    type="thought",
+                    text=thought,
+                    signature=meta.get("signature"),
+                    provider_type=meta.get("provider_type"),
+                )
+            )
         for _tid, text in assembler.text_blocks.items():
             blocks.append(Text(type="text", text=text))
-        for _tid, thought in assembler.thought_blocks.items():
-            blocks.append(Thought(type="thought", text=thought))
         for tc in tool_calls:
             name = tc.name if tc.name in known_tool_names else None
             invalid_raw = assembler.invalid_tool_args.get(tc.id)

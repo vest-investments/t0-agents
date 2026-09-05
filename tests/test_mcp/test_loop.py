@@ -610,6 +610,69 @@ class TestRunAgent:
         assert assistant["role"] == "assistant"
         assert assistant["content"] == [tc]
 
+    async def test_replay_thoughts_keeps_the_thought_on_the_replayed_turn(self) -> None:
+        """With ``replay_thoughts=True`` round 2 receives round 1's reasoning.
+
+        The provider contract this exists for: an API that expects the
+        previous rounds' reasoning back while the turn still carries
+        tools.  The ``ToolCall`` and the answer are unchanged — only the
+        ``Thought`` moves.
+        """
+        thought = Thought(text="let me add these")
+        tc = _tool_call(name="add", call_id="c1")
+        t0 = FakeT0([
+            FakeChatResponse(content=[thought, tc]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("add")],
+            call_results={"add": _make_result(data=5)},
+        )
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "compute 2+3",
+            "agent",
+            replay_thoughts=True,
+        )
+        assert result.response == "done"
+        assert result.turns == 2
+
+        assistant = t0.calls[1]["input"]["messages"][1]
+        assert assistant["role"] == "assistant"
+        assert assistant["content"] == [thought, tc]
+
+    async def test_replay_thoughts_composes_with_parallel_tools(self) -> None:
+        """The two knobs are independent: a parallel round still replays.
+
+        ``parallel_tools`` changes how the round's calls are dispatched;
+        ``replay_thoughts`` changes what the next round is told. Neither
+        reads the other.
+        """
+        thought = Thought(text="both at once")
+        tc_a = _tool_call(name="add", call_id="a", arguments={"a": 1, "b": 2})
+        tc_b = _tool_call(name="greet", call_id="b", arguments={"name": "x"})
+        t0 = FakeT0([
+            FakeChatResponse(content=[thought, tc_a, tc_b]),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("add"), _mcp_tool("greet")],
+            call_results={"add": _make_result(data=3), "greet": _make_result(data="hi")},
+        )
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "do both",
+            "agent",
+            parallel_tools=True,
+            replay_thoughts=True,
+        )
+        assert result.response == "done"
+
+        assistant = t0.calls[1]["input"]["messages"][1]
+        assert assistant["content"] == [thought, tc_a, tc_b]
+
     async def test_two_tool_calls_collapse_into_one_user_message(self) -> None:
         """N tool calls in one response → ONE Message(role="user")
         carrying N ToolResults. Not N separate user messages."""

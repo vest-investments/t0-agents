@@ -13,6 +13,8 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from fastmcp.client.client import CallToolResult
+from mcp.types import Tool as MCPTool
 from tensorzero import (
     AsyncTensorZeroGateway,
     InferenceFilterAnd,
@@ -68,6 +70,14 @@ def _assistant_text_msg(text: str) -> StoredInputMessage:
     return StoredInputMessage(
         role="assistant",
         content=[StoredInputMessageContentText(text=text)],
+    )
+
+
+def _lookup_tool() -> MCPTool:
+    return MCPTool(
+        name="lookup",
+        description="lookup tool",
+        inputSchema={"type": "object", "properties": {}},
     )
 
 
@@ -1316,6 +1326,75 @@ class TestHelperBranches:
         assert result.response == "Anything else?"
         sent = t0_next.calls[0]["input"]["messages"]
         assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+
+    async def test_replay_thoughts_is_scoped_to_the_current_turn(self) -> None:
+        """``replay_thoughts=True`` does not reach the cross-turn replay path.
+
+        One request carries both halves, which is what makes this
+        discriminating: the hydrated turn arrives stripped (the prompt
+        cannot be allowed to grow without bound as an episode deepens)
+        while this turn's own round keeps its reasoning. A flag wired
+        into ``load_history`` would show a ``Thought`` in the first
+        assistant message; a flag ignored by the loop would show none in
+        the second.
+        """
+        ep = str(uuid4())
+        inf = _stored_chat(
+            user_messages=[_user_text_msg("what should I buy?")],
+            episode_id=ep,
+        )
+        object.__setattr__(
+            inf,
+            "output",
+            [
+                _StoredOutputThought(text="reasoning from the earlier turn"),
+                ContentBlockChatOutputText(text="Consider a broad index fund."),
+            ],
+        )
+        t0_memory = FakeT0(
+            [],
+            list_inferences_responses=[FakeListInferencesResponse(inferences=[inf])],
+        )
+        history = await _make_memory(t0_memory).load_history(ep)
+        assert history is not None
+
+        lookup_result = {
+            "lookup": CallToolResult(
+                content=[], structured_content=None, meta=None, data="ok"
+            )
+        }
+        this_turns_thought = Thought(text="reasoning inside this turn")
+        call = ToolCall(
+            id="c1",
+            raw_arguments="{}",
+            raw_name="lookup",
+            arguments={},
+            name="lookup",
+            type="tool_call",
+        )
+        t0_next = FakeT0([
+            FakeChatResponse(content=[this_turns_thought, call]),
+            FakeChatResponse(content=[Text(text="Here you go.")]),
+        ])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0_next),
+            cast(Any, FakeMCPClient(tools=[_lookup_tool()], call_results=lookup_result)),
+            "and now?",
+            "agent",
+            episode_id=ep,
+            prior_messages=history,
+            replay_thoughts=True,
+        )
+        assert result.response == "Here you go."
+
+        sent = t0_next.calls[1]["input"]["messages"]
+        assistants = [m for m in sent if m["role"] == "assistant"]
+        assert len(assistants) == 2
+
+        hydrated, current = assistants
+        assert [type(b).__name__ for b in hydrated["content"]] == ["Text"]
+        assert hydrated["content"][0].text == "Consider a broad index fund."
+        assert current["content"] == [this_turns_thought, call]
 
     async def test_output_thought_block_stripped_on_replay(self) -> None:
         """Output-side ``Thought`` blocks are dropped on replay; ``Text``

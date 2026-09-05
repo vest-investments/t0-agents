@@ -58,6 +58,7 @@ class TurnStreamAssembler:
         self._text: dict[str, str] = {}
         self._tool: dict[str, dict[str, str]] = {}
         self._thought: dict[str, str] = {}
+        self._thought_meta: dict[str, dict[str, str | None]] = {}
         self._invalid_args: dict[str, str] = {}
 
     @property
@@ -73,6 +74,18 @@ class TurnStreamAssembler:
     def thought_blocks(self) -> dict[str, str]:
         """Accumulated reasoning text, keyed by content-block ``id``."""
         return self._thought
+
+    @property
+    def thought_metadata(self) -> dict[str, dict[str, str | None]]:
+        """``signature`` / ``provider_type`` per reasoning block ``id``.
+
+        Carried separately from the folded text because a provider may
+        attach them to any chunk of the block, commonly the last.  A
+        provider that verifies its own reasoning on replay rejects a
+        block whose signature is missing, so this survives the rebuild
+        the same way the text does.
+        """
+        return self._thought_meta
 
     @property
     def tool_calls(self) -> dict[str, dict[str, str]]:
@@ -161,6 +174,11 @@ class TurnStreamAssembler:
             if not delta:
                 return
             self._thought[block.id] = self._thought.get(block.id, "") + delta
+            meta = self._thought_meta.setdefault(
+                block.id, {"signature": None, "provider_type": None}
+            )
+            meta["signature"] = block.signature or meta["signature"]
+            meta["provider_type"] = block.provider_type or meta["provider_type"]
             yield ThoughtDeltaEvent(id=block.id, delta=delta)
             return
         if isinstance(block, UnknownChunk):

@@ -42,6 +42,8 @@ USER_MESSAGE = "Add 1 and 2, then greet x."
 FUNCTION_NAME = "parity_agent"
 RECOVERABLE_ERROR_TEXT = "tool 'bogus' not in request.tools"
 FINAL_ANSWER = "The sum is 3 and the greeting was sent."
+THOUGHT_SIGNATURE = "sig-th-1"
+THOUGHT_PROVIDER = "test-provider"
 
 TOOLS = [
     MCPTool(
@@ -87,7 +89,12 @@ def make_nonstreaming_responses() -> list[Any]:
     return [
         FakeChatResponse(
             content=[
-                Thought(type="thought", text="I should add first."),
+                Thought(
+                    type="thought",
+                    text="I should add first.",
+                    signature=THOUGHT_SIGNATURE,
+                    provider_type=THOUGHT_PROVIDER,
+                ),
                 Text(type="text", text="Working on it."),
                 ToolCall(
                     type="tool_call",
@@ -123,7 +130,14 @@ def make_streaming_responses() -> list[Any]:
     return [
         [
             chat_chunk(
-                [thought_chunk("I should add first.", block_id="th-1")],
+                [
+                    thought_chunk(
+                        "I should add first.",
+                        block_id="th-1",
+                        signature=THOUGHT_SIGNATURE,
+                        provider_type=THOUGHT_PROVIDER,
+                    )
+                ],
                 episode_id=EPISODE_ID,
                 inference_id=INFERENCE_ID_TURN_1,
             ),
@@ -209,7 +223,12 @@ def block_to_dict(block: Any) -> dict[str, Any]:
     if isinstance(block, Text):
         return {"kind": "text", "text": block.text}
     if isinstance(block, Thought):
-        return {"kind": "thought", "text": block.text}
+        return {
+            "kind": "thought",
+            "text": block.text,
+            "signature": block.signature,
+            "provider_type": block.provider_type,
+        }
     if isinstance(block, ToolCall):
         return {
             "kind": "tool_call",

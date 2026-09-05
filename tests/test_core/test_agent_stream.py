@@ -8,7 +8,7 @@ import pytest
 from fastmcp.client.client import CallToolResult
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
-from tensorzero import AsyncTensorZeroGateway
+from tensorzero import AsyncTensorZeroGateway, Thought
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
@@ -418,6 +418,51 @@ async def test_agent_stream_system_with_system_template_strategy_rejected() -> N
         async for _ in agent.invoke("hi", system="raw").events():
             pass
     assert fake_t0.calls == []
+
+
+async def test_agent_stream_replays_thoughts_when_configured() -> None:
+    """AgentConfig.replay_thoughts reaches the streaming loop, not just run_agent."""
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([
+                    thought_chunk(text="weighing it up", block_id="th1"),
+                    tool_call_chunk(
+                        raw_name="add", raw_arguments='{"a":1,"b":2}', block_id="c1"
+                    ),
+                ]),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="t1")]),
+                final_chunk(),
+            ],
+        ]
+    )
+    client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"add": _tool_result("3")},
+    )
+    agent = Agent(
+        AgentConfig(name="a", function_name="agent", replay_thoughts=True),
+        t0=cast(AsyncTensorZeroGateway, fake_t0),
+        tool_provider=cast(Any, client),
+    )
+
+    await _drain_stream(agent, "What is 1+2?")
+
+    assistant = next(
+        m for m in fake_t0.calls[1]["input"]["messages"] if m["role"] == "assistant"
+    )
+    thoughts = [b for b in assistant["content"] if isinstance(b, Thought)]
+    assert len(thoughts) == 1
+    assert thoughts[0].text == "weighing it up"
 
 
 async def test_agent_stream_ends_on_a_terminal_tool_round() -> None:

@@ -399,6 +399,7 @@ class App:
         tool_timeout: float | None = _UNSET,
         parallel_tools: bool = _UNSET,
         terminal_tools: list[str] | tuple[str, ...] = _UNSET,
+        replay_thoughts: bool = _UNSET,
         dryrun: bool = _UNSET,
         tool_choice: ToolChoice | None = _UNSET,
         tags: dict[str, str] | None = _UNSET,
@@ -425,7 +426,8 @@ class App:
         1:1 onto the corresponding
         :class:`~t0_agents.core.config.AgentConfig` field (``model``,
         ``variant``, ``params``, ``cache``, ``max_turns``,
-        ``tool_timeout``, ``parallel_tools``, ``terminal_tools``, ``dryrun``,
+        ``tool_timeout``, ``parallel_tools``, ``terminal_tools``,
+        ``replay_thoughts``, ``dryrun``,
         ``tool_choice``, ``tags``, ``namespace``, ``memory``,
         ``memory_strategy``, ``middleware``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
@@ -448,6 +450,12 @@ class App:
         ``tools=[]`` is explicitly toolless.  Patterns matching no live
         tool warn at :meth:`build`.  Sub-agent ``<name>_ask`` tools are
         never filtered.
+
+        ``replay_thoughts=True`` keeps each round's ``Thought`` blocks in
+        the transcript the next round of the *same* turn is built from.
+        Declare it when the agent's provider expects its own reasoning
+        back while the turn still carries tools; the default strips, and
+        earlier turns are stripped either way.
 
         ``terminal_tools`` names the tools whose execution *is* the
         reply — a render, a UI side effect, anything whose payload the
@@ -476,6 +484,7 @@ class App:
             "tool_timeout": tool_timeout,
             "parallel_tools": parallel_tools,
             "terminal_tools": terminal_tools,
+            "replay_thoughts": replay_thoughts,
             "dryrun": dryrun,
             "tool_choice": tool_choice,
             "tags": tags,

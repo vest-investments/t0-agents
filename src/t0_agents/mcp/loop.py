@@ -361,6 +361,7 @@ async def run_agent(
     tool_timeout: float | None = 30.0,
     parallel_tools: bool = False,
     terminal_tools: tuple[str, ...] = (),
+    replay_thoughts: bool = False,
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
     tags: dict[str, str] | None = None,
@@ -420,6 +421,14 @@ async def run_agent(
             after the dispatch instead of running another inference —
             see :func:`~t0_agents.core.turn_engine.is_terminal_round`.
             The default ``()`` never ends a round early.
+        replay_thoughts: Keep this turn's ``Thought`` blocks in the
+            replay transcript instead of stripping them before the next
+            round's request.  For providers that expect the previous
+            rounds' reasoning back while the turn still carries tools —
+            see
+            :func:`~t0_agents.core.turn_engine.complete_assistant_turn`.
+            Earlier turns are unaffected; they are stripped on the
+            cross-turn replay path either way.
         dryrun: If ``True``, forwarded to every ``t0.inference(dryrun=True)``
             call so integration tests don't pollute ClickHouse. Defaults to
             ``False`` for production usage.
@@ -573,6 +582,7 @@ async def run_agent(
             content_blocks=response.content,
             response=response,
             on_inference=on_inference,
+            replay_thoughts=replay_thoughts,
         )
 
         # Content-type breakdown per turn.
