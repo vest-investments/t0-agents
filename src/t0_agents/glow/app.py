@@ -151,6 +151,22 @@ def _match_tool_entry(
     )
 
 
+def _warn_dead_pattern(
+    agent_name: str, kwarg: str, label: str, live_names: set[str]
+) -> None:
+    """Warn that one ``tools=`` / ``terminal_tools=`` entry selects nothing.
+
+    ``stacklevel=3`` reports the caller of the resolver rather than the
+    resolver itself — the frame the two call sites blamed before they
+    shared this.
+    """
+    warnings.warn(
+        f"@app.agent({agent_name!r}) {kwarg}= entry {label!r} matched no "
+        f"available tool; available: {sorted(live_names)!r}",
+        stacklevel=3,
+    )
+
+
 def _resolve_tool_filter(
     agent_name: str, tools: list[Any], live_names: set[str]
 ) -> set[str]:
@@ -167,11 +183,8 @@ def _resolve_tool_filter(
     for entry in tools:
         matched = _match_tool_entry(agent_name, entry, live_names)
         if not matched:
-            warnings.warn(
-                f"@app.agent({agent_name!r}) tools= entry "
-                f"{_describe_tool_entry(entry)!r} matched no available tool; "
-                f"available: {sorted(live_names)!r}",
-                stacklevel=2,
+            _warn_dead_pattern(
+                agent_name, "tools", _describe_tool_entry(entry), live_names
             )
         allow |= matched
     return allow
@@ -191,12 +204,7 @@ def _warn_unmatched_terminal_tools(
     """
     for pattern in terminal_tools:
         if not any(fnmatch.fnmatchcase(name, pattern) for name in live_names):
-            warnings.warn(
-                f"@app.agent({agent_name!r}) terminal_tools= entry "
-                f"{pattern!r} matched no available tool; "
-                f"available: {sorted(live_names)!r}",
-                stacklevel=2,
-            )
+            _warn_dead_pattern(agent_name, "terminal_tools", pattern, live_names)
 
 
 class App:
