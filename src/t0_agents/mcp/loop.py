@@ -44,6 +44,7 @@ from t0_agents.core.turn_engine import (
     complete_assistant_turn,
     corrective_retry,
     is_recoverable,
+    is_terminal_round,
     mine_final_text,
     raise_max_turns,
     raise_missing_tool_provider,
@@ -359,6 +360,7 @@ async def run_agent(
     max_turns: int = 20,
     tool_timeout: float | None = 30.0,
     parallel_tools: bool = False,
+    terminal_tools: tuple[str, ...] = (),
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
     tags: dict[str, str] | None = None,
@@ -412,6 +414,12 @@ async def run_agent(
             applies to foreground execution.
         parallel_tools: If ``True``, dispatch tool calls via ``asyncio.gather``
             (``execute_tool_calls_parallel``); otherwise sequential.
+        terminal_tools: Tool names or :mod:`fnmatch` globs whose execution
+            completes the assistant's reply.  A round calling only these,
+            with no errored result and text of its own, ends the loop
+            after the dispatch instead of running another inference —
+            see :func:`~t0_agents.core.turn_engine.is_terminal_round`.
+            The default ``()`` never ends a round early.
         dryrun: If ``True``, forwarded to every ``t0.inference(dryrun=True)``
             call so integration tests don't pollute ClickHouse. Defaults to
             ``False`` for production usage.
@@ -616,5 +624,22 @@ async def run_agent(
         tool_results = [outcome.result for outcome in outcomes]
         # N tool results MUST go into a single user message, not N.
         state.messages.append(Message(role="user", content=tool_results))
+
+        text, response_source = mine_final_text(response.content)
+        if is_terminal_round(
+            terminal_tools,
+            tool_names=[tc.name for tc in tool_calls_in_turn],
+            errored=[outcome.is_error for outcome in outcomes],
+            text=text,
+            source=response_source,
+        ):
+            logger.info(
+                "Agent loop completed on a terminal tool round: "
+                "turns=%d, tools=%d, episode_id=%s",
+                turn + 1, len(tool_calls_in_turn), state.episode_id,
+            )
+            return build_agent_result(
+                text, response_source, state=state, turns=turn + 1
+            )
 
     raise_max_turns(max_turns, state.episode_id)

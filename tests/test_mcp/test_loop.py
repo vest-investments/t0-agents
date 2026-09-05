@@ -1029,3 +1029,162 @@ class TestRunAgentModelRouting:
                 system_arguments={"k": "v"},
             )
         assert t0.calls == []
+
+
+# --- TestTerminalTools ------------------------------------------------------
+
+
+_PRESENT = ("present_*",)
+
+
+def _render_round(text: str | None = "Here is your portfolio.") -> list[Any]:
+    """A round that renders a chart, optionally introducing it with text."""
+    blocks: list[Any] = []
+    if text is not None:
+        blocks.append(Text(text=text))
+    blocks.append(
+        _tool_call(name="present_chart", raw_name="present_chart", call_id="r1")
+    )
+    return blocks
+
+
+def _render_client(*, is_error: bool = False) -> FakeMCPClient:
+    return FakeMCPClient(
+        tools=[_mcp_tool("present_chart"), _mcp_tool("add")],
+        call_results={
+            "present_chart": _make_result(data="rendered", is_error=is_error),
+            "add": _make_result(data=5),
+        },
+    )
+
+
+class TestTerminalTools:
+    async def test_terminal_round_ends_the_turn_after_one_inference(self) -> None:
+        """Text + a terminal render: the tool runs, then the loop returns."""
+        t0 = FakeT0([FakeChatResponse(content=_render_round())])
+        client = _render_client()
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "show me my portfolio",
+            "agent",
+            terminal_tools=_PRESENT,
+        )
+        assert result.response == "Here is your portfolio."
+        assert result.response_source == "text"
+        assert result.turns == 1
+        assert len(t0.calls) == 1
+        assert [name for name, _, _ in client.call_tool_invocations] == [
+            "present_chart"
+        ]
+
+    async def test_terminal_round_batched_in_parallel_ends_the_turn(self) -> None:
+        """Two render calls in one round — the shape parallel_tools produces."""
+        t0 = FakeT0([
+            FakeChatResponse(
+                content=[
+                    Text(text="Here are your options."),
+                    _tool_call(
+                        name="present_chart", raw_name="present_chart", call_id="r1"
+                    ),
+                    _tool_call(
+                        name="present_quick_replies",
+                        raw_name="present_quick_replies",
+                        call_id="r2",
+                    ),
+                ]
+            )
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("present_chart"), _mcp_tool("present_quick_replies")],
+            call_results={
+                "present_chart": _make_result(data="rendered"),
+                "present_quick_replies": _make_result(data="pills"),
+            },
+        )
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "what should I do?",
+            "agent",
+            parallel_tools=True,
+            terminal_tools=_PRESENT,
+        )
+        assert result.response == "Here are your options."
+        assert result.turns == 1
+        assert len(t0.calls) == 1
+
+    async def test_render_without_text_runs_another_inference(self) -> None:
+        """No text yet — the turn has said nothing, so it must continue."""
+        t0 = FakeT0([
+            FakeChatResponse(content=_render_round(text=None)),
+            FakeChatResponse(content=[Text(text="there it is")]),
+        ])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], _render_client()),
+            "show me my portfolio",
+            "agent",
+            terminal_tools=_PRESENT,
+        )
+        assert result.response == "there it is"
+        assert result.turns == 2
+        assert len(t0.calls) == 2
+
+    async def test_errored_render_runs_another_inference(self) -> None:
+        """A rejected render must reach the model so it can fix the spec."""
+        t0 = FakeT0([
+            FakeChatResponse(content=_render_round()),
+            FakeChatResponse(content=[Text(text="let me try that again")]),
+        ])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], _render_client(is_error=True)),
+            "show me my portfolio",
+            "agent",
+            terminal_tools=_PRESENT,
+        )
+        assert result.response == "let me try that again"
+        assert result.turns == 2
+        assert len(t0.calls) == 2
+
+    async def test_round_batching_a_data_tool_is_not_terminal(self) -> None:
+        """The model still wants data, so the render is not the last word."""
+        t0 = FakeT0([
+            FakeChatResponse(
+                content=[
+                    Text(text="Here is your portfolio."),
+                    _tool_call(
+                        name="present_chart", raw_name="present_chart", call_id="r1"
+                    ),
+                    _tool_call(name="add", raw_name="add", call_id="r2"),
+                ]
+            ),
+            FakeChatResponse(content=[Text(text="and the total is 5")]),
+        ])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], _render_client()),
+            "show me my portfolio and add 2+3",
+            "agent",
+            terminal_tools=_PRESENT,
+        )
+        assert result.response == "and the total is 5"
+        assert result.turns == 2
+        assert len(t0.calls) == 2
+
+    async def test_default_leaves_the_render_round_running(self) -> None:
+        """Without terminal_tools the same round behaves exactly as before."""
+        t0 = FakeT0([
+            FakeChatResponse(content=_render_round()),
+            FakeChatResponse(content=[Text(text="anything else?")]),
+        ])
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], _render_client()),
+            "show me my portfolio",
+            "agent",
+        )
+        assert result.response == "anything else?"
+        assert result.turns == 2
+        assert len(t0.calls) == 2
