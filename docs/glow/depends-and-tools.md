@@ -103,6 +103,28 @@ MCP server is mounted for others — vest-ai, for example, mounts its
 order-placement server but omits those tools from the assistant agent's
 `tools=`, so they can never be called.
 
+## Ending a turn on its tools — `terminal_tools=`
+
+Some tool calls *are* the reply — a render, a hand-off, anything the model
+has nothing to add to.  By default the loop feeds their results back and
+spends a whole inference on a closing line.  `terminal_tools=` names them,
+and a round calling only those ends the turn right after the dispatch:
+
+```python
+@app.agent("advisor", terminal_tools=["present_*"])
+async def advisor(q: str) -> str:
+    """Draws the answer; the drawing is the answer."""
+```
+
+Entries are literal tool names and glob strings, and a pattern matching no
+live tool warns at `app.build()` exactly as `tools=` does.
+
+Three rounds deliberately keep going, because in each the model still has
+work left: one with **no text of its own** (ending it would leave the run
+blank), one where **any result came back an error** (the model has to see
+it to fix the call), and one that **batches a terminal tool with a data
+lookup** (it asked for the data because it wants it).
+
 ## When to use which
 
 | Decorator     | Parameter shape                                       | What `Depends` does                              |
@@ -112,6 +134,7 @@ order-placement server but omits those tools from the assistant agent's
 | `@app.agent`  | `research: Agent = Depends(researcher)`               | installs `researcher` as a sub-agent             |
 | `@app.agent`  | `db: DB = Depends(get_db)` (value injection)          | **error** — raises `ConfigurationError`          |
 | `@app.agent`  | `tools=[fn, Server, "glob_*"]`                        | restricts the agent to an allow-list of tools    |
+| `@app.agent`  | `terminal_tools=["present_*"]`                        | ends the turn on a round of only those tools     |
 
 ## Runnable demos
 

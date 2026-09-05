@@ -197,6 +197,7 @@ Frozen-shape dataclass (slots, no inheritance). Validation runs in `__post_init_
 | `max_turns` | `int` | `20` | Hard cap on inference turns before `MaxTurnsExceededError`. Must be `> 0`. |
 | `tool_timeout` | `float \| None` | `30.0` | Per-tool-call timeout in seconds. `None` resolves to the 30-second default. Must be positive when not `None`. |
 | `parallel_tools` | `bool` | `False` | When `True`, tool calls in the same turn dispatch concurrently via `asyncio.gather`. |
+| `terminal_tools` | `tuple[str, ...]` | `()` | Tool names or globs whose execution *is* the reply. A round calling only these, with no errored result and text of its own, ends the turn without a further inference. Entries must be non-empty. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(...)` call (skips logging and billing). |
 | `tool_choice` | `ToolChoice \| None` | `None` | Forces tool-choice behaviour per TensorZero's [inference API](https://www.tensorzero.com/docs/gateway/api-reference/inference). |
 | `tags` | `dict[str, str] \| None` | `None` | Observability tags attached to every inference. See [observability.md](observability.md). |

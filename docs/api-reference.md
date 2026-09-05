@@ -95,6 +95,7 @@ async def run_agent(
     max_turns: int = 20,
     tool_timeout: float | None = 30.0,
     parallel_tools: bool = False,
+    terminal_tools: tuple[str, ...] = (),
     dryrun: bool = False,
     tool_choice: ToolChoice | None = None,
     system_arguments: dict[str, Any] | None = None,
@@ -115,6 +116,7 @@ async def run_agent(
 | `max_turns` | `int` | `20` | Maximum inference turns before aborting with `MaxTurnsExceededError`. |
 | `tool_timeout` | `float` | `30.0` | Per-tool-call timeout in seconds, forwarded to `Client.call_tool(timeout=...)`. Covers the **entire** `call_tool()` duration including any [elicitation](elicitation.md) wait time. When using elicitation-enabled tools, set to `None` (no timeout) or a generous value (e.g., `300.0`). Only applies to foreground execution. |
 | `parallel_tools` | `bool` | `False` | If `True`, dispatches tool calls concurrently via `asyncio.gather`. Otherwise sequential. |
+| `terminal_tools` | `tuple[str, ...]` | `()` | Tool names or `fnmatch` globs whose execution completes the assistant's reply. A round calling only these, with no errored result and text of its own, returns after the dispatch instead of running another inference. The default never ends a round early. |
 | `dryrun` | `bool` | `False` | Forwarded to every `t0.inference(dryrun=True)` call. Prevents writes to ClickHouse. |
 | `tool_choice` | `ToolChoice \| None` | `None` | Tool-choice directive forwarded to every inference call. See `ToolChoice` below. |
 | `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.invoke` / `Run.events` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
