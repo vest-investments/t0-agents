@@ -307,6 +307,7 @@ def _make_decorator(
             f"name, pass replace=True (the REPL re-decoration affordance), "
             f"or remove the prior registration via app.remove_agent()."
         )
+    tool_specs = _tool_specs(f"@app.agent({name!r})", tools)
 
     def decorator(fn: Callable[P, Awaitable[R]]) -> _AgentWrapper[P, R]:
         # Decoration-time wiring.  Any failure raises eagerly so the
@@ -372,7 +373,7 @@ def _make_decorator(
             sub_agent_specs=sub_agent_specs,
             guardrails=guardrails,
             config_overrides=dict(config_overrides or {}),
-            tools=_tool_specs(f"@app.agent({name!r})", tools),
+            tools=tool_specs,
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)

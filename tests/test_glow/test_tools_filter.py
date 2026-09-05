@@ -96,9 +96,10 @@ def test_bare_string_tools_raises_instead_of_widening() -> None:
         _tool_specs("@app.agent('ag')", "get_*")
 
 
-def test_tool_specs_passes_a_real_list_through() -> None:
+def test_tool_specs_normalises_any_iterable_to_a_list() -> None:
     entries = ["get_*", "place_order"]
     assert _tool_specs("@app.agent('ag')", entries) == entries
+    assert _tool_specs("@app.agent('ag')", tuple(entries)) == entries
     assert _tool_specs("@app.agent('ag')", None) is None
     assert _tool_specs("@app.agent('ag')", []) == []
 
@@ -204,10 +205,7 @@ def test_bare_string_at_the_decorator_fails_on_declaration() -> None:
         return "w"
 
     with pytest.raises(ConfigurationError, match="bare string"):
-
-        @app.agent("typo", tools="weath*")  # type: ignore[arg-type]
-        async def typo(q: str) -> str:  # type: ignore[empty-body]
-            """Meant to see only the weather tool."""
+        app.agent("typo", tools="weath*")  # type: ignore[arg-type]
 
 
 async def test_sub_agent_ask_survives_the_filter() -> None:
