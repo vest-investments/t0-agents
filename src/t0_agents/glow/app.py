@@ -178,6 +178,11 @@ def _resolve_tool_filter(
     matching nothing emits a :class:`UserWarning` naming the available tools
     (the dead-pattern diagnostic).  An empty ``tools`` yields an empty set —
     an intentionally toolless agent, with no warning.
+
+    Entries reach here already normalised by
+    :func:`~t0_agents.glow.decorators._tool_specs`, which is where a bare
+    string is refused — by this point one would already have been split
+    into its characters.
     """
     allow: set[str] = set()
     for entry in tools:

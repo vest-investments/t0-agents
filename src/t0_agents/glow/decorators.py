@@ -249,9 +249,31 @@ class _AgentWrapper(Generic[P, R]):
                 auth=_normalize_credential_overlays(auth),
                 elicitation=elicitation_handler,
                 memory=memory,
-                tools=list(tools) if tools is not None else None,
+                tools=_tool_specs(
+                    f"conversation on agent {self._spec_ref.name!r}", tools
+                ),
             ),
         )
+
+
+def _tool_specs(owner: str, tools: Any) -> list[Any] | None:
+    """Normalise a ``tools=`` argument, refusing a bare string.
+
+    ``str`` is itself a sequence, so ``tools="customers_get_*"`` satisfies
+    the annotation at runtime and then ``list()`` splits it into its
+    characters — among them ``*``, which matches every live tool.  A
+    filter written to narrow would silently widen, and ``tools=`` is the
+    control that keeps a dangerous tool off an agent whose server is
+    mounted for others, so this cannot be allowed to pass quietly.
+    """
+    if isinstance(tools, str):
+        raise ConfigurationError(
+            f"tools= for {owner} takes a list of specs, not the bare string "
+            f"{tools!r}. A string iterates as its characters, and a '*' among "
+            f"them matches every tool — widening the filter instead of "
+            f"narrowing it. Pass [{tools!r}]."
+        )
+    return list(tools) if tools is not None else None
 
 
 def _make_decorator(
@@ -285,6 +307,7 @@ def _make_decorator(
             f"name, pass replace=True (the REPL re-decoration affordance), "
             f"or remove the prior registration via app.remove_agent()."
         )
+    tool_specs = _tool_specs(f"@app.agent({name!r})", tools)
 
     def decorator(fn: Callable[P, Awaitable[R]]) -> _AgentWrapper[P, R]:
         # Decoration-time wiring.  Any failure raises eagerly so the
@@ -350,7 +373,7 @@ def _make_decorator(
             sub_agent_specs=sub_agent_specs,
             guardrails=guardrails,
             config_overrides=dict(config_overrides or {}),
-            tools=list(tools) if tools is not None else None,
+            tools=tool_specs,
         )
         app._agent_registry[name] = spec
         return _AgentWrapper[P, R](app, spec)

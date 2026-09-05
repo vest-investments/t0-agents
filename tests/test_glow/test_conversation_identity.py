@@ -497,6 +497,14 @@ class TestConversationToolScoping:
             with pytest.warns(UserWarning, match="matched no available tool"):
                 await conv._prepare_send()
 
+    async def test_bare_string_tools_fails_loud(self) -> None:
+        """The conversation leg normalises through the same helper, so a
+        narrowing override cannot silently widen either."""
+        app, chat = self._app_with_tools()
+        async with app.lifespan():
+            with pytest.raises(ConfigurationError, match="bare string"):
+                chat.conversation(tools="svc_read_*")  # type: ignore[arg-type]
+
     async def test_tools_without_mcp_surface_fails_loud(self) -> None:
         app = App(t0=_fake_t0())
 
