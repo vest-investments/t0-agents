@@ -261,3 +261,28 @@ class TestAgentParity:
         assert run_result.response_source == "thought"
         assert done.result.response == run_result.response
         assert done.result.response_source == run_result.response_source
+
+
+    async def test_terminal_tools(self) -> None:
+        """Mirrors test_terminal_round_ends_the_turn_after_one_inference."""
+        t0 = FakeT0([
+            FakeChatResponse(
+                content=[
+                    Text(text="Here is your portfolio."),
+                    _tool_call(
+                        name="present_chart", raw_name="present_chart", call_id="r1"
+                    ),
+                ]
+            )
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("present_chart")],
+            call_results={"present_chart": _make_result(data="rendered")},
+        )
+        agent = _agent(t0, client, terminal_tools=("present_*",))
+
+        result = await agent.invoke("show me my portfolio")
+
+        assert result.response == "Here is your portfolio."
+        assert result.turns == 1
+        assert len(t0.calls) == 1

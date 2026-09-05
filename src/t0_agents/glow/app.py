@@ -177,6 +177,28 @@ def _resolve_tool_filter(
     return allow
 
 
+def _warn_unmatched_terminal_tools(
+    agent_name: str, terminal_tools: tuple[str, ...], live_names: set[str]
+) -> None:
+    """Warn for each ``terminal_tools=`` pattern selecting no live tool.
+
+    The ``tools=`` diagnostic of :func:`_resolve_tool_filter`, for the
+    narrower grammar ``terminal_tools`` accepts (literal names and globs
+    only — :class:`AgentConfig` lives in ``core`` and cannot name an
+    :class:`MCPServer`).  Patterns are matched, never substituted: the
+    inventory carries a TTL and ``tools/list_changed`` invalidation, so a
+    name set frozen at build would go stale where a glob keeps matching.
+    """
+    for pattern in terminal_tools:
+        if not any(fnmatch.fnmatchcase(name, pattern) for name in live_names):
+            warnings.warn(
+                f"@app.agent({agent_name!r}) terminal_tools= entry "
+                f"{pattern!r} matched no available tool; "
+                f"available: {sorted(live_names)!r}",
+                stacklevel=2,
+            )
+
+
 class App:
     """Glow application — registry + lifecycle for ``@app.agent`` decorators.
 
@@ -363,6 +385,7 @@ class App:
         max_turns: int = _UNSET,
         tool_timeout: float | None = _UNSET,
         parallel_tools: bool = _UNSET,
+        terminal_tools: Sequence[str] = _UNSET,
         dryrun: bool = _UNSET,
         tool_choice: ToolChoice | None = _UNSET,
         tags: dict[str, str] | None = _UNSET,
@@ -389,7 +412,7 @@ class App:
         1:1 onto the corresponding
         :class:`~t0_agents.core.config.AgentConfig` field (``model``,
         ``variant``, ``params``, ``cache``, ``max_turns``,
-        ``tool_timeout``, ``parallel_tools``, ``dryrun``,
+        ``tool_timeout``, ``parallel_tools``, ``terminal_tools``, ``dryrun``,
         ``tool_choice``, ``tags``, ``namespace``, ``memory``,
         ``memory_strategy``, ``middleware``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
@@ -413,6 +436,12 @@ class App:
         tool warn at :meth:`build`.  Sub-agent ``<name>_ask`` tools are
         never filtered.
 
+        ``terminal_tools`` names the tools whose execution *is* the
+        reply — a render, a hand-off — as literal names or globs.  A round
+        calling only those, with no errored result and text of its own,
+        ends the turn without a further inference.  Patterns matching no
+        live tool warn at :meth:`build`, like ``tools``.
+
         ``replace=True`` re-registers over an existing name instead of
         raising the duplicate-name error — the REPL/notebook
         re-decoration affordance (pairs with :meth:`remove_agent`).
@@ -430,6 +459,7 @@ class App:
             "max_turns": max_turns,
             "tool_timeout": tool_timeout,
             "parallel_tools": parallel_tools,
+            "terminal_tools": terminal_tools,
             "dryrun": dryrun,
             "tool_choice": tool_choice,
             "tags": tags,
@@ -439,6 +469,10 @@ class App:
             "middleware": middleware,
         }
         config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
+        if "terminal_tools" in config_overrides:
+            config_overrides["terminal_tools"] = tuple(
+                config_overrides["terminal_tools"]
+            )
 
         return _make_decorator(
             self,
@@ -962,6 +996,11 @@ class App:
                 agent_spec.resolved_tools = _resolve_tool_filter(
                     agent_spec.name, agent_spec.tools, live_names
                 )
+            _warn_unmatched_terminal_tools(
+                agent_spec.name,
+                agent_spec.config_overrides.get("terminal_tools", ()),
+                live_names,
+            )
         self._started = True
 
     async def shutdown(self) -> None:
@@ -1040,6 +1079,11 @@ class App:
                 }
                 spec.resolved_tools = _resolve_tool_filter(
                     spec.name, spec.tools, live_names
+                )
+                _warn_unmatched_terminal_tools(
+                    spec.name,
+                    spec.config_overrides.get("terminal_tools", ()),
+                    live_names,
                 )
 
     async def __aenter__(self) -> App:
