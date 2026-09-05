@@ -515,7 +515,6 @@ async def run_agent(
         messages=seed_messages(prior_messages, user_message),
         episode_id=episode_id,
     )
-    executor = execute_tool_calls_parallel if parallel_tools else execute_tool_calls
 
     logger.info(
         "Agent loop started: target=%s, max_turns=%d, tools=%d",
@@ -607,12 +606,14 @@ async def run_agent(
 
         if tool_provider is None:
             raise_missing_tool_provider(entry_point="run_agent")
-        tool_results = await executor(
+        outcomes = await _execute_tool_calls_detailed(
             tool_provider,
             response.content,
             tool_timeout,
+            parallel=parallel_tools,
             progress_callback=progress_callback,
         )
+        tool_results = [outcome.result for outcome in outcomes]
         # N tool results MUST go into a single user message, not N.
         state.messages.append(Message(role="user", content=tool_results))
 
