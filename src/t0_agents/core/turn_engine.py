@@ -393,16 +393,19 @@ def is_terminal_round(
     * an error result must reach the model so it can fix the call;
     * with no text the turn has said nothing, and ending it would leave
       the run blank — :func:`~t0_agents.wire.stages.with_text_fallback`
-      would have to invent an apology in place of the answer.  A
-      ``"thought"`` source is reasoning, not an answer, and does not
-      count;
+      would have to invent an apology in place of the answer.  Blank
+      counts as none, and deliberately by the belt's own rule
+      (``delta.strip()``): a model that emits ``"\n\n"`` before its
+      tool call has still said nothing, and terminating there is what
+      would put the retry line under the render.  A ``"thought"``
+      source is reasoning, not an answer, and does not count either;
     * a round with no tool calls at all is not a terminal round — it is
       an ordinary text turn, which the loops already end on their own.
 
     An empty ``terminal_tools`` needs no case of its own: no name can
     match an empty set of patterns, so nothing is ever terminal.
     """
-    if source != "text" or not text or not tool_names:
+    if source != "text" or not text.strip() or not tool_names:
         return False
     if any(errored):
         return False

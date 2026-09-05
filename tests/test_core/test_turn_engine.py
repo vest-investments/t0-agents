@@ -478,6 +478,22 @@ def test_terminal_round_needs_text_from_this_round() -> None:
     )
 
 
+def test_terminal_round_refuses_blank_text() -> None:
+    """A model that emits only newlines before its tool call has said nothing.
+
+    The wire counts a delta as text by ``delta.strip()``; terminating on a
+    blank round would leave the belt to write EMPTY_TURN_RETRY_TEXT under
+    the render the tool just produced.
+    """
+    assert not is_terminal_round(
+        _RENDER,
+        tool_names=["present_chart"],
+        errored=[False],
+        text="   \n\n   ",
+        source="text",
+    )
+
+
 def test_terminal_round_refuses_a_thought_sourced_answer() -> None:
     assert not is_terminal_round(
         _RENDER,
