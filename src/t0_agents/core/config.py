@@ -255,6 +255,14 @@ class AgentConfig:
                     f"{type(self.memory).__name__} does not — extend it or "
                     f"swap to TensorZeroMemory."
                 )
+        if isinstance(self.terminal_tools, str):
+            raise ConfigurationError(
+                f"AgentConfig.terminal_tools must be a sequence of tool names "
+                f"or globs, got the bare string {self.terminal_tools!r}. A "
+                f"string iterates as its characters, so a '*' anywhere in it "
+                f"would silently make every tool terminal. Pass "
+                f"({self.terminal_tools!r},)."
+            )
         if any(not pattern for pattern in self.terminal_tools):
             raise ConfigurationError(
                 f"AgentConfig.terminal_tools entries must be non-empty tool "

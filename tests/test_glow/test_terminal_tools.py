@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 from tensorzero import AsyncTensorZeroGateway
 
+from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.glow import App
 from t0_agents.glow.app import _warn_unmatched_terminal_tools
 
@@ -131,3 +132,15 @@ async def test_dead_pattern_warns_at_build_time() -> None:
     with pytest.warns(UserWarning, match="terminal_tools= entry"):
         async with app.lifespan():
             assert _terminal_tools(typo) == ("presnt_*",)
+
+
+async def test_a_bare_string_is_refused_at_the_decorator() -> None:
+    """`tuple("present_*")` would shatter into characters, and the '*' among
+    them matches every tool — silently making the whole surface terminal."""
+    app = App(t0=_fake_t0())
+
+    with pytest.raises(ConfigurationError, match="bare string"):
+
+        @app.agent("advisor", terminal_tools="present_*")  # type: ignore[arg-type]
+        async def advisor(q: str) -> str:  # type: ignore[empty-body]
+            """Ends its turn on a render."""

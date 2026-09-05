@@ -393,7 +393,7 @@ class App:
         max_turns: int = _UNSET,
         tool_timeout: float | None = _UNSET,
         parallel_tools: bool = _UNSET,
-        terminal_tools: Sequence[str] = _UNSET,
+        terminal_tools: list[str] | tuple[str, ...] = _UNSET,
         dryrun: bool = _UNSET,
         tool_choice: ToolChoice | None = _UNSET,
         tags: dict[str, str] | None = _UNSET,
@@ -445,10 +445,13 @@ class App:
         never filtered.
 
         ``terminal_tools`` names the tools whose execution *is* the
-        reply — a render, a hand-off — as literal names or globs.  A round
-        calling only those, with no errored result and text of its own,
-        ends the turn without a further inference.  Patterns matching no
-        live tool warn at :meth:`build`, like ``tools``.
+        reply — a render, a UI side effect, anything whose payload the
+        caller displays — as literal names or globs.  A round calling
+        only those, with no errored result and text of its own, ends the
+        turn without a further inference.  Patterns matching no live tool
+        warn at :meth:`build`, like ``tools``.  Not for
+        ``<sub_agent>_ask``: a terminal round answers with its **own**
+        text, so a delegated reply would be dropped.
 
         ``replace=True`` re-registers over an existing name instead of
         raising the duplicate-name error — the REPL/notebook
@@ -478,9 +481,16 @@ class App:
         }
         config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
         if "terminal_tools" in config_overrides:
-            config_overrides["terminal_tools"] = tuple(
-                config_overrides["terminal_tools"]
-            )
+            declared = config_overrides["terminal_tools"]
+            if isinstance(declared, str):
+                raise ConfigurationError(
+                    f"@app.agent({name!r}) terminal_tools= takes a list of "
+                    f"tool names or globs, not the bare string {declared!r}. A "
+                    f"string iterates as its characters, so a '*' anywhere in "
+                    f"it would silently make every tool terminal. Pass "
+                    f"[{declared!r}]."
+                )
+            config_overrides["terminal_tools"] = tuple(declared)
 
         return _make_decorator(
             self,
