@@ -90,6 +90,12 @@ class AgentConfig:
             disable the per-call timeout entirely — required when a tool
             can block on human elicitation longer than any fixed budget.
         parallel_tools: Dispatch tool calls via ``asyncio.gather`` when ``True``.
+        terminal_tools: Tool names (or :mod:`fnmatch` globs) whose
+            execution completes the assistant's reply.  When a round
+            calls only these, none of the results errors, and the round
+            already produced text, the loop runs the tools and returns
+            without a further inference — the round's own text is the
+            answer.  The default ``()`` never terminates a round early.
         dryrun: Forward ``dryrun=True`` to every ``t0.inference()`` call.
         tool_choice: Tool-choice directive (``"auto"``, ``"required"``, ``"off"``,
             or ``{"specific": "<name>"}``).
@@ -190,6 +196,7 @@ class AgentConfig:
     variant: str | None = None
     params: dict[str, Any] | None = None
     cache: dict[str, Any] | None = None
+    terminal_tools: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -248,6 +255,13 @@ class AgentConfig:
                     f"{type(self.memory).__name__} does not — extend it or "
                     f"swap to TensorZeroMemory."
                 )
+        if any(not pattern for pattern in self.terminal_tools):
+            raise ConfigurationError(
+                f"AgentConfig.terminal_tools entries must be non-empty tool "
+                f"names or globs; got {self.terminal_tools!r}. An empty "
+                f"pattern matches nothing, so it would silently never end a "
+                f"turn."
+            )
         if self.sub_agents:
             # Lazy import to dodge the core.agent ↔ core.config cycle;
             # this only fires when the user opts in to multi-agent
