@@ -124,7 +124,7 @@ elicitation events find the run you actually drive: a HITL prompt raised during
 ## Resuming
 
 `hydrate=True` reloads a stored conversation's transcript from the gateway
-(thoughts stripped, as on every replay). It runs automatically before the first
+(thoughts stripped, as on every cross-turn replay). It runs automatically before the first
 `send()`; call it explicitly to inspect the transcript first:
 
 ```python
