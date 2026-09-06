@@ -8,6 +8,7 @@ required end-to-end coverage lives in ``test_tensorzero_integration.py``.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
@@ -22,6 +23,7 @@ from tensorzero import (
     Text,
     Thought,
     ToolCall,
+    ToolResult,
 )
 from tensorzero.generated_types import (
     ContentBlockChatOutputText,
@@ -882,6 +884,337 @@ class TestLoadHistory:
         assert any(getattr(b, "type", None) == "thought" for b in inf.output)
         # The strip is silent — no "skipped unsupported kind" warning fires.
         assert not any("skipped" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Scenario 10b — load_transcript: the reader's view of an episode
+# ---------------------------------------------------------------------------
+
+
+def _t0_with(inferences: list[Any]) -> FakeT0:
+    return FakeT0(
+        [], list_inferences_responses=[FakeListInferencesResponse(inferences=inferences)]
+    )
+
+
+def _round(
+    episode_id: str,
+    seq: int,
+    *,
+    input_messages: list[StoredInputMessage],
+    output: list[Any],
+    timestamp: str = "2026-09-05T10:00:00Z",
+) -> StoredInferenceChat:
+    """One stored round of an episode; ``seq`` orders its UUIDv7-shaped id."""
+    return _stored_chat(
+        user_messages=input_messages,
+        output=output,
+        episode_id=episode_id,
+        inference_id=f"0199a000-0000-7000-8000-{seq:012d}",
+        timestamp=timestamp,
+    )
+
+
+def _stored_call(
+    call_id: str, name: str, arguments: dict[str, Any]
+) -> ContentBlockChatOutputToolCall:
+    return ContentBlockChatOutputToolCall(
+        id=call_id,
+        raw_arguments=json.dumps(arguments),
+        raw_name=name,
+        arguments=arguments,
+        name=name,
+    )
+
+
+def _assistant_msg(*content: Any) -> StoredInputMessage:
+    return StoredInputMessage(role="assistant", content=list(content))
+
+
+def _tool_result_msg(call_id: str, name: str, result: str) -> StoredInputMessage:
+    return StoredInputMessage(
+        role="user",
+        content=[StoredInputMessageContentToolResult(id=call_id, name=name, result=result)],
+    )
+
+
+def _texts(transcript: list[Any]) -> list[str]:
+    return [b.text for m in transcript for b in m["content"] if isinstance(b, Text)]
+
+
+class TestLoadTranscript:
+    async def test_a_terminal_ended_episode_keeps_its_render_call_for_a_reader(
+        self,
+    ) -> None:
+        """The two readers part on exactly one block.
+
+        ``load_history`` must drop the dangling call — the model would be
+        replayed a call no result ever answered.  A reader was shown what
+        that call rendered, so ``load_transcript`` keeps it, arguments and
+        all.
+        """
+        ep = str(uuid4())
+        inf = _round(
+            ep,
+            1,
+            input_messages=[_user_text_msg("show me the mix")],
+            output=[
+                ContentBlockChatOutputText(text="Here is the mix."),
+                _stored_call("r1", "render_chart", {"series": [1, 2]}),
+            ],
+        )
+
+        history = await _make_memory(_t0_with([inf])).load_history(ep)
+        transcript = await _make_memory(_t0_with([inf])).load_transcript(ep)
+
+        assert history is not None and transcript is not None
+        assert [type(b).__name__ for b in history[-1]["content"]] == ["Text"]
+        assert [m["role"] for m in transcript] == ["user", "assistant"]
+        reply = transcript[-1]["content"]
+        assert [type(b).__name__ for b in reply] == ["Text", "ToolCall"]
+        assert (reply[1].id, reply[1].name, reply[1].arguments) == (
+            "r1",
+            "render_chart",
+            {"series": [1, 2]},
+        )
+
+    async def test_the_transcript_recovers_a_call_the_model_history_lost(self) -> None:
+        """A later turn carries the earlier reply forward WITHOUT its
+        dangling call — that is what the model was replayed — so a
+        one-row reader can never see the call again.  Reading each round's
+        own output does.
+        """
+        ep = str(uuid4())
+        ask = _user_text_msg("show me the mix")
+        first = _round(
+            ep,
+            1,
+            input_messages=[ask],
+            output=[
+                ContentBlockChatOutputText(text="Here is the mix."),
+                _stored_call("r1", "render_chart", {"series": [1]}),
+            ],
+        )
+        second = _round(
+            ep,
+            2,
+            input_messages=[
+                ask,
+                _assistant_text_msg("Here is the mix."),
+                _user_text_msg("and the total?"),
+            ],
+            output=[ContentBlockChatOutputText(text="Twelve.")],
+        )
+
+        history = await _make_memory(_t0_with([second, first])).load_history(ep)
+        transcript = await _make_memory(_t0_with([second, first])).load_transcript(ep)
+
+        assert history is not None and transcript is not None
+        assert not any(isinstance(b, ToolCall) for m in history for b in m["content"])
+        assert [m["role"] for m in transcript] == ["user", "assistant", "user", "assistant"]
+        assert [type(b).__name__ for b in transcript[1]["content"]] == ["Text", "ToolCall"]
+        assert transcript[1]["content"][1].id == "r1"
+        assert _texts(transcript) == [
+            "show me the mix",
+            "Here is the mix.",
+            "and the total?",
+            "Twelve.",
+        ]
+
+    async def test_the_transcript_interleaves_each_turn_with_its_rounds(self) -> None:
+        """A round whose input ends on tool results is a later step of the
+        same turn: it adds its reply and re-emits no user message, and the
+        results themselves never appear — they are the model's input, not
+        something the user was shown.
+        """
+        ep = str(uuid4())
+        ask = _user_text_msg("what's the weather?")
+        planning = _round(
+            ep,
+            1,
+            input_messages=[ask],
+            output=[
+                ContentBlockChatOutputText(text="Let me check."),
+                _stored_call("c1", "lookup", {"city": "Tokyo"}),
+            ],
+        )
+        carried = [
+            ask,
+            _assistant_msg(
+                StoredInputMessageContentText(text="Let me check."),
+                StoredInputMessageContentToolCall(
+                    id="c1", name="lookup", arguments='{"city": "Tokyo"}'
+                ),
+            ),
+            _tool_result_msg("c1", "lookup", "Sunny"),
+        ]
+        answer = _round(
+            ep,
+            2,
+            input_messages=carried,
+            output=[ContentBlockChatOutputText(text="Sunny in Tokyo.")],
+        )
+        thanks = _round(
+            ep,
+            3,
+            input_messages=[
+                *carried,
+                _assistant_text_msg("Sunny in Tokyo."),
+                _user_text_msg("thanks"),
+            ],
+            output=[ContentBlockChatOutputText(text="Any time.")],
+        )
+
+        transcript = await _make_memory(_t0_with([thanks, answer, planning])).load_transcript(ep)
+
+        assert transcript is not None
+        assert [m["role"] for m in transcript] == [
+            "user",
+            "assistant",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert not any(isinstance(b, ToolResult) for m in transcript for b in m["content"])
+        assert _texts(transcript) == [
+            "what's the weather?",
+            "Let me check.",
+            "Sunny in Tokyo.",
+            "thanks",
+            "Any time.",
+        ]
+
+    async def test_the_transcript_orders_rounds_by_inference_id_within_a_second(
+        self,
+    ) -> None:
+        """The gateway orders by ``timestamp`` at second granularity, so the
+        rounds of one turn tie; the UUIDv7 id is the millisecond order, and
+        the order the rows arrive in is not trusted.
+        """
+        ep = str(uuid4())
+        ask = _user_text_msg("go")
+        planning = _round(
+            ep, 1, input_messages=[ask], output=[_stored_call("c1", "lookup", {})]
+        )
+        carried = [
+            ask,
+            _assistant_msg(
+                StoredInputMessageContentToolCall(id="c1", name="lookup", arguments="{}")
+            ),
+            _tool_result_msg("c1", "lookup", "ok"),
+        ]
+        first = _round(
+            ep, 2, input_messages=carried, output=[ContentBlockChatOutputText(text="first")]
+        )
+        second = _round(
+            ep,
+            3,
+            input_messages=[*carried, _assistant_text_msg("first"), _user_text_msg("more")],
+            output=[ContentBlockChatOutputText(text="second")],
+        )
+
+        transcript = await _make_memory(_t0_with([first, second, planning])).load_transcript(ep)
+
+        assert transcript is not None
+        assert _texts(transcript) == ["go", "first", "more", "second"]
+        assert [type(b).__name__ for b in transcript[1]["content"]] == ["ToolCall"]
+
+    async def test_the_transcript_never_carries_a_thought(self) -> None:
+        """Reasoning is not something the user was shown.  Stored on both the
+        input and the output side, none of it reaches the transcript, and
+        the stored rows are left as they were.
+        """
+        ep = str(uuid4())
+        first = _round(
+            ep,
+            1,
+            input_messages=[_user_text_msg("q1")],
+            output=[_StoredOutputThought(text="t1"), ContentBlockChatOutputText(text="a1")],
+        )
+        second = _round(
+            ep,
+            2,
+            input_messages=[
+                _user_text_msg("q1"),
+                _assistant_msg(
+                    StoredInputMessageContentThought(text="t1"),
+                    StoredInputMessageContentText(text="a1"),
+                ),
+                _user_text_msg("q2"),
+            ],
+            output=[_StoredOutputThought(text="t2"), ContentBlockChatOutputText(text="a2")],
+        )
+
+        transcript = await _make_memory(_t0_with([second, first])).load_transcript(ep)
+
+        assert transcript is not None
+        assert not any(isinstance(b, Thought) for m in transcript for b in m["content"])
+        assert _texts(transcript) == ["q1", "a1", "q2", "a2"]
+        assert any(getattr(b, "type", None) == "thought" for b in first.output or [])
+
+    async def test_the_transcript_reads_a_bounded_window(self) -> None:
+        """One ``list_inferences`` call, newest first, ``window`` rows — the
+        bound :meth:`list_conversations` already accepts, so a long episode
+        costs what the caller chose and no more.
+        """
+        t0 = _t0_with([])
+        await _make_memory(
+            t0, function_name="chat", tag_filter={"tenant": "a"}
+        ).load_transcript("ep")
+        request = t0.list_inferences_calls[0]["request"]
+        assert request.episode_id == "ep"
+        assert request.function_name == "chat"
+        assert isinstance(request.filters, InferenceFilterTag)
+        assert request.limit == TensorZeroMemory.DEFAULT_LIST_WINDOW == 200
+        assert [(o.by, o.direction) for o in request.order_by] == [
+            ("timestamp", "descending")
+        ]
+
+        narrow = _t0_with([])
+        await _make_memory(narrow).load_transcript("ep", window=25)
+        assert narrow.list_inferences_calls[0]["request"].limit == 25
+
+    async def test_the_transcript_is_none_for_an_empty_episode(self) -> None:
+        """No chat inference — a JSON-only episode included — reads as
+        ``None``, the same "nothing here" :meth:`load_history` answers, so
+        a caller keeps one not-found branch for both readers.
+        """
+        assert await _make_memory(_t0_with([])).load_transcript("ep") is None
+        json_only = StoredInferenceJson(
+            episode_id="ep",
+            function_name="agent",
+            inference_id=str(uuid4()),
+            timestamp="2026-09-05T10:00:00Z",
+            variant_name="v1",
+            input=StoredInput(messages=[_user_text_msg("hi")]),
+            output=None,
+        )
+        assert await _make_memory(_t0_with([json_only])).load_transcript("ep") is None
+
+    async def test_the_transcript_warns_once_about_unreplayable_blocks(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ep = str(uuid4())
+        opening = StoredInputMessage(
+            role="user",
+            content=[
+                StoredInputMessageContentText(text="hello"),
+                StoredInputMessageContentTemplate(arguments={"x": 1}, name="my_template"),
+            ],
+        )
+        inf = _round(
+            ep, 1, input_messages=[opening], output=[ContentBlockChatOutputText(text="hi")]
+        )
+
+        with caplog.at_level("WARNING", logger="t0_agents.memory.tensorzero"):
+            transcript = await _make_memory(_t0_with([inf])).load_transcript(ep)
+
+        assert transcript is not None
+        assert _texts(transcript) == ["hello", "hi"]
+        warnings = [r for r in caplog.records if "skipped" in r.message]
+        assert len(warnings) == 1
+        assert "load_transcript" in warnings[0].message
+        assert "template" in warnings[0].message
 
 
 # ---------------------------------------------------------------------------
