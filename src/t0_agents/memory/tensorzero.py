@@ -6,7 +6,7 @@ call time.  This module exposes that observability log as a
 history without running a parallel store.
 
 The backend ships in the base distribution because ``tensorzero`` is
-already a required dependency.  Two reads are supported:
+already a required dependency.  Three reads are supported:
 
 - :meth:`TensorZeroMemory.load` — records-shaped, used by the
   ``prepended_message`` and ``system_template`` memory strategies.
@@ -14,6 +14,9 @@ already a required dependency.  Two reads are supported:
   used by the recommended ``memory_strategy="messages"`` so the
   conversation is threaded through ``input.messages`` without ever
   being stringified into a summary.
+- :meth:`TensorZeroMemory.load_transcript` — TZ-native ``list[Message]``
+  for a reader rather than the model: every round's ``output`` with its
+  tool calls, one assistant message per round.
 
 ``save`` is a no-op: TZ wrote the inference at the moment the call
 was made, so persisting again would only duplicate the row.
@@ -247,7 +250,7 @@ class TensorZeroMemory:
         return results
 
     # ------------------------------------------------------------------
-    # Native-history extension (used by memory_strategy="messages")
+    # Native-history extensions (load_history feeds memory_strategy="messages")
     # ------------------------------------------------------------------
 
     async def load_history(
@@ -288,6 +291,8 @@ class TensorZeroMemory:
         assistant tool_call directly before the next user message, which
         OpenAI-compatible providers reject; dropping it lets the model
         re-decide the call.  A normal turn ends in text and is untouched.
+        A consumer that needs those calls back — a UI that rendered
+        something from them — reads :meth:`load_transcript` instead.
         """
         request = ListInferencesRequest(
             function_name=self._function_name,
@@ -342,15 +347,73 @@ class TensorZeroMemory:
                 Message(role="assistant", content=assistant_blocks),
             )
 
-        if skipped_kinds:
-            logger.warning(
-                "TensorZeroMemory.load_history: skipped %d unsupported "
-                "content-block kind(s): %s. The model will see the rest of "
-                "the conversation but not those blocks.",
-                len(skipped_kinds),
-                sorted(skipped_kinds),
-            )
+        _warn_skipped_kinds("load_history", skipped_kinds)
         return history
+
+    async def load_transcript(
+        self,
+        episode_id: str,
+        *,
+        window: int = DEFAULT_LIST_WINDOW,
+    ) -> list[Message] | None:
+        """Return the episode as a reader saw it: one assistant message per round.
+
+        :meth:`load_history` rebuilds what the *model* may be shown again;
+        this rebuilds what a *person* was shown.  It reads every chat
+        inference of the episode — the ``window`` most recent, oldest
+        first — and takes each one's ``output`` as an assistant message.
+        A round whose input ends on a user message carrying text opens a
+        turn, and that message is emitted before the reply; a round whose
+        input ends on tool results is a later step of the same turn and
+        contributes only its output.  Tool results therefore never appear.
+
+        Every ``ToolCall`` the assistant issued is kept, answered or not.
+        A turn ended by its own tools (``terminal_tools``) leaves a call
+        no later inference answered; :meth:`load_history` must drop it,
+        and a UI that rendered something from it needs it back.
+        ``Thought`` blocks are dropped on both sides, as
+        :meth:`load_history` drops them: reasoning is not something the
+        user was shown.
+
+        ``window`` bounds the read the way :meth:`list_conversations` is
+        bounded — one ``list_inferences(limit=window)`` call, so rounds
+        older than the window fall off the front of the transcript.  Rows
+        are ordered by ``inference_id``, a UUIDv7 the gateway mints,
+        because the server orders by ``timestamp`` at second granularity
+        and two rounds of one turn regularly share a second.
+
+        Returns ``None`` when the episode has no chat inference.
+        """
+        request = ListInferencesRequest(
+            function_name=self._function_name,
+            episode_id=episode_id,
+            filters=self._build_filters(),
+            order_by=[
+                OrderBy(by="timestamp", direction="descending")  # type: ignore[list-item]
+            ],
+            limit=window,
+        )
+        response = await self._gateway.list_inferences(request=request)
+        rounds = sorted(
+            (inf for inf in response.inferences if isinstance(inf, StoredInferenceChat)),
+            key=lambda inf: str(inf.inference_id),
+        )
+        if not rounds:
+            return None
+
+        transcript: list[Message] = []
+        skipped_kinds: set[str] = set()
+        for inf in rounds:
+            opening = _turn_opening_message(inf.input)
+            if opening is not None:
+                converted = _to_native_message(opening, skipped_kinds)
+                if converted is not None:
+                    transcript.append(converted)
+            reply = _output_to_content_blocks(inf.output)
+            if reply:
+                transcript.append(Message(role="assistant", content=reply))
+        _warn_skipped_kinds("load_transcript", skipped_kinds)
+        return transcript
 
     # ------------------------------------------------------------------
     # Conversation listing (ConversationIndex protocol)
@@ -535,6 +598,34 @@ def _user_texts(stored_input: Any) -> list[str]:
         if text := _stored_message_text(msg):
             out.append(text)
     return out
+
+
+def _turn_opening_message(stored_input: Any) -> StoredInputMessage | None:
+    """The user message a round's input ends on, when that message opened a turn.
+
+    Under an accumulating episode a round's input ends either on the user
+    message that started the turn or on the tool results of the previous
+    round.  Only the first carries visible text, so that is the test.
+    """
+    messages = getattr(stored_input, "messages", None) or []
+    if not messages:
+        return None
+    last = messages[-1]
+    if getattr(last, "role", None) != "user" or not _stored_message_text(last):
+        return None
+    return cast(StoredInputMessage, last)
+
+
+def _warn_skipped_kinds(method: str, skipped_kinds: set[str]) -> None:
+    if not skipped_kinds:
+        return
+    logger.warning(
+        "TensorZeroMemory.%s: skipped %d unsupported content-block kind(s): "
+        "%s. The rest of the conversation is returned without those blocks.",
+        method,
+        len(skipped_kinds),
+        sorted(skipped_kinds),
+    )
 
 
 def _truncate(text: str, limit: int) -> str:
