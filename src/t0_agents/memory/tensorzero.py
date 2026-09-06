@@ -474,6 +474,31 @@ class TensorZeroMemory:
 # ----------------------------------------------------------------------
 
 
+def _stored_message_text(msg: Any) -> str:
+    """Visible text of one stored message; ``""`` when it carries none.
+
+    ``text`` / ``raw_text`` blocks joined with newlines; a bare-string
+    ``content`` (a legacy row shape) is returned as-is.  A tool-call-only
+    or tool-result-only message — an intermediate step of an agent loop —
+    yields ``""``, which is what lets a caller tell a message the user
+    typed from one the loop generated.
+    """
+    content = getattr(msg, "content", None)
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    texts: list[str] = []
+    for part in content:
+        if isinstance(part, StoredInputMessageContentText):
+            if part.text:
+                texts.append(part.text)
+        elif isinstance(part, StoredInputMessageContentRawText):
+            if part.value:
+                texts.append(part.value)
+    return "\n".join(texts)
+
+
 def _extract_last_user_message(stored_input: Any) -> str:
     """Return the most recent ``role=user`` text from a :class:`StoredInput`.
 
@@ -485,24 +510,10 @@ def _extract_last_user_message(stored_input: Any) -> str:
     """
     messages = getattr(stored_input, "messages", None) or []
     for msg in reversed(messages):
-        role = getattr(msg, "role", None)
-        if role != "user":
+        if getattr(msg, "role", None) != "user":
             continue
-        content = getattr(msg, "content", None)
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            texts: list[str] = []
-            for part in content:
-                if isinstance(part, StoredInputMessageContentText):
-                    if part.text:
-                        texts.append(part.text)
-                elif isinstance(part, StoredInputMessageContentRawText):
-                    if part.value:
-                        texts.append(part.value)
-            joined = "\n".join(texts)
-            if joined:
-                return joined
+        if text := _stored_message_text(msg):
+            return text
     return ""
 
 
@@ -518,27 +529,11 @@ def _user_texts(stored_input: Any) -> list[str]:
     preview (last), and turn count (length) from one cumulative input.
     """
     out: list[str] = []
-    messages = getattr(stored_input, "messages", None) or []
-    for msg in messages:
+    for msg in getattr(stored_input, "messages", None) or []:
         if getattr(msg, "role", None) != "user":
             continue
-        content = getattr(msg, "content", None)
-        if isinstance(content, str):
-            if content:
-                out.append(content)
-            continue
-        if isinstance(content, list):
-            texts: list[str] = []
-            for part in content:
-                if isinstance(part, StoredInputMessageContentText):
-                    if part.text:
-                        texts.append(part.text)
-                elif isinstance(part, StoredInputMessageContentRawText):
-                    if part.value:
-                        texts.append(part.value)
-            joined = "\n".join(texts)
-            if joined:
-                out.append(joined)
+        if text := _stored_message_text(msg):
+            out.append(text)
     return out
 
 
