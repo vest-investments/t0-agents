@@ -460,6 +460,7 @@ dependency.
 ```python
 class TensorZeroMemory:
     DEFAULT_LOAD_LIMIT = 10
+    DEFAULT_LIST_WINDOW = 200
 
     def __init__(
         self,
@@ -479,9 +480,12 @@ class TensorZeroMemory:
         self, query: str, *, limit: int = 5,
     ) -> list[MemoryRecord]: ...
 
-    # Native-history extension
+    # Native-history extensions
     async def load_history(
         self, episode_id: str,
+    ) -> list[Message] | None: ...
+    async def load_transcript(
+        self, episode_id: str, *, window: int = DEFAULT_LIST_WINDOW,
     ) -> list[Message] | None: ...
 ```
 
@@ -501,10 +505,19 @@ contains a single id — this backend exposes one record per inference,
 not per agent run.
 
 `load_history` reuses the most recent inference's `input.messages` as
-the cumulative history (TZ accumulates within an episode). Stored
-content blocks are converted to runtime equivalents (`Text`,
-`RawText`, `ToolCall`, `ToolResult`, `Thought`); `Template`, `File`,
-and `Unknown` blocks are dropped with a single warning per call.
+the cumulative history (TZ accumulates within an episode) and appends
+that inference's `output` as the assistant reply. Stored content blocks
+are converted to runtime equivalents (`Text`, `RawText`, `ToolCall`,
+`ToolResult`); `Thought` blocks are dropped on both sides (reasoning is
+never replayed); `Template`, `File` and `Unknown` blocks are dropped
+with a single warning per call; and a `ToolCall` left in that final
+`output` is dropped too — it is unanswered by construction, and an
+OpenAI-compatible provider rejects an assistant tool call followed
+directly by a user message.
+
+`load_transcript` reads the same episode for a reader instead of the
+model — every round's `output`, tool calls kept — see
+[Two readers](#two-readers-load_history-and-load_transcript).
 
 `save` is a no-op: TZ wrote the row at inference time. `search`
 returns `[]` unless opted in via `experimental_search=True`.
@@ -751,9 +764,10 @@ turning N turns into O(2^N) tokens worth of nested history. The
 `"messages"` strategy bypasses string rendering entirely:
 `load_history` returns a TZ-native `list[Message]` — already in the
 shape the gateway accepts — and the agent threads it through
-`input.messages`. Tool calls and tool results from prior turns are
-preserved alongside the user/assistant text, so the model can reason
-about its own earlier work.
+`input.messages`. Answered tool calls and their results from prior
+turns are preserved alongside the user/assistant text, so the model
+can reason about its own earlier work; a call the final round left
+unanswered is dropped (see the semantics table below).
 
 If you do choose `"system_template"` (because your variant has a
 MiniJinja template that ships with the function), `TensorZeroMemory`
@@ -793,8 +807,37 @@ the private `_build_filters` method if you want full control).
 |---|---|
 | `load(episode_id)` | Issues `list_inferences(limit=load_limit, order_by=DESC)` and returns one `MemoryRecord` per chat inference that emitted text. JSON-output and tool-call-only inferences are skipped. Reversed to oldest-first to match `InMemoryMemory` / `SqliteMemory`. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids` is a single-element list — this backend exposes one record per inference, not per agent run. |
 | `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes — a fresh session, not an error. A gateway failure propagates and ends the turn (`MemoryHistoryUnavailableError`). |
+| `load_transcript(episode_id, *, window=200)` | Not used by any memory strategy — a reader's view of the episode. Issues `list_inferences(limit=window)` and emits, per chat round oldest-first, the user message that opened the turn (when the round's input ends on one) and the round's `output` as an assistant message with its tool calls kept. Returns `None` for empty episodes. A gateway failure propagates. |
 | `save(record)` | No-op. The gateway already persisted the row at inference time; calling `save` again would duplicate the observability entry. |
 | `search(query, *, limit=5)` | Returns `[]` by default. Pass `experimental_search=True` to the constructor to opt in; the query is forwarded to TZ's `search_query_experimental` field. The gateway flags that endpoint as experimental and warns it may cause full-table scans, so it is not appropriate for low-latency request paths. |
+
+### Two readers: `load_history` and `load_transcript`
+
+The same episode is read for two consumers that want opposite things
+from one block, and `TensorZeroMemory` gives each its own method rather
+than one method with a switch:
+
+| | `load_history` | `load_transcript` |
+|---|---|---|
+| Built for | the model — `memory_strategy="messages"` replays it as `input.messages` | a reader — a UI rebuilding what a person was shown |
+| Reads | one row: the latest inference's cumulative `input` plus its `output` | every chat round of the episode, up to `window` (default 200), oldest first |
+| Tool calls | answered ones survive; a call the final round left unanswered is dropped, because a provider rejects an assistant tool call followed directly by a user message | every call the assistant issued, answered or not |
+| Tool results | replayed | never emitted — they are the model's input, not something the user saw |
+| `Thought` blocks | dropped | dropped |
+| Shape | the exact message list the model last saw | the user message that opened each turn, then one `assistant` message per round of it |
+| Cost | one row | `window` rows, each carrying its cumulative `input` |
+
+The case that needs both: an agent with `terminal_tools` ends a turn on
+a tool call by design, so that call is never answered. The model must
+not see it again — `load_history` drops it. The person who watched the
+tool render something must — `load_transcript` keeps it. Neither view
+is wrong; they answer different questions, and reading the model's
+history to draw a UI loses exactly the blocks the model is not allowed
+to have.
+
+`load_transcript` orders rows by `inference_id` (a UUIDv7) rather than
+by the server's `timestamp`, which has second granularity — two rounds
+of one turn regularly share a second.
 
 ### Read-after-write timing
 
