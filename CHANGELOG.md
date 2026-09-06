@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.6.0] — 2026-09-05
+
+A stored episode has two readers that want opposite things from one
+block. The model must not be shown a tool call that no result ever
+answered — a provider rejects it — so `load_history` drops the call a
+turn ended on. A person who watched that call render something needs
+it back, and once the conversation continues the one-row read can
+never reach it again: the stripped reply is what got persisted
+forward. `load_transcript` is the second reader, beside the first
+rather than a flag on it.
+
+### Added
+
+- **`TensorZeroMemory.load_transcript(episode_id, *, window=200)`.**
+  Reads every chat round of an episode (the `window` most recent,
+  oldest first) and emits the user message that opened each turn
+  followed by one assistant message per round, built from the round's
+  own stored `output` with every tool call kept. Tool results never
+  appear, `Thought` blocks are dropped as `load_history` drops them,
+  and an empty episode reads as `None`. Rows are ordered by
+  `inference_id` — a UUIDv7 — because the server orders by
+  `timestamp` at second granularity and two rounds of one turn
+  regularly share a second.
+
+### Changed
+
+- The "skipped unsupported content-block kind(s)" warning names the
+  reader that emitted it and no longer says the model will see the
+  rest of the conversation — the transcript reader's consumer is not
+  the model.
+
+### Fixed
+
+- `docs/memory.md` listed `Thought` among the blocks `load_history`
+  converts and said tool calls from prior turns are preserved. It
+  drops the first, and it drops a call the final round left
+  unanswered. The page now says so and describes both readers.
+
 ## [2.5.0] — 2026-09-05
 
 Reasoning is not free, and some providers expect the reasoning a model
