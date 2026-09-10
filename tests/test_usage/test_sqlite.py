@@ -33,6 +33,13 @@ async def _rows(db_path: str, table: str, columns: str, order: str) -> list[tupl
 
 
 class TestSqliteUsageLedger:
+    @pytest.mark.parametrize("db_path", [":memory:", ""])
+    def test_a_connection_scoped_database_is_refused_at_construction(
+        self, db_path: str
+    ) -> None:
+        with pytest.raises(ValueError, match="InMemoryUsageLedger"):
+            SqliteUsageLedger(db_path)
+
     async def test_a_run_lands_as_one_run_row_and_one_row_per_inference(
         self, tmp_path: Path
     ) -> None:

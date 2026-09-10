@@ -75,10 +75,18 @@ class SqliteUsageLedger:
     Each :meth:`record` opens its own connection and commits both tables in
     one transaction.  Inserts are ``INSERT OR IGNORE`` on the primary keys,
     which is how the protocol's idempotency on ``run_id`` is met.  There is
-    no read side — query the file with any SQLite client.
+    no read side — query the file with any SQLite client.  ``db_path`` must
+    name a file: ``":memory:"`` and ``""`` are connection-scoped databases
+    that would vanish with every call, so they are refused at construction.
     """
 
     def __init__(self, db_path: str) -> None:
+        if db_path in ("", ":memory:"):
+            raise ValueError(
+                f"SqliteUsageLedger(db_path={db_path!r}) opens a connection per "
+                f"record() call, so a connection-scoped database would lose "
+                f"every row; pass a file path, or use InMemoryUsageLedger."
+            )
         self._db_path = db_path
         self._tables_ready = False
 
