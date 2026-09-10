@@ -21,7 +21,11 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import RunCancelledError
 from t0_agents.core.middleware import CostTrackingMiddleware
 from t0_agents.core.types import ToolProvider
-from t0_agents.usage import RunUsageRecord, UsageLedgerMiddleware
+from t0_agents.usage import (
+    InMemoryUsageLedger,
+    RunUsageRecord,
+    UsageLedgerMiddleware,
+)
 from t0_agents.usage.middleware import capture_inference
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
@@ -29,24 +33,16 @@ from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
 EPISODE = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
-class _Ledger:
-    def __init__(self) -> None:
-        self.runs: list[RunUsageRecord] = []
-
+class _RaisingLedger(InMemoryUsageLedger):
     async def record(self, run: RunUsageRecord) -> None:
-        self.runs.append(run)
-
-
-class _RaisingLedger(_Ledger):
-    async def record(self, run: RunUsageRecord) -> None:
-        self.runs.append(run)
+        await super().record(run)
         raise RuntimeError("secret-content")
 
 
-class _SlowLedger(_Ledger):
+class _SlowLedger(InMemoryUsageLedger):
     async def record(self, run: RunUsageRecord) -> None:
         await asyncio.sleep(1.0)
-        self.runs.append(run)
+        await super().record(run)
 
 
 class _ParkedT0:
@@ -96,7 +92,7 @@ def _tool_call(name: str | None, raw_name: str) -> ToolCall:
 
 def _agent(
     t0: Any,
-    ledger: _Ledger,
+    ledger: InMemoryUsageLedger,
     *,
     timeout: float = 2.0,
     client: FakeMCPClient | None = None,
@@ -145,7 +141,7 @@ class TestOneRecordPerRun:
     async def test_a_tool_loop_yields_one_inference_row_per_gateway_response(
         self,
     ) -> None:
-        ledger = _Ledger()
+        ledger = InMemoryUsageLedger()
         responses = _two_turn_responses(_tool_call("add", "add"))
         agent = _agent(FakeT0(list(responses)), ledger)
         run = agent.invoke(
@@ -177,7 +173,7 @@ class TestOneRecordPerRun:
     async def test_an_unknown_tool_is_recorded_by_the_name_the_model_wrote(
         self,
     ) -> None:
-        ledger = _Ledger()
+        ledger = InMemoryUsageLedger()
         t0 = FakeT0(list(_two_turn_responses(_tool_call(None, "ghost"))))
         agent = _agent(t0, ledger)
         await agent.invoke("call ghost").result()
@@ -187,7 +183,7 @@ class TestOneRecordPerRun:
     async def test_a_corrective_retry_sentinel_never_reaches_the_ledger(
         self,
     ) -> None:
-        ledger = _Ledger()
+        ledger = InMemoryUsageLedger()
         real = FakeChatResponse(
             content=[Text(type="text", text="ok")], usage=FakeUsage(input_tokens=1)
         )
@@ -213,7 +209,7 @@ class TestEveryOutcomeIsRecorded:
     async def test_a_failed_run_records_the_exception_class_and_still_raises(
         self,
     ) -> None:
-        ledger = _Ledger()
+        ledger = InMemoryUsageLedger()
         agent = _agent(FakeT0([RuntimeError("boom")]), ledger)
         run = agent.invoke("hi")
         with pytest.raises(RuntimeError, match="boom"):
@@ -227,7 +223,7 @@ class TestEveryOutcomeIsRecorded:
         assert record.episode_id is None
 
     async def test_a_cancelled_run_records_cancelled_and_still_cancels(self) -> None:
-        ledger = _Ledger()
+        ledger = InMemoryUsageLedger()
         t0 = _ParkedT0()
         agent = _agent(t0, ledger, client=FakeMCPClient())
         run = agent.invoke("hi")
@@ -274,7 +270,7 @@ class TestTheLedgerCannotAffectTheRun:
 
         assert result.response == "ok"
         assert perf_counter() - started < 0.5
-        assert ledger.runs == []
+        assert ledger.runs == ()
         assert "TimeoutError" in caplog.text
 
 

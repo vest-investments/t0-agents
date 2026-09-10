@@ -9,19 +9,11 @@ from tensorzero.types import Text
 
 from t0_agents.glow import App
 from t0_agents.testing import MockGateway
-from t0_agents.usage import RunUsageRecord
-
-
-class _Ledger:
-    def __init__(self) -> None:
-        self.runs: list[RunUsageRecord] = []
-
-    async def record(self, run: RunUsageRecord) -> None:
-        self.runs.append(run)
+from t0_agents.usage import InMemoryUsageLedger
 
 
 async def test_a_conversation_turn_reaches_the_ledger_with_the_gateway_ids() -> None:
-    ledger = _Ledger()
+    ledger = InMemoryUsageLedger()
     gateway = MockGateway.script([[Text(type="text", text="hola")]])
     app = App(t0=cast(AsyncTensorZeroGateway, gateway))
 
@@ -44,7 +36,7 @@ async def test_a_conversation_turn_reaches_the_ledger_with_the_gateway_ids() -> 
 
 
 async def test_the_app_level_ledger_serves_every_agent() -> None:
-    ledger = _Ledger()
+    ledger = InMemoryUsageLedger()
     gateway = MockGateway.script([[Text(type="text", text="hola")]])
     app = App(t0=cast(AsyncTensorZeroGateway, gateway), usage_ledger=ledger)
 
