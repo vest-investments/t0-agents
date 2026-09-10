@@ -44,7 +44,7 @@ want the typed view of every collaborator.
 1. **[Getting Started](getting-started.md)** — install the library and run your first agent in under five minutes via the canonical `Agent.invoke` surface.
 2. **[Agent](agent.md)** — meet the declarative `Agent` class, its `AgentConfig`, and the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`) the later chapters wire in.
 3. **[Run](run.md)** — `agent.invoke(message)` returns a `Run[T]`: the first-class invocation handle.  Await it for the final `AgentResult`, iterate `events()` for live `AgentEvent`s, cancel, replay, fork, attach feedback.
-4. **[Middleware](middleware.md)** — what runs around every inference: memory hydration, guardrail gating, cost tracking, sub-agent orchestration, JSON retry.  Add your own via the Starlette-style chain.
+4. **[Middleware](middleware.md)** — what runs around every inference: memory hydration, guardrail gating, cost tracking, usage persistence, sub-agent orchestration, JSON retry.  Add your own via the Starlette-style chain.
 5. **[Output Modes](output-modes.md)** — the polymorphic surface for what an agent returns: chat strings, JSON dicts, Pydantic models, tool calls.  Custom modes for YAML / Instructor-style retry / SQLAlchemy plug in via the same protocol.
 6. **[Concepts](concepts.md)** — pop the hood: what `agent.invoke()` actually does, turn by turn, through the `run_agent` loop — tool discovery, inference, execution, error mapping, episode correlation.
 7. **[Elicitation](elicitation.md)** — once tools can call back to a human, the loop has to pause; here is how that round-trip works end-to-end without any change to `run_agent`.
@@ -64,7 +64,7 @@ Cross-cutting references that span every chapter above. Reach for them when you 
 - **[Migration v0.12 → v1.0](migration-v0.12-to-v1.0.md)** — the two surfaces removed in v1.0 (`Agent.run` / `Agent.stream` → `Agent.invoke` / `Run.events`, and five JSON config kwargs → `output=JsonOutput(...)`), each a one-line migration per call site.
 - **[Error Handling](error-handling.md)** — tool-error semantics, recoverable inference retries, `ToolError` vs `McpError`, and the full exception taxonomy.
 - **[Observability](observability.md)** — episode and inference correlation, the `t0.feedback` API, structured logging conventions, and ClickHouse analytics hooks.
-- **[Token usage](usage.md)** — the live per-turn footprint vs. cumulative billing, the caller-supplied context window, `ConversationUsage`, the serve `usage` block, and the TensorZero recipes for rate-limiting, cost, and ClickHouse history.
+- **[Token usage](usage.md)** — the live per-turn footprint vs. cumulative billing, the caller-supplied context window, `ConversationUsage`, the `UsageLedger` persistence seam, the serve `usage` block, and the TensorZero recipes for rate-limiting, cost, and ClickHouse history.
 - **[Production](production.md)** — transport selection, deployment topologies, system-prompt tuning, timeout budgets, and the elicitation-session invariants.
 - **[Multi-Server Composition](multi-server.md)** — mounting multiple FastMCP servers behind one agent with namespace prefixes, plus the TensorZero configuration to match.
 - **[Concurrency](concurrency.md)** — the three places parallelism lives in the stack (intra-turn `parallel_tools`, batch tools, multi-agent dispatch), with the decision table and the patterns the library deliberately does not provide.

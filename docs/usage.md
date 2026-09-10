@@ -19,8 +19,10 @@ For the compaction decision you want the *level*, not the sum.
 > the in-process API hangs off, see [Run](run.md); for the always-on
 > `CostTrackingMiddleware` that populates it, see
 > [Middleware](middleware.md); for the wire shape, see
-> [Serving](serving.md).  Budget enforcement and historical billing are
-> deliberately **delegated to TensorZero** — the recipes are at the end.
+> [Serving](serving.md).  Persisting usage outside the process is the
+> [`UsageLedger`](#persisting-usage--usageledger) seam.  Budget enforcement
+> and historical billing are deliberately **delegated to TensorZero** — the
+> recipes are at the end.
 
 ---
 
@@ -270,15 +272,78 @@ The models (`UsageBlock`, `FootprintUsage`, `CumulativeUsage`,
 
 ---
 
-## Caveat: there is no after-the-fact usage in the SDK
+## Persisting usage — `UsageLedger`
 
-The live in-process `Run` is the **only immediate** source of per-episode
-usage.  TensorZero's `StoredInference` (what the query SDK returns) carries
-**no token fields** — input/output messages, tags, and timings only.  So
-there is no `t0.episode_usage(episode_id)` call to reach for after a
-conversation ends; for historical or audit numbers you query ClickHouse
-directly (the [history recipe](#historical-billing-clickhouse) below),
-which is eventual-consistent, not a live signal.
+The live `Run` is the only *immediate* source of per-episode usage, and it
+lives as long as the run does.  TensorZero's `StoredInference` (what the
+query SDK returns) carries **no token fields**, so there is no
+`t0.episode_usage(episode_id)` to reach for afterwards.  `UsageLedger` is
+the seam that persists usage as it happens: a Protocol you implement over
+your own store, fed by a middleware that captures every inference the
+gateway reports and hands you one record per run.
+
+```python
+from t0_agents import AgentConfig, RunUsageRecord
+from t0_agents.usage import InMemoryUsageLedger
+
+
+class PostgresLedger:                  # any object with this one method
+    async def record(self, run: RunUsageRecord) -> None:
+        await self.pool.execute(...)   # one row per run, one per inference
+
+
+config = AgentConfig(
+    name="assistant", function_name="agent", usage_ledger=PostgresLedger(),
+)
+# glow: App(usage_ledger=...) sets the default; @app.agent(usage_ledger=...) overrides.
+
+ledger = InMemoryUsageLedger()         # the reference backend; ledger.runs in tests
+```
+
+Each `RunUsageRecord` carries:
+
+| Field | What it is |
+|---|---|
+| `run_id` | A UUIDv7 the library mints per run — the idempotency key your store deduplicates on. |
+| `episode_id`, `function_name`, `tags` | The episode the run belonged to, the configured function (`None` for `model=`-routed agents), and the tags the gateway received — the merged map, including the library's `t0_agents.agent` auto-tag. |
+| `inferences` | One `InferenceUsage` per inference, in order: the gateway's `inference_id` and `episode_id`, `variant_name`, the lossless per-inference `Usage`, the names of the tool calls it emitted, its `finish_reason`, and an aware-UTC timestamp. |
+| `usage` | The run's `RunUsage` — the same sum `run.usage()` reports, minus delegated sub-agents (see below). |
+| `turns`, `outcome`, `error_class` | The turn count and how the run ended: `"completed"`, `"failed"` (with the exception's class name) or `"cancelled"`. |
+| `started_at`, `finished_at` | Aware-UTC timestamps around the whole run. |
+
+The contract, from the ledger's side:
+
+- **`record` is called once per run, after it ends — whichever way it
+  ends.**  A failed or cancelled run is recorded too (the exception or
+  cancellation still propagates), which makes the ledger a complete
+  account rather than a log of successes.
+- **The write cannot affect the run.**  It is bounded by a timeout (2 s by
+  default) and a ledger that raises or hangs is logged — by run id and
+  exception class only, never by message — and swallowed.  A store outage
+  costs you rows, not answers.
+- **Ids are the gateway's.**  They are captured from each inference
+  response as it arrives, never from `AgentResult.inference_ids`, so the
+  `error-recoverable-turn-N` sentinels that list carries after a
+  corrective retry never reach a ledger.  A stream that ends without a
+  usage chunk adds no inference row; its run row simply carries none.
+- **Sub-agents record themselves.**  `run.usage()` folds a delegated
+  child's billing into the parent; the ledger does not, so rows are never
+  counted twice.  Give the sub-agent's config its own `usage_ledger` if
+  you want its rows.
+- **No read side.**  Aggregates are queries against your store.
+
+In the default chain the middleware sits right after `cost_tracking` and
+before `json_retry`, so it sees every retry inference (see
+[Middleware](middleware.md#usageledgermiddleware)).  A direct
+`run_structured_inference(..., usage_ledger=)` call, which runs outside
+any chain, records its single inference the same way.
+
+Two reference backends ship under `t0_agents.usage`: `InMemoryUsageLedger`
+(records as a tuple behind `.runs`) and `SqliteUsageLedger(db_path)`
+(tables `usage_runs` / `usage_inferences`, behind the `memory-sqlite`
+extra).  For history that predates a ledger, or to reconcile one, query
+ClickHouse directly — the [history recipe](#historical-billing-clickhouse)
+below — which is eventual-consistent, not a live signal.
 
 ---
 
@@ -413,10 +478,12 @@ full schema.
 - [Run](run.md) — the invocation handle whose `cost()` / `usage()` /
   `context_footprint()` this page documents.
 - [Middleware](middleware.md) — the always-on `CostTrackingMiddleware`
-  that populates usage on every inference.
+  that populates usage on every inference, and the opt-in
+  `UsageLedgerMiddleware` that persists it.
 - [Serving](serving.md) — `/chat`, SSE, and WebSocket; where the `usage`
   block rides on the wire.
 - [Guardrails](guardrails.md#guardrails-vs-tensorzero-rate-limits) — the
   per-invocation budget layer (`max_cost`) vs. gateway rate limits.
 - [API reference — `RunUsage`](api-reference.md#runusage-v10) — the field
-  table for the cumulative type.
+  table for the cumulative type; [`UsageLedger`](api-reference.md#usageledger-v27)
+  for the record types.

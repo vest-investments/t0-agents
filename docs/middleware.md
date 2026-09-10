@@ -2,8 +2,8 @@
 
 Middleware is the v1.0 extension surface for cross-cutting concerns
 around an agent invocation: memory hydration, guardrail gating, cost
-tracking, sub-agent orchestration, JSON-retry recovery, observability
-spans.  In v0.12 each of those lived inline in ``core/agent.py``
+tracking, usage persistence, sub-agent orchestration, JSON-retry
+recovery, observability spans.  In v0.12 each of those lived inline in ``core/agent.py``
 (~1400 LoC of hand-rolled `_execute_*_legacy` orchestration).  v1.0
 collapses them into a Starlette-style chain — small composable
 coroutines that wrap a single terminal.
@@ -129,13 +129,14 @@ Key fields by behaviour:
 existing kwargs:
 
 ```
-Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
+Memory → SubAgents → Guardrails → CostTracking → UsageLedger → JsonRetry → terminal
 ```
 
 - **`Memory`** present iff `memory=` is set.
 - **`SubAgents`** present iff `sub_agents=` is set.
 - **`Guardrails`** present iff `guardrails=` is set.
 - **`CostTracking`** always present.
+- **`UsageLedger`** present iff `usage_ledger=` is set.
 - **`JsonRetry`** always present (no-op for `ChatOutput`).
 
 ```python
@@ -176,7 +177,7 @@ provider.
 
 ---
 
-## The 6 built-in middlewares
+## The 7 built-in middlewares
 
 | Class | Purpose | When fires |
 |---|---|---|
@@ -184,6 +185,7 @@ provider.
 | `SubAgentMiddleware` | Wrap `tool_provider` with `_OrchestrationToolProvider`; thread `parent_episode_id` ContextVar | wrap on entry, restore on exit |
 | `GuardrailsMiddleware` | Fire `before_run` / `after_run`; wrap `tool_provider` with `GuardedToolProvider`; install cost-tracker for `max_cost` | full lifecycle |
 | `CostTrackingMiddleware` | Accumulate token + cost totals onto `Run.cost()` / `Run.usage()` | per-inference via `on_inference` |
+| `UsageLedgerMiddleware` | Capture every inference's gateway ids, usage and tool calls; hand the `UsageLedger` one `RunUsageRecord` per run | per-inference via `on_inference`; `finally` (record) |
 | `JsonRetryMiddleware` | Drive parse-failure retries for single-shot output modes | wraps terminal; loops on `Recovery.retry(hint)` |
 | `ObservabilityMiddleware` | Span-wrap the run via any `tracer.start_as_current_span(name)` | wraps terminal |
 
@@ -240,6 +242,24 @@ means **no middleware** including cost tracking.
 For the footprint-vs-billing distinction, the cache-token fields,
 `cost_is_priced`, and the per-conversation accumulator, see
 [Token usage](usage.md).
+
+### `UsageLedgerMiddleware`
+
+Present iff `AgentConfig.usage_ledger` is set (`usage_ledger=` on
+`App(...)` / `@app.agent`).  Captures each inference through
+`ctx.chain_on_inference` — the gateway's `inference_id` / `episode_id`,
+`variant_name`, the per-inference `Usage`, the tool-call names, the
+`finish_reason` — and in `finally` hands the ledger one `RunUsageRecord`
+with the run's totals, turn count and outcome (`completed` / `failed` /
+`cancelled`; the exception or cancellation still propagates).  Unlike
+`MemoryMiddleware`, a run that produced no result is recorded too.
+
+The write is best-effort by contract: `asyncio.wait_for` with a 2-second
+default `timeout=`, and a ledger that raises or hangs is logged (run id
+and exception class only) and swallowed — a ledger never changes the
+run's result.  It sits inside `cost_tracking` and outside `json_retry`,
+so every retry inference is one row.  See
+[Token usage → Persisting usage](usage.md#persisting-usage--usageledger).
 
 ### `JsonRetryMiddleware`
 
@@ -435,6 +455,11 @@ The chain order is the contract.  Some patterns and their reasoning:
   on top of the guardrail's cost-budget tracker (both subscribe via
   `ctx.chain_on_inference`).  Subscription order in chain order
   preserves the guardrail's per-budget semantics.
+
+- **Ledger inside cost tracking, outside retry.**  `UsageLedgerMiddleware`
+  subscribes after `CostTracking`'s observer and wraps `JsonRetry`, so a
+  ledger sees every retry inference while its `finally` runs before cost
+  tracking's backstop flush.
 
 If you replace the default chain entirely, preserve these invariants
 manually or call `AgentConfig.default_middleware_for(...)` and

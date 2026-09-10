@@ -657,6 +657,7 @@ chain that wraps a single terminal callable.
 | `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour).  `load` / `save` failures are logged and swallowed; a `T0AgentsFatalError` from the backend propagates, and under `strategy="messages"` a failed `load_history` raises `MemoryHistoryUnavailableError` and ends the turn — see [Error handling](error-handling.md#memoryhistoryunavailableerror). |
 | `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
 | `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |
+| `UsageLedgerMiddleware(ledger, *, timeout=2.0)` | Captures every inference and hands the `UsageLedger` one `RunUsageRecord` per run in `finally`; best-effort — bounded, logged, never raised.  Present iff `AgentConfig.usage_ledger` is set. |
 | `SubAgentMiddleware(sub_agents)` | Wraps `tool_provider` with `_OrchestrationToolProvider`; binds `parent_episode_id` ContextVar. |
 | `JsonRetryMiddleware()` | Drives the parse-failure retry loop for single-shot output modes by consulting `OutputMode.recover()`; no-op pass-through for chat agents. |
 | `ObservabilityMiddleware(tracer=None)` | Wraps the run in `tracer.start_as_current_span(f"agent.invoke/{name}")`.  Opt-in. |
@@ -666,12 +667,13 @@ chain that wraps a single terminal callable.
 When `AgentConfig.middleware is None`, `__post_init__` materialises:
 
 ```
-Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
+Memory → SubAgents → Guardrails → CostTracking → UsageLedger → JsonRetry → terminal
 ```
 
 `Memory` is included only when `memory=` is set; `SubAgents` only
 when `sub_agents=` is non-empty; `Guardrails` only when `guardrails=`
-is non-empty.  `CostTracking` and `JsonRetry` are always present.
+is non-empty; `UsageLedger` only when `usage_ledger=` is set.
+`CostTracking` and `JsonRetry` are always present.
 
 `SubAgents` precedes `Guardrails` in chain order so the
 `_OrchestrationToolProvider` wrap is INNER and `GuardedToolProvider`
@@ -727,6 +729,47 @@ disabled `CostTrackingMiddleware`).
 
 See [Token usage](usage.md) for the footprint-vs-billing distinction,
 the per-inference `Usage` value type, and `ConversationUsage`.
+
+---
+
+## `UsageLedger` *(v2.7)*
+
+`runtime_checkable` Protocol with one method — `async def record(self,
+run: RunUsageRecord) -> None` — called once per run after it ends,
+concurrently across runs, idempotent on `run_id`.  Wired through
+`AgentConfig(usage_ledger=)`, `App(usage_ledger=)` /
+`@app.agent(usage_ledger=)`, and `run_structured_inference(usage_ledger=)`.
+Reference backends under `t0_agents.usage`: `InMemoryUsageLedger`
+(`.runs`) and `SqliteUsageLedger(db_path)` (`memory-sqlite` extra).
+
+### `RunUsageRecord`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_id` | `str` | Library-minted UUIDv7; the idempotency key. |
+| `episode_id` | `str \| None` | The gateway's episode id; `None` only when no inference fired and none was supplied. |
+| `function_name` | `str \| None` | `AgentConfig.function_name`; `None` for `model=`-routed agents. |
+| `tags` | `Mapping[str, str]` | The merged tags the gateway received, `t0_agents.agent` included. |
+| `inferences` | `tuple[InferenceUsage, ...]` | One per gateway inference, in order. |
+| `usage` | `RunUsage` | The run's totals, summed as `RunUsage` sums; delegated sub-agents excluded. |
+| `turns` | `int` | `AgentResult.turns`, or the inference count when the run produced no result. |
+| `outcome` | `Literal["completed", "cancelled", "failed"]` | How the run ended. |
+| `error_class` | `str \| None` | The exception's class name when `outcome == "failed"`. |
+| `started_at`, `finished_at` | `datetime` | Aware UTC. |
+
+### `InferenceUsage`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inference_id`, `episode_id` | `str` | The gateway's ids — never a corrective-retry sentinel. |
+| `function_name` | `str \| None` | As on the run record. |
+| `variant_name` | `str \| None` | `None` on the streaming path's synthetic response. |
+| `usage` | `Usage` | Lossless per-inference usage; `cost` stays `None` when unpriced. |
+| `tool_calls` | `tuple[str, ...]` | Tool-call names in content order; an unrecognised tool keeps the name the model wrote. |
+| `finish_reason` | `str \| None` | The gateway's `FinishReason` value, when carried. |
+| `at` | `datetime` | Aware UTC, at capture. |
+
+See [Token usage → Persisting usage](usage.md#persisting-usage--usageledger).
 
 ---
 
