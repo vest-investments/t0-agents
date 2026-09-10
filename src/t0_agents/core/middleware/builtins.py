@@ -7,7 +7,9 @@ materialised by :meth:`AgentConfig.__post_init__` is::
     Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
 
 `middleware[0]` (``Memory``) is outermost; ``JsonRetry`` is innermost
-right before the terminal.  Each layer's responsibility:
+right before the terminal.  An ``AgentConfig.usage_ledger`` adds
+:class:`~t0_agents.usage.UsageLedgerMiddleware` between ``CostTracking``
+and ``JsonRetry``.  Each layer's responsibility:
 
 - :class:`MemoryMiddleware` — load prior records, inject summary or
   ``prior_messages``, save the new record in ``finally``.

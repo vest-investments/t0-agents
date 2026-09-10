@@ -22,7 +22,10 @@ have built their own retry loop.
 Only ``mcp/`` is forbidden from importing higher-level modules.  This
 ``core/structured.py`` lives alongside ``core/agent.py``,
 ``core/config.py``, and ``core/types.py`` and follows the same dependency
-hygiene: it imports only from ``tensorzero`` and the standard library.
+hygiene: at import time it imports only from ``tensorzero`` and the
+standard library.  The ``usage_ledger`` branch imports
+:mod:`t0_agents.usage` lazily — :mod:`t0_agents.core.types` imports this
+module, so a top-level import would be a cycle.
 """
 
 from __future__ import annotations
@@ -30,13 +33,17 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from tensorzero import (
     AsyncTensorZeroGateway,
     JsonInferenceResponse,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from t0_agents.usage.ledger import UsageLedger
 
 ParseStrategy = Literal["strict", "permissive", "retry", "none"]
 """How :class:`StructuredInferenceResult.parsed` came to be populated.
@@ -280,6 +287,7 @@ async def run_structured_inference(
     on_inference: (
         Callable[[JsonInferenceResponse], Awaitable[None]] | None
     ) = None,
+    usage_ledger: UsageLedger | None = None,
 ) -> StructuredInferenceResult:
     """Run one TensorZero JSON-function inference.
 
@@ -331,6 +339,14 @@ async def run_structured_inference(
             :class:`JsonInferenceResponse` before this function returns.
             Mirrors :func:`run_agent`'s hook and is the entry point for
             cost-tracking or other per-call observability.
+        usage_ledger: Optional :class:`~t0_agents.usage.UsageLedger`.
+            When set, the inference is recorded as a one-inference
+            :class:`~t0_agents.usage.RunUsageRecord` (``turns=1``,
+            ``outcome="completed"``, ``tags`` as passed) under the same
+            best-effort contract as
+            :class:`~t0_agents.usage.UsageLedgerMiddleware` — bounded by
+            a timeout, logged and never raised.  A gateway call that
+            raises records nothing.
 
     Returns:
         :class:`StructuredInferenceResult` whose ``parse_strategy`` is
@@ -366,6 +382,7 @@ async def run_structured_inference(
     if json_mode is not None:
         params = {"chat_completion": {"json_mode": json_mode}}
 
+    started_at = datetime.now(UTC)
     raw = await t0.inference(
         function_name=function_name,
         input=input_dict,
@@ -389,6 +406,17 @@ async def run_structured_inference(
 
     if on_inference is not None:
         await on_inference(response)
+
+    if usage_ledger is not None:
+        from t0_agents.usage.middleware import record_single_inference
+
+        await record_single_inference(
+            usage_ledger,
+            response,
+            function_name=function_name,
+            tags=tags,
+            started_at=started_at,
+        )
 
     parsed_value: Any | None = cast(Any, response.output.parsed)
     raw_value: str = response.output.raw or ""

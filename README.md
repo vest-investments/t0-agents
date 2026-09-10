@@ -212,7 +212,7 @@ heavier extras live behind named installs.
 | --- | --- |
 | **MCP adapter & loop** | Convert FastMCP tool definitions to TensorZero's inference format, orchestrate the turn-based inference-execute loop, serialize tool results back.  Low-level `run_agent` for full control. |
 | **`Run[T]` handles** | `agent.invoke(msg)` returns a `Run` you can `await`, iterate with `.events()`, cancel, replay, fork, and attach feedback to. |
-| **Middleware chain** | Memory, guardrails, cost tracking, sub-agent orchestration, JSON retry — all composable middlewares; add your own without forking `core/agent.py`. |
+| **Middleware chain** | Memory, guardrails, cost tracking, usage ledger, sub-agent orchestration, JSON retry — all composable middlewares; add your own without forking `core/agent.py`. |
 | **`OutputMode[T]` polymorphism** | `ChatOutput`, `JsonOutput`, `StructuredOutput[M]` (Pydantic), `ToolCallOutput`, `StreamingOutput`.  Custom modes (YAML, Instructor, SQLAlchemy) plug in via the same protocol. |
 | **glow decorator surface** | FastAPI-style `@app.agent` over the v1.0 primitives.  Docstring = system prompt, return annotation = `OutputMode`, `Depends(...)` for tools and sub-agents, `Annotated[T, guardrail(...)]` for policy as type metadata. |
 | **Cross-run memory** | `InMemoryMemory`, `SqliteMemory`, `TensorZeroMemory`, or your own `MemoryProvider`.  Keyed by TensorZero's `episode_id`. |
