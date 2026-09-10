@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from t0_agents.core.middleware.base import Middleware
     from t0_agents.core.types import AgentResult, MemoryProvider
     from t0_agents.glow.decorators import _AgentWrapper
+    from t0_agents.usage.ledger import UsageLedger
 
 __all__ = ["App"]
 
@@ -237,9 +238,9 @@ class App:
     ``Client``, which is connected by :meth:`build` and disconnected by
     :meth:`shutdown`.
 
-    App-level ``tags`` / ``middleware`` / ``namespace`` set defaults for
-    every registered agent; per-agent ``@app.agent(...)`` knobs override
-    them (``tags`` dict-merge, agent-level keys winning).
+    App-level ``tags`` / ``middleware`` / ``namespace`` / ``usage_ledger``
+    set defaults for every registered agent; per-agent ``@app.agent(...)``
+    knobs override them (``tags`` dict-merge, agent-level keys winning).
 
     ``elicitation_handler`` binds a human-in-the-loop resolver onto the
     App-owned ``Client``, so a mounted tool's ``ctx.elicit(...)`` reaches a
@@ -260,6 +261,7 @@ class App:
         middleware: list[Middleware] | None = None,
         namespace: str | None = None,
         elicitation_handler: ElicitationHandler | None = None,
+        usage_ledger: UsageLedger | None = None,
     ) -> None:
         # Gateway sources — at most one of the three constructor forms:
         #   t0=        an already-built AsyncTensorZeroGateway (caller owns it)
@@ -294,11 +296,12 @@ class App:
         self._owns_t0: bool = False
         # App-level ``AgentConfig`` defaults, layered *under* per-agent
         # ``@app.agent(...)`` knobs by :meth:`_resolve_config_overrides`.
-        # ``tags`` dict-merge with agent-level keys winning; ``namespace``
-        # and ``middleware`` are taken agent-level-first, else the default.
+        # ``tags`` dict-merge with agent-level keys winning; ``namespace``,
+        # ``middleware`` and ``usage_ledger`` are agent-level-first, else default.
         self._default_tags: dict[str, str] | None = tags
         self._default_middleware: list[Middleware] | None = middleware
         self._default_namespace: str | None = namespace
+        self._default_usage_ledger: UsageLedger | None = usage_ledger
         self._agent_registry: dict[str, _AgentSpec] = {}
         # Public mapping consulted by ``DependencyResolver`` on every
         # ``Depends(...)`` resolution.  Lives here so users can install
@@ -409,6 +412,7 @@ class App:
             "auto", "system_template", "prepended_message", "messages"
         ] = _UNSET,
         middleware: list[Middleware] | None = _UNSET,
+        usage_ledger: UsageLedger | None = _UNSET,
         tools: list[Any] | None = None,
         replace: bool = False,
     ) -> Callable[[Callable[_P, Awaitable[_R]]], _AgentWrapper[_P, _R]]:
@@ -429,7 +433,7 @@ class App:
         ``tool_timeout``, ``parallel_tools``, ``terminal_tools``,
         ``replay_thoughts``, ``dryrun``,
         ``tool_choice``, ``tags``, ``namespace``, ``memory``,
-        ``memory_strategy``, ``middleware``).  Omitted knobs keep their
+        ``memory_strategy``, ``middleware``, ``usage_ledger``).  Omitted knobs keep their
         ``AgentConfig`` defaults; supplied knobs are layered over any
         App-level defaults (agent-level wins — see :meth:`__init__`).
 
@@ -466,6 +470,11 @@ class App:
         ``<sub_agent>_ask``: a terminal round answers with its **own**
         text, so a delegated reply would be dropped.
 
+        ``usage_ledger`` hands one :class:`~t0_agents.usage.RunUsageRecord`
+        per run to the given :class:`~t0_agents.usage.UsageLedger`, through
+        the best-effort middleware the ledger enables; an App-level
+        ``usage_ledger`` applies when the agent omits it.
+
         ``replace=True`` re-registers over an existing name instead of
         raising the duplicate-name error — the REPL/notebook
         re-decoration affordance (pairs with :meth:`remove_agent`).
@@ -492,6 +501,7 @@ class App:
             "memory": memory,
             "memory_strategy": memory_strategy,
             "middleware": middleware,
+            "usage_ledger": usage_ledger,
         }
         config_overrides = {k: v for k, v in knobs.items() if v is not _UNSET}
         if "terminal_tools" in config_overrides:
@@ -639,8 +649,8 @@ class App:
     def _resolve_config_overrides(self, spec: _AgentSpec) -> dict[str, Any]:
         """Layer App-level defaults under the agent-level ``config_overrides``.
 
-        ``namespace`` and ``middleware`` take the agent-level value when the
-        agent supplied one, else the App default.  ``tags`` dict-merge so
+        ``namespace``, ``middleware`` and ``usage_ledger`` take the
+        agent-level value when the agent supplied one, else the App default.  ``tags`` dict-merge so
         ``App(tags={"env": "prod"})`` + ``@app.agent(tags={"team": "cs"})``
         yields both, with agent-level keys winning on collision (mirrors the
         core ``Agent._merge_tags`` precedence).  An explicit agent-level
@@ -651,6 +661,8 @@ class App:
             overrides["namespace"] = self._default_namespace
         if "middleware" not in overrides and self._default_middleware is not None:
             overrides["middleware"] = self._default_middleware
+        if "usage_ledger" not in overrides and self._default_usage_ledger is not None:
+            overrides["usage_ledger"] = self._default_usage_ledger
         # ``tags`` dict-merge (agent keys win), but an explicit agent-level
         # ``tags=None`` opts out of the App default entirely — an explicit
         # None stays distinct from omission (the ``_UNSET`` contract).

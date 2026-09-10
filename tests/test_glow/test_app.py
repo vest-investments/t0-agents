@@ -49,6 +49,10 @@ class _Trip(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class _NoopLedger:
+    async def record(self, run: object) -> None: ...
+
+
 def _fake_t0() -> AsyncTensorZeroGateway:
     """Return an opaque sentinel cast to ``AsyncTensorZeroGateway``.
 
@@ -573,6 +577,7 @@ def test_non_message_param_with_plain_default_raises() -> None:
 
 async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
     """Every ``@app.agent`` knob lands on the constructed ``AgentConfig``."""
+    ledger = _NoopLedger()
 
     @app_with_fake_agent.agent(
         "cs",
@@ -584,6 +589,7 @@ async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
         tags={"team": "cs"},
         namespace="prod",
         memory_strategy="prepended_message",
+        usage_ledger=ledger,
     )
     async def cs(q: str) -> str:  # type: ignore[empty-body]
         """A CS agent."""
@@ -598,6 +604,7 @@ async def test_config_knobs_reach_agentconfig(app_with_fake_agent: App) -> None:
     assert cfg.tags == {"team": "cs"}
     assert cfg.namespace == "prod"
     assert cfg.memory_strategy == "prepended_message"
+    assert cfg.usage_ledger is ledger
 
 
 async def test_omitted_knobs_keep_agentconfig_defaults(
@@ -617,6 +624,7 @@ async def test_omitted_knobs_keep_agentconfig_defaults(
     assert cfg.replay_thoughts is False
     assert cfg.tags is None
     assert cfg.namespace is None
+    assert cfg.usage_ledger is None
 
 
 async def test_app_level_defaults_and_agent_override(
@@ -627,13 +635,22 @@ async def test_app_level_defaults_and_agent_override(
     _FakeAgent.last_invoke_kwargs = {}
     _FakeAgent.fake_value = "hello-from-fake"
     monkeypatch.setattr("t0_agents.glow.app.Agent", _FakeAgent)
-    app = App(t0=_fake_t0(), tags={"env": "prod"}, namespace="ns_app")
+    app_ledger = _NoopLedger()
+    agent_ledger = _NoopLedger()
+    app = App(
+        t0=_fake_t0(), tags={"env": "prod"}, namespace="ns_app", usage_ledger=app_ledger
+    )
 
     @app.agent("inherits")
     async def inherits(q: str) -> str:  # type: ignore[empty-body]
         """Inherits App defaults."""
 
-    @app.agent("overrides", namespace="ns_agent", tags={"env": "dev", "team": "cs"})
+    @app.agent(
+        "overrides",
+        namespace="ns_agent",
+        tags={"env": "dev", "team": "cs"},
+        usage_ledger=agent_ledger,
+    )
     async def overrides(q: str) -> str:  # type: ignore[empty-body]
         """Overrides App defaults."""
 
@@ -643,9 +660,11 @@ async def test_app_level_defaults_and_agent_override(
     inherits_cfg = inherits.agent._config
     assert inherits_cfg.namespace == "ns_app"
     assert inherits_cfg.tags == {"env": "prod"}
+    assert inherits_cfg.usage_ledger is app_ledger
 
     overrides_cfg = overrides.agent._config
     assert overrides_cfg.namespace == "ns_agent"  # agent-level wins
+    assert overrides_cfg.usage_ledger is agent_ledger
     # tags dict-merge; the agent-level key ("env") wins over the App default.
     assert overrides_cfg.tags == {"env": "dev", "team": "cs"}
 
