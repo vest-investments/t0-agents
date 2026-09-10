@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,6 +24,9 @@ from t0_agents.usage.ledger import UsageLedger
 from t0_agents.usage.records import InferenceUsage, RunOutcome, RunUsageRecord
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT = 2.0
+"""Seconds a ledger write may take before it is abandoned and logged."""
 
 
 def capture_inference(response: Any, *, function_name: str | None) -> InferenceUsage:
@@ -91,6 +94,41 @@ async def record_best_effort(
         )
 
 
+async def record_single_inference(
+    ledger: UsageLedger,
+    response: Any,
+    *,
+    function_name: str | None,
+    tags: Mapping[str, str] | None,
+    started_at: datetime,
+) -> None:
+    """Record a run that was one direct inference, outside any chain.
+
+    The shape :func:`~t0_agents.core.structured.run_structured_inference`
+    produces: one :class:`InferenceUsage`, ``turns=1``,
+    ``outcome="completed"``, ``tags`` as the caller passed them, written
+    through :func:`record_best_effort` with :data:`DEFAULT_TIMEOUT`.
+    """
+    inference = capture_inference(response, function_name=function_name)
+    await record_best_effort(
+        ledger,
+        RunUsageRecord(
+            run_id=str(uuid7()),
+            episode_id=inference.episode_id,
+            function_name=function_name,
+            tags=dict(tags or {}),
+            inferences=(inference,),
+            usage=sum_usages((inference,)),
+            turns=1,
+            outcome="completed",
+            error_class=None,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+        ),
+        timeout=DEFAULT_TIMEOUT,
+    )
+
+
 class UsageLedgerMiddleware:
     """Record one :class:`RunUsageRecord` per run onto a :class:`UsageLedger`.
 
@@ -111,7 +149,9 @@ class UsageLedgerMiddleware:
 
     name = "usage_ledger"
 
-    def __init__(self, ledger: UsageLedger, *, timeout: float = 2.0) -> None:
+    def __init__(
+        self, ledger: UsageLedger, *, timeout: float = DEFAULT_TIMEOUT
+    ) -> None:
         self._ledger = ledger
         self._timeout = timeout
 
