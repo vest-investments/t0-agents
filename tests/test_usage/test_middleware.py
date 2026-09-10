@@ -21,6 +21,7 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import RunCancelledError
 from t0_agents.core.middleware import CostTrackingMiddleware
 from t0_agents.core.types import ToolProvider
+from t0_agents.delegation.routing import default_tool_name
 from t0_agents.usage import (
     InMemoryUsageLedger,
     RunUsageRecord,
@@ -203,6 +204,79 @@ class TestOneRecordPerRun:
         assert [i.inference_id for i in ledger.runs[0].inferences] == [
             str(real.inference_id)
         ]
+
+
+class TestSubAgentsRecordThemselves:
+    async def test_a_delegated_child_lands_on_its_own_ledger_not_the_parents(
+        self,
+    ) -> None:
+        child_ledger = InMemoryUsageLedger()
+        child = Agent(
+            AgentConfig(
+                name="researcher",
+                function_name="researcher_fn",
+                usage_ledger=child_ledger,
+            ),
+            t0=cast(
+                AsyncTensorZeroGateway,
+                FakeT0(
+                    [
+                        FakeChatResponse(
+                            content=[Text(type="text", text="sub-answer")],
+                            usage=FakeUsage(input_tokens=30, output_tokens=5),
+                        ),
+                    ]
+                ),
+            ),
+            tool_provider=cast(ToolProvider, FakeMCPClient()),
+        )
+        parent_ledger = InMemoryUsageLedger()
+        child_tool = default_tool_name(child)
+        parent = Agent(
+            AgentConfig(
+                name="orch",
+                function_name="orch_fn",
+                sub_agents=[child],
+                usage_ledger=parent_ledger,
+            ),
+            t0=cast(
+                AsyncTensorZeroGateway,
+                FakeT0(
+                    [
+                        FakeChatResponse(
+                            content=[
+                                ToolCall(
+                                    id="tc-1",
+                                    raw_name=child_tool,
+                                    name=child_tool,
+                                    raw_arguments='{"message": "go"}',
+                                    arguments={"message": "go"},
+                                ),
+                            ],
+                            usage=FakeUsage(input_tokens=100, output_tokens=10),
+                        ),
+                        FakeChatResponse(
+                            content=[Text(type="text", text="final")],
+                            usage=FakeUsage(input_tokens=120, output_tokens=8),
+                        ),
+                    ]
+                ),
+            ),
+            tool_provider=None,
+        )
+
+        run = parent.invoke("delegate please")
+        await run.result()
+
+        parent_record = parent_ledger.runs[0]
+        assert [i.usage.input_tokens for i in parent_record.inferences] == [100, 120]
+        assert [i.tool_calls for i in parent_record.inferences] == [(child_tool,), ()]
+        assert parent_record.usage.input_tokens == 220
+        assert run.usage() is not None and run.usage().input_tokens == 250
+        child_record = child_ledger.runs[0]
+        assert child_record.function_name == "researcher_fn"
+        assert [i.usage.input_tokens for i in child_record.inferences] == [30]
+        assert len(parent_ledger.runs) == len(child_ledger.runs) == 1
 
 
 class TestEveryOutcomeIsRecorded:

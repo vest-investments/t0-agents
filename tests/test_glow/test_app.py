@@ -691,6 +691,24 @@ async def test_explicit_agent_tags_none_opts_out_of_app_default(
     assert no_tags.agent._config.tags is None  # explicit None, not the App default
 
 
+async def test_explicit_agent_usage_ledger_none_opts_out_of_app_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``@app.agent(usage_ledger=None)`` overrides the App default."""
+    _FakeAgent.construct_count = 0
+    _FakeAgent.last_invoke_kwargs = {}
+    _FakeAgent.fake_value = "hello-from-fake"
+    monkeypatch.setattr("t0_agents.glow.app.Agent", _FakeAgent)
+    app = App(t0=_fake_t0(), usage_ledger=_NoopLedger())
+
+    @app.agent("unledgered", usage_ledger=None)
+    async def unledgered(q: str) -> str:  # type: ignore[empty-body]
+        """Explicitly opts out of the App-level ledger."""
+
+    await unledgered("hi")
+    assert unledgered.agent._config.usage_ledger is None
+
+
 async def test_per_call_with_reaches_invoke(app_with_fake_agent: App) -> None:
     """``.with_(episode_id=, prior_messages=, tags=)`` reaches ``Agent.invoke``."""
 
