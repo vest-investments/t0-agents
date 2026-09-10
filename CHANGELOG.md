@@ -4,6 +4,56 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.7.0] — 2026-09-10
+
+Every inference reports its usage and the library adds it up, but the
+sum lives only as long as the `Run` that produced it: nothing wrote it
+anywhere, and the SDK has no way to read it back afterwards. A
+consumer that meters or bills its users had to scrape ClickHouse.
+`UsageLedger` is the seam that was missing — a Protocol the consumer
+implements over its own store, fed by a middleware that captures each
+inference as the gateway reports it and hands over one record per run
+when the run ends, whichever way it ends. An agent that does not set
+it behaves exactly as it did in 2.6.0.
+
+### Added
+
+- **`UsageLedger`, the persistence seam for usage.** A
+  `runtime_checkable` Protocol with one method,
+  `record(run: RunUsageRecord)`, called once after every run. The
+  record carries one `InferenceUsage` per inference — the gateway's
+  `inference_id` and `episode_id`, the variant, the per-inference
+  `Usage`, the names of the tool calls it made, its `finish_reason` —
+  plus the run's totals, turn count, outcome (`completed`,
+  `cancelled` or `failed`), timings and tags. Tags pass through as the
+  gateway saw them; the library reads nothing into them.
+
+- **`usage_ledger` on `AgentConfig`, `App(...)` and `@app.agent`.**
+  Setting it appends `UsageLedgerMiddleware` to the default chain
+  right after `cost_tracking`. The write is best-effort by contract:
+  bounded by a timeout (2 s by default), and a ledger that raises or
+  hangs is logged and never changes the run's result or raises to
+  the caller. A cancelled run records `cancelled` and still cancels.
+
+- **`run_structured_inference(..., usage_ledger=)`** records the
+  single inference of a direct JSON-function call the same way.
+
+- **`InMemoryUsageLedger` and `SqliteUsageLedger`** under
+  `t0_agents.usage` — the reference backends, the latter behind the
+  existing `memory-sqlite` extra. `SqliteUsageLedger` refuses
+  `":memory:"` and `""`: it connects per record, so a
+  connection-scoped database would lose every row.
+
+### Notes
+
+- Inference ids are captured from the gateway's own responses, never
+  from `AgentResult.inference_ids`, so the corrective-retry sentinels
+  that list carries never reach a ledger. A stream that ends without
+  a usage chunk yields no inference row; its run row carries none.
+- A sub-agent's inferences are recorded by the sub-agent's own chain
+  when it has a ledger; the parent's record covers the parent's own
+  inferences, so rows are never counted twice.
+
 ## [2.6.0] — 2026-09-05
 
 A stored episode has two readers that want opposite things from one
