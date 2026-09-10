@@ -25,6 +25,7 @@ from t0_agents.core.types import (
     MemoryProvider,
     ToolProvider,
 )
+from t0_agents.usage import UsageLedger, UsageLedgerMiddleware
 from tests._fake_mcp import FakeMCPClient
 from tests._fake_t0 import FakeT0
 
@@ -48,6 +49,11 @@ class _NoopGuardrail:
         return None
     async def after_tool(self, ctx: Any, tc: Any, r: str) -> None: ...
     async def after_run(self, ctx: Any, result: Any) -> None: ...
+
+
+class _NoopLedger:
+    async def record(self, run: Any) -> None:
+        pass
 
 
 def _names(chain: list[Middleware]) -> list[str]:
@@ -141,6 +147,40 @@ class TestDefaultChain:
             "json_retry",
         ]
 
+    def test_usage_ledger_sits_between_cost_tracking_and_json_retry(self) -> None:
+        cfg = AgentConfig(
+            name="u",
+            function_name="agent",
+            usage_ledger=cast(UsageLedger, _NoopLedger()),
+        )
+        assert cfg.middleware is not None
+        assert _names(cfg.middleware) == ["cost_tracking", "usage_ledger", "json_retry"]
+        assert isinstance(cfg.middleware[1], UsageLedgerMiddleware)
+
+    def test_full_chain_with_a_ledger_keeps_the_canonical_order(self) -> None:
+        sub = Agent(
+            AgentConfig(name="sub", function_name="sub_fn"),
+            t0=cast(Any, FakeT0([])),
+            tool_provider=cast(ToolProvider, FakeMCPClient()),
+        )
+        cfg = AgentConfig(
+            name="full",
+            function_name="agent",
+            memory=cast(MemoryProvider, _NoopMemory()),
+            guardrails=[cast(Guardrail, _NoopGuardrail())],
+            sub_agents=[sub],
+            usage_ledger=cast(UsageLedger, _NoopLedger()),
+        )
+        assert cfg.middleware is not None
+        assert _names(cfg.middleware) == [
+            "memory",
+            "sub_agents",
+            "guardrails",
+            "cost_tracking",
+            "usage_ledger",
+            "json_retry",
+        ]
+
     def test_json_retry_is_innermost(self) -> None:
         # Q13 resolution: JsonRetry must be the innermost layer so
         # memory/guardrails see only the final successful inference
@@ -203,6 +243,13 @@ class TestStaticHelper:
             guardrails=cfg.guardrails,
             sub_agents=cfg.sub_agents,
         )
+        assert cfg.middleware is not None
+        assert _names(helper_chain) == _names(cfg.middleware)
+
+    def test_default_middleware_for_threads_the_ledger(self) -> None:
+        ledger = cast(UsageLedger, _NoopLedger())
+        cfg = AgentConfig(name="r", function_name="agent", usage_ledger=ledger)
+        helper_chain = AgentConfig.default_middleware_for(usage_ledger=ledger)
         assert cfg.middleware is not None
         assert _names(helper_chain) == _names(cfg.middleware)
 
@@ -278,6 +325,16 @@ class TestComponentTypes:
         ct = [mw for mw in cfg.middleware if mw.name == "cost_tracking"]
         assert len(ct) == 1
         assert isinstance(ct[0], CostTrackingMiddleware)
+
+    def test_usage_ledger_middleware_receives_the_ledger(self) -> None:
+        ledger = _NoopLedger()
+        cfg = AgentConfig(
+            name="u", function_name="agent", usage_ledger=cast(UsageLedger, ledger)
+        )
+        assert cfg.middleware is not None
+        mw = cfg.middleware[1]
+        assert isinstance(mw, UsageLedgerMiddleware)
+        assert getattr(mw, "_ledger", None) is ledger
 
     def test_sub_agent_middleware_receives_agents(self) -> None:
         sub = Agent(

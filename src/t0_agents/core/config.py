@@ -15,6 +15,7 @@ from t0_agents.core.types import Guardrail, MemoryProvider
 if TYPE_CHECKING:
     from t0_agents.core.agent import Agent
     from t0_agents.core.middleware.base import Middleware
+    from t0_agents.usage.ledger import UsageLedger
 
 _VALID_MEMORY_STRATEGIES = frozenset(
     {"auto", "system_template", "prepended_message", "messages"}
@@ -158,6 +159,15 @@ class AgentConfig:
             ``None`` (default) builds the v0.12-equivalent chain from
             the kwargs above.  ``[]`` is the explicit "no middleware"
             opt-out — power users only.
+        usage_ledger: Optional :class:`~t0_agents.usage.UsageLedger`.
+            When set, the default chain gains a
+            :class:`~t0_agents.usage.UsageLedgerMiddleware` right after
+            ``cost_tracking`` that hands the ledger one
+            :class:`~t0_agents.usage.RunUsageRecord` per run — every
+            inference's gateway ids, usage and tool calls, plus the run's
+            totals and outcome.  The write is best-effort: bounded by a
+            2 s timeout, logged and never raised.  ``None`` (the default)
+            leaves the chain exactly as it was.
     """
 
     # Identity
@@ -205,6 +215,7 @@ class AgentConfig:
     cache: dict[str, Any] | None = None
     terminal_tools: tuple[str, ...] = ()
     replay_thoughts: bool = False
+    usage_ledger: UsageLedger | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -340,11 +351,13 @@ class AgentConfig:
     def _build_default_chain(self) -> list[Middleware]:
         """Build the v0.12-equivalent middleware chain from existing kwargs.
 
-        Order: ``Memory → SubAgents → Guardrails → CostTracking → JsonRetry``.
+        Order: ``Memory → SubAgents → Guardrails → CostTracking →
+        UsageLedger → JsonRetry``.
 
         ``Memory`` is included only when ``self.memory`` is set;
         ``Guardrails`` only when ``self.guardrails`` is non-empty;
-        ``SubAgents`` only when ``self.sub_agents`` is non-empty.
+        ``SubAgents`` only when ``self.sub_agents`` is non-empty;
+        ``UsageLedger`` only when ``self.usage_ledger`` is set.
         ``CostTracking`` and ``JsonRetry`` are always present —
         cost-tracking wires :meth:`Run.cost` / :meth:`Run.usage`
         unconditionally, and ``JsonRetry`` activates for any non-chat
@@ -370,6 +383,7 @@ class AgentConfig:
             memory_strategy=self.memory_strategy,
             guardrails=self.guardrails,
             sub_agents=self.sub_agents,
+            usage_ledger=self.usage_ledger,
         )
 
     @staticmethod
@@ -381,6 +395,7 @@ class AgentConfig:
         ] = "auto",
         guardrails: list[Guardrail] | None = None,
         sub_agents: list[Agent] | None = None,
+        usage_ledger: UsageLedger | None = None,
     ) -> list[Middleware]:
         """Build the default middleware chain for the given inputs.
 
@@ -410,6 +425,7 @@ class AgentConfig:
             MemoryMiddleware,
             SubAgentMiddleware,
         )
+        from t0_agents.usage.middleware import UsageLedgerMiddleware
 
         chain: list[Middleware] = []
         if memory is not None:
@@ -421,5 +437,7 @@ class AgentConfig:
         if guardrails:
             chain.append(GuardrailsMiddleware(list(guardrails)))
         chain.append(CostTrackingMiddleware())
+        if usage_ledger is not None:
+            chain.append(UsageLedgerMiddleware(usage_ledger))
         chain.append(JsonRetryMiddleware())
         return chain

@@ -8,9 +8,11 @@ concerns.
 The default chain materialised by :meth:`AgentConfig.__post_init__`
 when ``middleware is None`` is::
 
-    Memory → Guardrails → CostTracking → SubAgents → JsonRetry → terminal
+    Memory → SubAgents → Guardrails → CostTracking → JsonRetry → terminal
 
-``middleware[0]`` is outermost.  See :mod:`t0_agents.core.middleware.builtins`
+``middleware[0]`` is outermost; an ``AgentConfig.usage_ledger`` adds
+:class:`~t0_agents.usage.UsageLedgerMiddleware` between ``CostTracking``
+and ``JsonRetry``.  See :mod:`t0_agents.core.middleware.builtins`
 for each layer's responsibility and the load-bearing order invariant
 (``SubAgentMiddleware`` wraps ``tool_provider`` inside
 ``GuardrailsMiddleware``).
