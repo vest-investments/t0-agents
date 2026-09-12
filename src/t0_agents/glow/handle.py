@@ -190,7 +190,7 @@ class FluentRun(Generic[T]):
         """
         if model is None:
             return self._spawn(JsonOutput())
-        return self._spawn(cast(OutputMode[Any], StructuredOutput(model)))
+        return self._spawn(StructuredOutput(model))
 
     def as_(self, mode: OutputMode[U]) -> FluentRun[U]:
         """Override to the supplied :class:`OutputMode`."""

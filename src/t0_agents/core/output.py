@@ -240,7 +240,9 @@ class OutputMode(Protocol[T_co]):
 
     expects_tool_loop: bool
     supports_streaming: bool
-    name: str
+
+    @property
+    def name(self) -> str: ...
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest:
         """Mutate ``req`` (or return a new one) to encode this mode's TZ kwargs."""

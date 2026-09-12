@@ -798,9 +798,11 @@ from t0_agents import (
 ```python
 @runtime_checkable
 class OutputMode(Protocol[T_co]):
-    name: str
     expects_tool_loop: bool
     supports_streaming: bool
+
+    @property
+    def name(self) -> str: ...
 
     def shape_inference(self, req: InferenceRequest) -> InferenceRequest: ...
     async def materialize(self, response, attempts) -> AgentResult[T_co]: ...
