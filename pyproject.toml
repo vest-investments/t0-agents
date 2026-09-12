@@ -21,7 +21,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastmcp>=3.2.3",
+    # mcp is imported directly (McpError, mcp.types, mcp.shared._httpx_utils),
+    # not merely pulled in by fastmcp; 2.x renames or re-homes all three, and
+    # fastmcp 4.x requires it.
+    "fastmcp>=3.2.3,<4",
+    "mcp>=1.24.0,<2",
     "tensorzero>=2026.6.0",
 ]
 
