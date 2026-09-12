@@ -20,7 +20,8 @@ def register(app: typer.Typer) -> None:
     def info_cmd(
         agent_spec: str = typer.Argument(
             ...,
-            help="Factory spec in 'module:attr' form.",
+            help="Factory spec in 'module:attr' form, or a glow App "
+            "instance (e.g. 'mymodule:app').",
         ),
         agent: str | None = typer.Option(
             None,
