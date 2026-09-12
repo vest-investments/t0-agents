@@ -180,6 +180,16 @@ uv run mypy src/
 uv run pytest -m "not integration and not embedded"
 ```
 
+If you touched `pyproject.toml`'s dependency ranges, also resolve
+without the lockfile — every command above reads `uv.lock`, so a range
+that no longer installs stays green here and breaks only for people
+installing the package:
+
+```bash
+uv run --isolated --no-project --with ".[cli,glow]" \
+  python -c "import t0_agents; print(t0_agents.__version__)"
+```
+
 Optional but appreciated:
 
 ```bash
