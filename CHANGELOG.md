@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.8.1] — 2026-09-12
+
+In 2.8.0, `StructuredOutput` does not satisfy `OutputMode` under mypy.
+The protocol declares `name` as a settable variable, and
+`StructuredOutput` — the only built-in mode whose name is derived from
+its model — implements it as a read-only property, which does not
+satisfy a settable member. So every public surface taking an
+`OutputMode` rejects the one mode that produces typed output,
+including the snippet the documentation publishes as the canonical
+path. Two `cast()` calls inside `src/` keep `mypy src/` green, which
+is why the failure is visible only to callers.
+
+### Fixed
+
+- **`OutputMode.name` is now declared as a read-only property.** The
+  relation holds one way only: a member declared that way is satisfied
+  by a plain attribute, so the four attribute-backed modes are
+  untouched while `StructuredOutput` conforms.
+  `AgentConfig(output=...)`, `Agent.invoke(output=...)` and
+  `FluentRun.as_(...)` accept it, and `as_()` infers `FluentRun[M]`
+  with no annotation on the target — the mismatch used to collapse
+  inference to `OutputMode[Never]`, which reads as a variance problem
+  and is not one.
+
+### Notes
+
+- Types only. `isinstance(mode, OutputMode)` still holds for every
+  built-in mode and `name` returns the same strings: a
+  `@runtime_checkable` protocol reduces a data member to `hasattr`,
+  which a property and an attribute satisfy alike.
+- The two internal casts that hid the defect are gone, so the concrete
+  pairing now happens inside `src/`. `mypy src/` — the pre-PR gate in
+  `CONTRIBUTING.md` — fails if the declaration regresses.
+
 ## [2.8.0] — 2026-09-12
 
 A clean install of 2.7.0 does not import. The package declares
