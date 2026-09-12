@@ -58,7 +58,7 @@ re-run against a real 2026.6.0 gateway before the floor moved:
 | `list_inferences` by `episode_id` + tag filters + `order_by` + `limit` (all of `TensorZeroMemory`) | unchanged | the `integration` suite |
 | A client-minted UUIDv7 `episode_id` is stored verbatim; any other UUID version is HTTP 400 | unchanged | `tests/test_memory/test_tensorzero_integration.py` |
 | `ModelInference.finish_reason` is `Nullable(Enum8('stop','length','tool_call','content_filter','unknown','stop_sequence'))`; `model_name` is the TensorZero alias, `model_provider_name` the provider | unchanged | `DESCRIBE` on a 2026.6.0-migrated ClickHouse plus one live row |
-| `json_mode = "strict"` and `"on"` both return parsed JSON output (Groq); the DeepSeek provider still downgrades `strict` to `json_object` with a warning | unchanged | the `integration` suite; gateway binary |
+| `json_mode = "strict"` and `"on"` both return parsed JSON output (Groq); the DeepSeek provider still downgrades `strict` to `json_object` with a warning ([why, and what it costs](structured-outputs.md#deepseek-json_object-has-a-prompt-precondition)) | unchanged | the `integration` suite; gateway binary |
 | The `model=` passthrough ignores a per-call `output_schema` | unchanged | one inference |
 | A provider-side HTTP 400 surfaces as HTTP 502 with the provider's message embedded (what `RECOVERABLE_INFERENCE_STATUS_CODES` relies on) | unchanged | `temperature = 5.0` against Groq, both versions |
 | `extra_body` declared on a provider reaches only that provider's request | unchanged | `raw_request` in ClickHouse |
