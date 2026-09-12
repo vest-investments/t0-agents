@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.8.0] — 2026-09-12
+
+A clean install of 2.7.0 does not import. The package declares
+`fastmcp >= 3.2.3` with no ceiling and never declares `mcp` at all,
+so a fresh resolution takes fastmcp 4.x, which requires mcp 2.x,
+which renamed `McpError` to `MCPError` — and `import t0_agents`
+raises `ImportError` before anything runs. The bundled `uv.lock`
+pins fastmcp 3.2.4 and mcp 1.27.0, so every workflow that
+`CONTRIBUTING.md` documents masks it; only someone resolving from
+`pyproject.toml` ever sees it. This release bounds both ranges and
+adds the check that would have caught it.
+
+### Fixed
+
+- **`mcp` is now a declared dependency, bounded to `>=1.24.0,<2`.**
+  The package imports `McpError`, `mcp.types`, `RequestContext` and
+  `mcp.shared._httpx_utils` across eight modules but left fastmcp to
+  supply them, so it had no way to state the constraint its own code
+  imposes. Supporting mcp 2.x is a port, not a rename: the wire types
+  move to a separate `mcp-types` distribution, `MCPError` ships no
+  back-compat alias and takes a different constructor, and
+  `mcp.shared.context` drops `RequestContext` for `BaseContext`.
+
+- **`fastmcp` is bounded to `>=3.2.3,<4`.** 4.x moves
+  `fastmcp.client.tasks` into a separate distribution behind an
+  extra, so `TaskNotificationHandler` is missing from a default 4.x
+  install for reasons unrelated to the mcp rename. Two independent
+  breaks, one ceiling.
+
+- **`t0-agents info` accepts `--agent`.** On an App registering more
+  than one agent it failed with "pick one with --agent" — naming an
+  option only `run` and `serve` declared, so following the advice
+  produced "No such option: --agent". All three subcommands now take
+  the flag, reach the shared loader the same way, and describe glow
+  App specs identically in `--help`.
+
+### Added
+
+- **A lockfile-free import check in `CONTRIBUTING.md`.** It resolves
+  from `pyproject.toml` rather than `uv.lock`, which is what an
+  installing consumer does and the only way this class of defect is
+  visible from inside the repo.
+
+- **The DeepSeek row the structured-output guide was missing.** Its
+  Chat Completions endpoint accepts only `text` and `json_object`,
+  so `json_mode = "strict"` warns and downgrades — an endpoint limit
+  rather than a provider quirk. `json_object` also requires the word
+  "json" and an example in the prompt; without them the model can
+  emit unbounded whitespace until `max_tokens`, which is a hang
+  rather than a parse failure and so never reaches the recovery
+  ladder.
+
+### Notes
+
+- The bounded range resolves to fastmcp 3.4.7 and mcp 1.30.0, one
+  minor above the pair in `uv.lock`. The suite runs green on both.
+
 ## [2.7.0] — 2026-09-10
 
 Every inference reports its usage and the library adds it up, but the
