@@ -2,9 +2,9 @@
 
 Cases (no TZ gateway): plain ``await``, ``.json()`` / ``.json(M)``
 override, ``.json(A).json(B)`` last-wins + DEBUG log, ``.text().json(M)``
-swap, ``.events()`` defers the build to first consumption + ``await``
-reuses, the ``prepare`` auto-build hook (M7 seam), and the ``result()``
-escape hatch.
+swap, ``.as_(mode)`` with an explicit mode, ``.events()`` defers the build
+to first consumption + ``await`` reuses, the ``prepare`` auto-build hook
+(M7 seam), and the ``result()`` escape hatch.
 """
 
 from __future__ import annotations
@@ -229,6 +229,19 @@ async def test_text_then_json_swaps_freely() -> None:
     chosen = captured[0]
     assert isinstance(chosen, StructuredOutput)
     assert chosen.model is _ModelA
+
+
+async def test_as_accepts_an_explicit_structured_output() -> None:
+    captured: list[OutputMode[Any]] = []
+    fr: FluentRun[str] = FluentRun(_make_build(captured), ChatOutput())
+
+    await fr.as_(StructuredOutput(_ModelA, json_mode="on"))
+
+    assert len(captured) == 1
+    chosen = captured[0]
+    assert isinstance(chosen, StructuredOutput)
+    assert chosen.model is _ModelA
+    assert chosen.json_mode == "on"
 
 
 async def test_events_defers_build_and_await_reuses_run() -> None:

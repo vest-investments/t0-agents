@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any, cast, get_type_hints
+from typing import Any, get_type_hints
 
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.output import OutputMode
@@ -81,14 +81,8 @@ def output_mode_from_return_type(fn: Callable[..., Any]) -> OutputMode[Any]:
         return ChatOutput()
     if _is_dict_alias(rt):
         return JsonOutput()
-    # `StructuredOutput.name` is a `@property` while
-    # :class:`OutputMode.name` is declared as a settable attribute, so
-    # mypy strict needs the explicit cast to satisfy the Protocol
-    # conformance check.  Other v1.0 sites (e.g.
-    # `AgentConfig(output=StructuredOutput(...))`) hit the same coercion
-    # at the call-site, outside `src/`.
     if _is_pydantic_model(rt):
-        return cast(OutputMode[Any], StructuredOutput(rt))
+        return StructuredOutput(rt)
     if _is_list_of_pydantic(rt):
-        return cast(OutputMode[Any], StructuredOutput(_wrap_list_model(rt)))
+        return StructuredOutput(_wrap_list_model(rt))
     return ChatOutput()
