@@ -1555,6 +1555,7 @@ version = "2.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "mcp" },
     { name = "tensorzero" },
 ]
 
@@ -1597,7 +1598,8 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'memory-sqlite'", specifier = ">=0.20.0" },
     { name = "fastapi", marker = "extra == 'cli'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115.0" },
-    { name = "fastmcp", specifier = ">=3.2.3" },
+    { name = "fastmcp", specifier = ">=3.2.3,<4" },
+    { name = "mcp", specifier = ">=1.24.0,<2" },
     { name = "pydantic", marker = "extra == 'cli'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'glow'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.0" },

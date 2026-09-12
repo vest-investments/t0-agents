@@ -481,13 +481,27 @@ The warning fires at most **once per Agent instance**, so a long-lived agent doe
 
 A handful of provider-specific behaviours are documented in the TZ guide but cannot be enforced from the Python SDK.  These will not raise or warn; consult the table when picking a `json_mode`.
 
-| Provider / route | Behaviour | TZ guide |
-|------------------|-----------|----------|
-| Anthropic via AWS Bedrock or GCP Vertex | `json_mode="strict"` **silently degrades** to prompt-based JSON mode. | §11.5 |
-| Gemini (Vertex / AI Studio) | Supports a subset of JSON Schema only; certain schemas are rejected by the model. | §11.6 |
-| OpenAI-compat endpoint | `response_format` is a partial no-op; use `tensorzero::params.chat_completion.json_mode` instead. | §11.7 |
+| Provider / route | Behaviour | Reference |
+|------------------|-----------|-----------|
+| Anthropic via AWS Bedrock or GCP Vertex | `json_mode="strict"` **silently degrades** to prompt-based JSON mode. | TZ guide §11.5 |
+| Gemini (Vertex / AI Studio) | Supports a subset of JSON Schema only; certain schemas are rejected by the model. | TZ guide §11.6 |
+| OpenAI-compat endpoint | `response_format` is a partial no-op; use `tensorzero::params.chat_completion.json_mode` instead. | TZ guide §11.7 |
+| DeepSeek (Chat Completions) | `response_format` accepts only `text` and `json_object`, so `json_mode="strict"` **warns and downgrades**.  `json_object` carries a prompt precondition — see below. | [DeepSeek docs](https://api-docs.deepseek.com/guides/json_mode) |
 
 See [the gateway guide §8](https://www.tensorzero.com/docs/gateway/generate-structured-outputs#handle-model-provider-limitations) for the authoritative provider matrix.
+
+### DeepSeek: `json_object` has a prompt precondition
+
+DeepSeek's Chat Completions endpoint has no schema-enforced mode at all — `response_format` accepts only `text` and `json_object` — so `json_mode="strict"` can only warn and downgrade.  `"on"` is not a workaround there; it is the only mode the endpoint offers.
+
+Two consequences never surface as parse failures, so the [recovery ladder](#robust-json-parsing) cannot see them:
+
+- **The prompt must contain the word "json" and an example of the shape.**  Without it, *"the model may generate an unending stream of whitespace until the generation reaches the token limit"* — a hung request that burns `max_tokens`, not a parse error.  A docstring that already asks for a JSON object and shows the keys satisfies this; a terse one does not.
+- **The API may return empty content**, and content is cut off mid-JSON when `finish_reason == "length"`.  Size `max_tokens` against the schema's worst case.
+
+Schema enforcement does exist on DeepSeek, on two routes the `deepseek` provider does not take: the Responses API (`response_format={"type": "json_schema", ...}`) and per-function `"strict": true` tool calls against the Beta base URL.
+
+Source: [JSON output](https://api-docs.deepseek.com/guides/json_mode) and [create chat completion](https://api-docs.deepseek.com/api/create-chat-completion).
 
 ### Opt-in hard failure: `require_parsed()`
 
@@ -512,7 +526,7 @@ When the run completes with `parsed is None` (every layer failed), the guardrail
 | Mode       | What it does                                                                       | Best for                                                       |
 | ---------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | `off`      | No special JSON handling (**not recommended** per TZ docs)                         | Debugging                                                      |
-| `on`       | Provider JSON mode if available                                                    | Providers that have a non-strict JSON-only mode                |
+| `on`       | Provider JSON mode if available                                                    | Providers that have a non-strict JSON-only mode, e.g. DeepSeek |
 | `strict`   | Strict JSON / Structured Outputs (OpenAI uses Structured Outputs; direct Anthropic uses structured outputs) | OpenAI, direct Anthropic                                       |
 | `tool`     | TensorZero converts your schema to a tool call under the hood and unwraps the response back to JSON | Providers without native strict, e.g. AWS Bedrock              |
 

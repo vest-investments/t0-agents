@@ -6,6 +6,8 @@ from typer.testing import CliRunner
 
 from t0_agents.cli.app import app
 
+_GLOW_TWO_SPEC = "tests.test_cli._factories:glow_app_two"
+
 
 def test_info_prints_agent_config_fields() -> None:
     runner = CliRunner()
@@ -46,3 +48,37 @@ def test_info_bare_agent_shows_factory_hint() -> None:
     )
     assert result.exit_code != 0
     assert "@asynccontextmanager" in result.output
+
+
+def test_info_glow_app_with_two_agents_names_a_flag_it_accepts() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["info", _GLOW_TWO_SPEC])
+    assert result.exit_code != 0
+    assert "alpha, beta" in result.output
+    assert "--agent" in result.output
+
+
+def test_info_glow_app_selection_by_agent_flag() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["info", _GLOW_TWO_SPEC, "--agent", "beta"])
+    assert result.exit_code == 0, result.output
+    assert "AgentConfig" in result.output
+    assert "beta" in result.output
+
+
+def test_info_unknown_agent_lists_available() -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["info", _GLOW_TWO_SPEC, "--agent", "ghost"])
+    assert result.exit_code != 0
+    assert "not registered" in result.output
+    assert "alpha, beta" in result.output
+
+
+def test_info_agent_flag_on_a_non_glow_spec_is_rejected() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["info", "tests.test_cli._factories:fake_factory", "--agent", "solo"],
+    )
+    assert result.exit_code != 0
+    assert "only applies when the spec resolves to a glow App" in result.output
