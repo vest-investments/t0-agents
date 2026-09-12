@@ -217,10 +217,12 @@ around the session (gateway resolution, MCP mounts, client connection,
 t0-agents run examples.glow.01_hello:app --agent tutor "hi"   # one-shot
 t0-agents run examples.glow.01_hello:app                      # REPL (sole agent)
 t0-agents serve mymodule:app --agent tutor
+t0-agents info mymodule:app --agent tutor
 ```
 
 - `--agent NAME` picks the agent when the App registers several; with
-  exactly one registered it may be omitted.  Ambiguous or unknown names
+  exactly one registered it may be omitted.  All three subcommands
+  accept it.  Ambiguous or unknown names
   produce an error listing what is available.
 - The optional positional `MESSAGE` on `run` is a **one-shot**: send
   it, render the reply, exit — no REPL.  It works for classic factory
@@ -591,7 +593,7 @@ and the protocol reference lives in [Streaming](streaming.md).
 ## `t0-agents info`
 
 ```
-t0-agents info AGENT_SPEC
+t0-agents info AGENT_SPEC [--agent NAME]
 ```
 
 Enter the factory, read `agent.config`, exit. Prints a single Rich
@@ -599,6 +601,7 @@ table with one row per field.
 
 ```bash
 uv run t0-agents info my_package.my_agent:assistant
+uv run t0-agents info mymodule:app --agent tutor
 ```
 
 - `memory` renders as `type(value).__name__` (e.g. `InMemoryMemory`,
