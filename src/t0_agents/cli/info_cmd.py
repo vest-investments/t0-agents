@@ -22,6 +22,12 @@ def register(app: typer.Typer) -> None:
             ...,
             help="Factory spec in 'module:attr' form.",
         ),
+        agent: str | None = typer.Option(
+            None,
+            "--agent",
+            help="Agent to inspect when the spec is a glow App with several "
+            "registered agents (defaults to the sole registered one).",
+        ),
     ) -> None:
         """Print the ``AgentConfig`` that the factory produces.
 
@@ -29,11 +35,11 @@ def register(app: typer.Typer) -> None:
         ``agent.config`` and exits.  If your factory opens a real
         gateway / MCP client, expect a few seconds of setup.
         """
-        asyncio.run(_info(agent_spec))
+        asyncio.run(_info(agent_spec, agent_name=agent))
 
 
-async def _info(spec: str) -> None:
-    factory = load_agent_factory(spec)
+async def _info(spec: str, *, agent_name: str | None = None) -> None:
+    factory = load_agent_factory(spec, agent_name=agent_name)
     async with factory() as agent:
         config = agent.config
     _print_config(config, spec)
