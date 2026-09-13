@@ -1021,11 +1021,12 @@ class TestLoadTranscript:
             "Twelve.",
         ]
 
-    async def test_the_transcript_interleaves_each_turn_with_its_rounds(self) -> None:
+    async def test_the_transcript_carries_each_rounds_results_before_its_reply(self) -> None:
         """A round whose input ends on tool results is a later step of the
-        same turn: it adds its reply and re-emits no user message, and the
-        results themselves never appear — they are the model's input, not
-        something the user was shown.
+        same turn: the results are emitted as the ``user`` message the
+        gateway stored them in, then the reply, and no user text is
+        re-emitted — a reader that derived something from a result can
+        derive it again.
         """
         ep = str(uuid4())
         ask = _user_text_msg("what's the weather?")
@@ -1071,17 +1072,69 @@ class TestLoadTranscript:
         assert [m["role"] for m in transcript] == [
             "user",
             "assistant",
+            "user",
             "assistant",
             "user",
             "assistant",
         ]
-        assert not any(isinstance(b, ToolResult) for m in transcript for b in m["content"])
+        (result,) = transcript[2]["content"]
+        assert isinstance(result, ToolResult)
+        assert (result.id, result.name, result.result) == ("c1", "lookup", "Sunny")
         assert _texts(transcript) == [
             "what's the weather?",
             "Let me check.",
             "Sunny in Tokyo.",
             "thanks",
             "Any time.",
+        ]
+
+    async def test_a_parallel_batch_of_results_stays_one_message(self) -> None:
+        """Two calls answered in one round come back as the one ``user``
+        message the gateway stored, blocks in stored order — the unit a
+        reader groups a turn's results by.
+        """
+        ep = str(uuid4())
+        ask = _user_text_msg("compare both")
+        planning = _round(
+            ep,
+            1,
+            input_messages=[ask],
+            output=[
+                _stored_call("c1", "lookup", {"city": "Tokyo"}),
+                _stored_call("c2", "lookup", {"city": "Osaka"}),
+            ],
+        )
+        results_in = [
+            StoredInputMessageContentToolResult(id="c1", name="lookup", result="Sunny"),
+            StoredInputMessageContentToolResult(id="c2", name="lookup", result="Rain"),
+        ]
+        answer = _round(
+            ep,
+            2,
+            input_messages=[
+                ask,
+                _assistant_msg(
+                    StoredInputMessageContentToolCall(
+                        id="c1", name="lookup", arguments='{"city": "Tokyo"}'
+                    ),
+                    StoredInputMessageContentToolCall(
+                        id="c2", name="lookup", arguments='{"city": "Osaka"}'
+                    ),
+                ),
+                StoredInputMessage(role="user", content=results_in),
+            ],
+            output=[ContentBlockChatOutputText(text="Sunny in Tokyo, rain in Osaka.")],
+        )
+
+        transcript = await _make_memory(_t0_with([answer, planning])).load_transcript(ep)
+
+        assert transcript is not None
+        assert [m["role"] for m in transcript] == ["user", "assistant", "user", "assistant"]
+        results = transcript[2]["content"]
+        assert len(results) == 2
+        assert [(b.id, b.result) for b in results if isinstance(b, ToolResult)] == [
+            ("c1", "Sunny"),
+            ("c2", "Rain"),
         ]
 
     async def test_the_transcript_orders_rounds_by_inference_id_within_a_second(
