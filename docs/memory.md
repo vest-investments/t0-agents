@@ -807,7 +807,7 @@ the private `_build_filters` method if you want full control).
 |---|---|
 | `load(episode_id)` | Issues `list_inferences(limit=load_limit, order_by=DESC)` and returns one `MemoryRecord` per chat inference that emitted text. JSON-output and tool-call-only inferences are skipped. Reversed to oldest-first to match `InMemoryMemory` / `SqliteMemory`. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids` is a single-element list — this backend exposes one record per inference, not per agent run. |
 | `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes — a fresh session, not an error. A gateway failure propagates and ends the turn (`MemoryHistoryUnavailableError`). |
-| `load_transcript(episode_id, *, window=200)` | Not used by any memory strategy — a reader's view of the episode. Issues `list_inferences(limit=window)` and emits, per chat round oldest-first, the user message that opened the turn (when the round's input ends on one) and the round's `output` as an assistant message with its tool calls kept. Returns `None` for empty episodes. A gateway failure propagates. |
+| `load_transcript(episode_id, *, window=200)` | Not used by any memory strategy — a reader's view of the episode. Issues `list_inferences(limit=window)` and emits, per chat round oldest-first, the user message the round's input ends on — the text that opened the turn, or the previous round's tool results as the gateway stored them — and the round's `output` as an assistant message with its tool calls kept. Returns `None` for empty episodes. A gateway failure propagates. |
 | `save(record)` | No-op. The gateway already persisted the row at inference time; calling `save` again would duplicate the observability entry. |
 | `search(query, *, limit=5)` | Returns `[]` by default. Pass `experimental_search=True` to the constructor to opt in; the query is forwarded to TZ's `search_query_experimental` field. The gateway flags that endpoint as experimental and warns it may cause full-table scans, so it is not appropriate for low-latency request paths. |
 
@@ -822,9 +822,9 @@ than one method with a switch:
 | Built for | the model — `memory_strategy="messages"` replays it as `input.messages` | a reader — a UI rebuilding what a person was shown |
 | Reads | one row: the latest inference's cumulative `input` plus its `output` | every chat round of the episode, up to `window` (default 200), oldest first |
 | Tool calls | answered ones survive; a call the final round left unanswered is dropped, because a provider rejects an assistant tool call followed directly by a user message | every call the assistant issued, answered or not |
-| Tool results | replayed | never emitted — they are the model's input, not something the user saw |
+| Tool results | replayed | emitted as the `user` message the gateway stored them in, before the reply they produced — what a UI derived a row from |
 | `Thought` blocks | dropped | dropped |
-| Shape | the exact message list the model last saw | the user message that opened each turn, then one `assistant` message per round of it |
+| Shape | the exact message list the model last saw | the user text that opened each turn, then each round's results and its `assistant` message |
 | Cost | one row | `window` rows, each carrying its cumulative `input` |
 
 The case that needs both: an agent with `terminal_tools` ends a turn on
