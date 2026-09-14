@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.10.0] — 2026-09-13
+
+`app.conversations(agent)` returned the whole inference log. It read
+the function name off the raw decorator declaration, which is `None`
+for the idiomatic `@app.agent("x")`, and `None` means "query across
+functions"; nothing filtered on the `t0_agents.agent` tag either, so
+agents sharing one function were indistinguishable even when the
+function name did resolve. Neither half of the docstring's promise —
+that the rows belong to *that* agent — held.
+
+### Fixed
+
+- **`app.conversations(agent)` scopes to the agent.** The listing
+  filters on the `t0_agents.agent` tag and targets the function the
+  agent actually infers under, so two agents sharing one function
+  return disjoint sets and a `model=` agent returns its own
+  conversations rather than the passthrough's shared log.
+- **The tags a declaration stamps scope the listing too.**
+  `App(tags=...)` and `@app.agent(tags=...)` reach every inference
+  that agent writes, so one gateway serving two deployments no longer
+  crosses them. Precedence runs agent tag, then declared tags, then
+  the caller's `tags=`, mirroring `Agent._merge_tags` on the way in.
+- **`ConversationIndex` implementations receive that scope.** The
+  `index=` branch is handed the same map as the dev-grade default, so
+  both paths mean the same thing; an index that stores the tags its
+  rows were written with scopes to the agent with no further change.
+- **`Conversation.hydrate()` targets the resolved function.** The
+  same raw-declaration read one file over. That query is pinned to an
+  episode id, so what was lost was the partition prune, not history.
+
+### Added
+
+- **`AGENT_TAG`**, exported from `t0_agents` and `t0_agents.glow` —
+  the key every inference carries its agent name under, for consumers
+  writing their own index or querying the gateway directly.
+
+### Notes
+
+- The 200-inference listing window is now spent on one agent's
+  inferences instead of the whole log, so the horizon reaches further
+  back at the same cost.
+
 ## [2.9.0] — 2026-09-13
 
 `load_transcript` rebuilt what a person was shown and nothing of what
