@@ -27,6 +27,13 @@ from mcp.types import Tool as MCPTool
 from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
+from t0_agents.core.middleware.builtins import (
+    _CumulativeUsage,
+    _UsageRollupToolProvider,
+)
+from t0_agents.core.types import ToolProvider
+from t0_agents.guardrails.base import GuardrailContext
+from t0_agents.guardrails.runtime import GuardedToolProvider
 from t0_agents.mcp import (
     execute_tool_calls,
     execute_tool_calls_parallel,
@@ -482,6 +489,35 @@ class TestExecuteToolCallsDetailed:
         )
         assert [o.server for o in outcomes] == ["math", "social"]
         assert all(o.duration_ms is not None for o in outcomes)
+
+    async def test_server_survives_the_production_wrapper_stack(self) -> None:
+        # The loop probes the OUTERMOST provider, which in a real run is
+        # CostTracking's rollup over Guardrails over the attributing provider.
+        # Every other test here hands the loop a provider that attributes
+        # directly, so a wrapper dropping ``server_for`` stayed green.
+        class _Attributing(FakeMCPClient):
+            def server_for(self, name: str) -> str | None:
+                return "calc" if name == "add" else None
+
+        inner = _Attributing(call_results={"add": _make_result(data=5)})
+        guarded = GuardedToolProvider(
+            cast(ToolProvider, inner),
+            [],
+            GuardrailContext(
+                agent_name="t", function_name=None, user_message="hi"
+            ),
+            [],
+        )
+        outermost = _UsageRollupToolProvider(
+            cast(ToolProvider, guarded), _CumulativeUsage(), lambda: None
+        )
+
+        outcomes = await _execute_tool_calls_detailed(
+            cast(Client[Any], outermost),
+            [_tool_call(call_id="c1")],
+        )
+        assert outcomes[0].server == "calc"
+        assert outcomes[0].result.result == "5"
 
 
 # --- TestRunAgent -----------------------------------------------------------
