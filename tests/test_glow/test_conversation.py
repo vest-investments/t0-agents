@@ -8,7 +8,7 @@ each ``invoke`` on ``_INVOKES``) for the send/guard/tag cases, and a
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 from uuid import UUID
 
@@ -93,10 +93,10 @@ class _FakeIndex:
     """A ConversationIndex the App should delegate to when passed as index=."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[dict[str, str] | None, int]] = []
+        self.calls: list[tuple[Mapping[str, str] | None, int]] = []
 
     async def list_conversations(
-        self, *, tags: dict[str, str] | None = None, limit: int = 20
+        self, *, tags: Mapping[str, str] | None = None, limit: int = 20
     ) -> list[ConversationSummary]:
         self.calls.append((tags, limit))
         return [
@@ -493,13 +493,14 @@ async def test_a_caller_tag_wins_over_the_agent_tag() -> None:
 async def test_the_listing_filter_matches_the_tags_the_agent_writes() -> None:
     """The read filter is checked against a real write, not against a copy.
 
-    Both sides read ``AGENT_TAG``; a literal on either would drift with no
-    test noticing, which is how the listing came to filter on nothing.
+    A turn with no per-call tags writes exactly the declared set, so the
+    two maps are equal — the strongest form of "the read mirrors the
+    write", and the one a literal on either side would break.
     """
     t0 = _listing_t0(turns=1)
-    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+    app = App(t0=cast(AsyncTensorZeroGateway, t0), tags={"env": "staging"})
 
-    @app.agent("t")
+    @app.agent("t", tags={"desk": "equities"})
     async def t(q: str) -> str:  # type: ignore[empty-body]
         """T."""
 
@@ -508,7 +509,23 @@ async def test_the_listing_filter_matches_the_tags_the_agent_writes() -> None:
 
     written = t0.calls[0]["tags"]
     read = _tag_filters(t0.list_inferences_calls[0]["request"])
-    assert read[AGENT_TAG] == written[AGENT_TAG]
+    assert read == written
+
+
+async def test_a_caller_tag_still_wins_over_a_declared_one() -> None:
+    t0 = _listing_t0()
+    app = App(t0=cast(AsyncTensorZeroGateway, t0), tags={"env": "staging"})
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    await app.conversations(t, tags={"env": "prod"})
+
+    assert _tag_filters(t0.list_inferences_calls[0]["request"]) == {
+        AGENT_TAG: "t",
+        "env": "prod",
+    }
 
 
 async def test_hydrate_targets_the_resolved_function() -> None:
@@ -525,6 +542,22 @@ async def test_hydrate_targets_the_resolved_function() -> None:
     await t.conversation(id="ep", hydrate=True).hydrate()
 
     assert t0.list_inferences_calls[0]["request"].function_name == "agent"
+
+
+async def test_hydrate_of_a_model_routed_agent_targets_no_function() -> None:
+    stored = _stored_chat("ep", [_user_text_msg("hi")], "hello")
+    t0 = FakeT0(
+        [], list_inferences_responses=[FakeListInferencesResponse(inferences=[stored])]
+    )
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("m", model="chat_model")
+    async def m(q: str) -> str:  # type: ignore[empty-body]
+        """M."""
+
+    await m.conversation(id="ep", hydrate=True).hydrate()
+
+    assert t0.list_inferences_calls[0]["request"].function_name is None
 
 
 # ---------------------------------------------------------------------------
