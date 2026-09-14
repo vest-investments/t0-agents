@@ -359,13 +359,17 @@ class TensorZeroMemory:
         """Return the episode as a reader saw it: one assistant message per round.
 
         :meth:`load_history` rebuilds what the *model* may be shown again;
-        this rebuilds what a *person* was shown.  It reads every chat
-        inference of the episode — the ``window`` most recent, oldest
-        first — and takes each one's ``output`` as an assistant message.
-        A round whose input ends on a user message carrying text opens a
-        turn, and that message is emitted before the reply; a round whose
-        input ends on tool results is a later step of the same turn and
-        contributes only its output.  Tool results therefore never appear.
+        this rebuilds what a *person* was shown, and what that was derived
+        from.  It reads every chat inference of the episode — the
+        ``window`` most recent, oldest first — and takes each one's
+        ``output`` as an assistant message.  A round's input ends on one
+        message no earlier round carried: the user text that opened the
+        turn, or the previous round's tool results, which the gateway
+        stores under the ``user`` role.  That message is emitted before the
+        reply, so a turn reads as its opening text and then each round's
+        results and reply in order.  A consumer that shows only text skips
+        the results as it skips any non-text block; one that rendered
+        something from a result — a citation row — reads it back here.
 
         Every ``ToolCall`` the assistant issued is kept, answered or not.
         A turn ended by its own tools (``terminal_tools``) leaves a call
@@ -404,9 +408,9 @@ class TensorZeroMemory:
         transcript: list[Message] = []
         skipped_kinds: set[str] = set()
         for inf in rounds:
-            opening = _turn_opening_message(inf.input)
-            if opening is not None:
-                converted = _to_native_message(opening, skipped_kinds)
+            tail = _round_input_tail(inf.input)
+            if tail is not None:
+                converted = _to_native_message(tail, skipped_kinds)
                 if converted is not None:
                     transcript.append(converted)
             reply = _output_to_content_blocks(inf.output)
@@ -600,18 +604,18 @@ def _user_texts(stored_input: Any) -> list[str]:
     return out
 
 
-def _turn_opening_message(stored_input: Any) -> StoredInputMessage | None:
-    """The user message a round's input ends on, when that message opened a turn.
+def _round_input_tail(stored_input: Any) -> StoredInputMessage | None:
+    """The user message a round's input ends on.
 
-    Under an accumulating episode a round's input ends either on the user
-    message that started the turn or on the tool results of the previous
-    round.  Only the first carries visible text, so that is the test.
+    Under an accumulating episode that is either the message that started
+    the turn or the tool results of the previous round, and it is the one
+    message of the input no earlier round has already contributed.
     """
     messages = getattr(stored_input, "messages", None) or []
     if not messages:
         return None
     last = messages[-1]
-    if getattr(last, "role", None) != "user" or not _stored_message_text(last):
+    if getattr(last, "role", None) != "user":
         return None
     return cast(StoredInputMessage, last)
 
