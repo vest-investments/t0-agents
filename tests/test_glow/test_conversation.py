@@ -22,13 +22,18 @@ from tensorzero.generated_types import (
     StoredInputMessageContentText,
 )
 
+from t0_agents.core.agent import AGENT_TAG
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.run import Run
 from t0_agents.core.types import AgentResult
 from t0_agents.glow import App, ConversationSummary
 from t0_agents.stream.events import AgentEvent, DoneEvent
 from t0_agents.testing import ScriptedAgent
-from tests._fake_t0 import FakeListInferencesResponse, FakeT0
+from tests._fake_t0 import (
+    FakeChatResponse,
+    FakeListInferencesResponse,
+    FakeT0,
+)
 
 # Every _ConvAgent.invoke appends its kwargs here; the fixture clears it.
 _INVOKES: list[dict[str, Any]] = []
@@ -127,6 +132,28 @@ def _stored_chat(
 
 def _sentinel_gateway() -> AsyncTensorZeroGateway:
     return cast(AsyncTensorZeroGateway, object())
+
+
+def _tag_filters(request: Any) -> dict[str, str]:
+    """The tag equalities a ``ListInferencesRequest`` carries, key -> value.
+
+    One tag arrives as a bare ``InferenceFilterTag``, several wrapped in an
+    ``InferenceFilterAnd``; both collapse to the same mapping here.
+    """
+    node = request.filters
+    if node is None:
+        return {}
+    children = getattr(node, "children", [node])
+    return {child.key: child.value for child in children}
+
+
+def _listing_t0(*, turns: int = 0, listings: int = 1) -> FakeT0:
+    return FakeT0(
+        [FakeChatResponse(content=[]) for _ in range(turns)],
+        list_inferences_responses=[
+            FakeListInferencesResponse(inferences=[]) for _ in range(listings)
+        ],
+    )
 
 
 @pytest.fixture
@@ -367,7 +394,9 @@ async def test_app_conversations_delegates_to_index() -> None:
 
     index = _FakeIndex()
     out = await app.conversations(t, tags={"customer_id": "c1"}, limit=5, index=index)
-    assert index.calls == [({"customer_id": "c1"}, 5)]
+    # The index is handed the agent tag alongside the caller's own, so a
+    # production inbox scopes exactly like the dev-grade default.
+    assert index.calls == [({AGENT_TAG: "t", "customer_id": "c1"}, 5)]
     assert [s.conversation_id for s in out] == ["from-index"]
 
 
@@ -385,6 +414,117 @@ async def test_app_conversations_dev_grade_via_gateway() -> None:
     out = await app.conversations(t, limit=10)
     assert [s.conversation_id for s in out] == ["ep1"]
     assert out[0].title == "q"
+
+
+# The cases below assert the REQUEST, not the response: the fake answers
+# every filter with the same canned rows, so a response assertion cannot
+# observe the scope at all.
+
+
+async def test_app_conversations_scopes_the_request_to_the_agent() -> None:
+    """The idiomatic declaration resolves its function and carries its tag."""
+    t0 = _listing_t0()
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    await app.conversations(t)
+
+    request = t0.list_inferences_calls[0]["request"]
+    assert request.function_name == "agent"
+    assert _tag_filters(request) == {AGENT_TAG: "t"}
+
+
+async def test_app_conversations_separates_agents_sharing_one_function() -> None:
+    t0 = _listing_t0(listings=2)
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("first", function_name="shared")
+    async def first(q: str) -> str:  # type: ignore[empty-body]
+        """First."""
+
+    @app.agent("second", function_name="shared")
+    async def second(q: str) -> str:  # type: ignore[empty-body]
+        """Second."""
+
+    await app.conversations(first)
+    await app.conversations(second)
+
+    requests = [call["request"] for call in t0.list_inferences_calls]
+    assert [r.function_name for r in requests] == ["shared", "shared"]
+    assert [_tag_filters(r)[AGENT_TAG] for r in requests] == ["first", "second"]
+
+
+async def test_app_conversations_of_a_model_routed_agent_scopes_by_tag() -> None:
+    """``model=`` has no function to filter on — the tag does the scoping."""
+    t0 = _listing_t0()
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("m", model="chat_model")
+    async def m(q: str) -> str:  # type: ignore[empty-body]
+        """M."""
+
+    await app.conversations(m)
+
+    request = t0.list_inferences_calls[0]["request"]
+    assert request.function_name is None
+    assert _tag_filters(request) == {AGENT_TAG: "m"}
+
+
+async def test_a_caller_tag_wins_over_the_agent_tag() -> None:
+    """Read precedence mirrors ``Agent._merge_tags``: the caller's key wins."""
+    t0 = _listing_t0()
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    await app.conversations(t, tags={AGENT_TAG: "neighbour", "customer_id": "c1"})
+
+    assert _tag_filters(t0.list_inferences_calls[0]["request"]) == {
+        AGENT_TAG: "neighbour",
+        "customer_id": "c1",
+    }
+
+
+async def test_the_listing_filter_matches_the_tags_the_agent_writes() -> None:
+    """The read filter is checked against a real write, not against a copy.
+
+    Both sides read ``AGENT_TAG``; a literal on either would drift with no
+    test noticing, which is how the listing came to filter on nothing.
+    """
+    t0 = _listing_t0(turns=1)
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    await t("hi")
+    await app.conversations(t)
+
+    written = t0.calls[0]["tags"]
+    read = _tag_filters(t0.list_inferences_calls[0]["request"])
+    assert read[AGENT_TAG] == written[AGENT_TAG]
+
+
+async def test_hydrate_targets_the_resolved_function() -> None:
+    stored = _stored_chat("ep", [_user_text_msg("hi")], "hello")
+    t0 = FakeT0(
+        [], list_inferences_responses=[FakeListInferencesResponse(inferences=[stored])]
+    )
+    app = App(t0=cast(AsyncTensorZeroGateway, t0))
+
+    @app.agent("t")
+    async def t(q: str) -> str:  # type: ignore[empty-body]
+        """T."""
+
+    await t.conversation(id="ep", hydrate=True).hydrate()
+
+    assert t0.list_inferences_calls[0]["request"].function_name == "agent"
 
 
 # ---------------------------------------------------------------------------

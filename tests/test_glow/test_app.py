@@ -157,6 +157,29 @@ def test_decorator_registers_agent_in_registry() -> None:
     assert spec.value_transform is None  # not a list[BaseModel] return
 
 
+def test_spec_resolves_the_routing_function_the_declaration_hides() -> None:
+    """``function_name`` is ``None`` for two declarations that route apart.
+
+    Reading the declaration cannot tell "defaults to `agent`" from "goes
+    through the passthrough"; ``resolved_function_name`` can, and it agrees
+    with the :class:`AgentConfig` the agent is eventually built with.
+    """
+    app = App(t0=_fake_t0())
+
+    @app.agent("implicit")
+    async def implicit(q: str) -> str:  # type: ignore[empty-body]
+        """Implicit."""
+
+    @app.agent("routed", model="chat_model")
+    async def routed(q: str) -> str:  # type: ignore[empty-body]
+        """Model-routed."""
+
+    assert implicit._spec.function_name is None
+    assert implicit._spec.resolved_function_name == "agent"
+    assert routed._spec.function_name is None
+    assert routed._spec.resolved_function_name is None
+
+
 def test_wrapper_call_returns_fluent_run(app_with_fake_agent: App) -> None:
     """``wrapper("msg")`` returns a :class:`FluentRun` instance."""
 
