@@ -35,6 +35,7 @@ from t0_agents.core.exceptions import T0AgentsFatalError
 from t0_agents.core.types import (
     Guardrail,
     GuardrailLogEntry,
+    SupportsServerAttribution,
     ToolProgressHandler,
     ToolProvider,
 )
@@ -50,8 +51,11 @@ class GuardedToolProvider:
     """Guardrail-aware ``ToolProvider`` wrapper.
 
     Structurally satisfies :class:`~t0_agents.core.types.ToolProvider` —
-    only ``list_tools`` and ``call_tool`` are required by the loop, and both
-    are forwarded (with hook interception on ``call_tool``).
+    ``list_tools`` and ``call_tool`` are forwarded (with hook interception on
+    ``call_tool``).  ``server_for`` is forwarded too: the loop probes the
+    *outermost* provider for
+    :class:`~t0_agents.core.types.SupportsServerAttribution`, so a wrapper that
+    omits it erases attribution for everything beneath it.
 
     The wrapper holds a reference to the per-run :class:`GuardrailContext`
     and to the shared ``log_sink`` list that :meth:`Agent.invoke` attaches to
@@ -72,6 +76,12 @@ class GuardedToolProvider:
 
     async def list_tools(self) -> list[Any]:
         return await self._inner.list_tools()
+
+    def server_for(self, name: str) -> str | None:
+        """Delegate server attribution to ``inner`` when it can attribute one."""
+        if isinstance(self._inner, SupportsServerAttribution):
+            return self._inner.server_for(name)
+        return None
 
     async def call_tool(
         self,

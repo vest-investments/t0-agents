@@ -66,6 +66,7 @@ from t0_agents.core.types import (
     GuardrailLogEntry,
     MemoryProvider,
     RunUsage,
+    SupportsServerAttribution,
     ToolProgressHandler,
     ToolProvider,
     Usage,
@@ -582,6 +583,12 @@ class _UsageRollupToolProvider:
             # the per-inference tracker does — the footprint is untouched.
             self._flush()
         return result
+
+    def server_for(self, name: str) -> str | None:
+        """Delegate server attribution to ``inner`` when it can attribute one."""
+        if isinstance(self._inner, SupportsServerAttribution):
+            return self._inner.server_for(name)
+        return None
 
 
 # ---------------------------------------------------------------------------
