@@ -146,7 +146,15 @@ for c in recent:
 ```
 
 Each row is a `ConversationSummary` (`conversation_id`, `title`, `preview`,
-`turn_count`, `updated_at` in epoch-ms). By default this is **dev-grade**: it
+`turn_count`, `updated_at` in epoch-ms).
+
+The listing is scoped to `tutor` by the `t0_agents.agent` tag every inference
+carries, so agents sharing one tensorzero.toml function stay separate and a
+`model=` agent is not drowned in the passthrough's shared log. `tags=` narrows
+further, and a key collision resolves the caller's way — the same precedence
+the write side uses.
+
+By default this is **dev-grade**: it
 groups a bounded window of recent inferences by episode client-side (there is
 no server-side per-episode aggregation in TensorZero through 2026.6.0,
 its last release), so a
