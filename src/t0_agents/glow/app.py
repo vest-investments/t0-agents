@@ -948,12 +948,16 @@ class App:
         **Scoped to ``agent``** by the ``t0_agents.agent`` tag every
         inference carries, so agents sharing one tensorzero.toml function
         stay separate and a ``model=`` agent is not drowned in the
-        passthrough's shared log.  An ``index`` receives that tag in its
-        ``tags`` too — both paths mean the same thing.  A caller ``tags``
-        key wins over the agent tag, mirroring the write-side precedence in
-        :meth:`~t0_agents.core.agent.Agent._merge_tags`.
+        passthrough's shared log.  The App- and agent-level ``tags`` the
+        declaration stamps on every write scope the read as well, so one
+        gateway shared by several deployments does not cross them.  An
+        ``index`` receives the same map — both paths mean the same thing.
+        Precedence runs agent tag, then declared tags, then the caller's,
+        mirroring :meth:`~t0_agents.core.agent.Agent._merge_tags` on the
+        way in.
         """
-        scope = {AGENT_TAG: agent._spec.name, **(tags or {})}
+        declared = self._resolve_config_overrides(agent._spec).get("tags") or {}
+        scope = {AGENT_TAG: agent._spec.name, **declared, **(tags or {})}
         if index is not None:
             return list(await index.list_conversations(tags=scope, limit=limit))
         t0 = await self._ensure_t0()
