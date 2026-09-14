@@ -53,6 +53,9 @@ TensorZeroMemory(gateway, tag_filter={"t0_agents.agent": "tutor"})
 Add `function_name="tensorzero::default"` on top for ClickHouse
 partition-pruning when the store grows.
 
+`app.conversations(agent)` already filters on that tag for you; the recipe
+above is for a `TensorZeroMemory` you construct yourself.
+
 ## `system_arguments` does not work with `model=`
 
 TZ server-side templates (`.with_(system_arguments={...})`) need a

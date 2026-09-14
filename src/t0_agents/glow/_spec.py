@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from t0_agents.core.config import resolve_function_name
 from t0_agents.core.output import OutputMode
 from t0_agents.core.types import Guardrail
 
@@ -38,6 +39,8 @@ class _AgentSpec:
     """Registration-time descriptor for an ``@app.agent``-decorated function."""
 
     name: str
+    # The raw declaration, ``None`` whenever the caller omitted it.  The
+    # routing target is ``resolved_function_name`` below.
     function_name: str | None
     fn: Callable[..., Awaitable[Any]]
     system_prompt: str | None
@@ -69,3 +72,16 @@ class _AgentSpec:
     # resolved toolless agent.  Consumed by
     # :meth:`~t0_agents.glow.app.App._lookup_or_build` to wrap the provider.
     resolved_tools: set[str] | None = None
+
+    @property
+    def resolved_function_name(self) -> str | None:
+        """The function this agent's inferences actually land under.
+
+        ``function_name`` is ``None`` for both ``@app.agent("x")`` and
+        ``@app.agent("x", model=...)``; only the resolution tells those
+        apart, and only it matches the built
+        :class:`~t0_agents.core.config.AgentConfig`.
+        """
+        return resolve_function_name(
+            self.function_name, self.config_overrides.get("model")
+        )

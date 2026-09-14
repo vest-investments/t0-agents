@@ -12,6 +12,7 @@ the public ``._agent`` attribute on the returned callable.
 
 from __future__ import annotations
 
+from t0_agents.core.agent import AGENT_TAG
 from t0_agents.core.conversation import ConversationIndex, ConversationSummary
 from t0_agents.glow.agent_handle import AgentHandle, llm
 from t0_agents.glow.app import App
@@ -39,6 +40,7 @@ from t0_agents.mcp.runtime import ServerCredentials
 from t0_agents.usage import UsageLedger
 
 __all__ = [
+    "AGENT_TAG",
     "AgentHandle",
     "App",
     "Conversation",

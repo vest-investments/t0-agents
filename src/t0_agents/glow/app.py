@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, cast
 from fastmcp import FastMCP
 from tensorzero import AsyncTensorZeroGateway
 
-from t0_agents.core.agent import Agent
+from t0_agents.core.agent import AGENT_TAG, Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.exceptions import ConfigurationError
 from t0_agents.core.types import ToolProvider
@@ -940,15 +940,31 @@ class App:
         and ``turn_count`` guarantees.  Pass ``index=`` — any
         :class:`~t0_agents.core.conversation.ConversationIndex` — to delegate
         to a production inbox instead; that is the seam a real store plugs into
-        with no further glow change.  ``tags`` scopes the listing (e.g.
-        ``tags={"customer_id": cid}``), aligning read filters with the write
-        tags a :class:`~t0_agents.glow.conversation.Conversation` stamps.
+        with no further glow change.  ``tags`` narrows the listing further
+        (e.g. ``tags={"customer_id": cid}``), aligning read filters with the
+        write tags a :class:`~t0_agents.glow.conversation.Conversation`
+        stamps.
+
+        **Scoped to ``agent``** by the ``t0_agents.agent`` tag every
+        inference carries, so agents sharing one tensorzero.toml function
+        stay separate and a ``model=`` agent is not drowned in the
+        passthrough's shared log.  The App- and agent-level ``tags`` the
+        declaration stamps on every write scope the read as well, so one
+        gateway shared by several deployments does not cross them.  An
+        ``index`` receives the same map — both paths mean the same thing.
+        Precedence runs agent tag, then declared tags, then the caller's,
+        mirroring :meth:`~t0_agents.core.agent.Agent._merge_tags` on the
+        way in.
         """
+        declared = self._resolve_config_overrides(agent._spec).get("tags") or {}
+        scope = {AGENT_TAG: agent._spec.name, **declared, **(tags or {})}
         if index is not None:
-            return list(await index.list_conversations(tags=tags, limit=limit))
+            return list(await index.list_conversations(tags=scope, limit=limit))
         t0 = await self._ensure_t0()
-        memory = TensorZeroMemory(t0, function_name=agent._spec.function_name)
-        return list(await memory.list_conversations(tags=tags, limit=limit))
+        memory = TensorZeroMemory(
+            t0, function_name=agent._spec.resolved_function_name
+        )
+        return list(await memory.list_conversations(tags=scope, limit=limit))
 
     async def build(self) -> None:
         """Eagerly construct every registered agent and connect the Client.

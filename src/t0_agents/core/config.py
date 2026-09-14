@@ -46,6 +46,24 @@ def _functionless_json_error(name: str, model: str, output_name: str) -> str:
     )
 
 
+def resolve_function_name(
+    function_name: str | None, model: str | None
+) -> str | None:
+    """Return the TensorZero function a declaration routes to.
+
+    ``None`` is a destination, not an absence: it is the ``model=``
+    path through the gateway's built-in passthrough, whose inferences
+    land under ``tensorzero::default`` rather than a declared function.
+    Anything holding a raw declaration rather than a built
+    :class:`AgentConfig` resolves it here — reading the declaration
+    directly sees ``None`` for the idiomatic no-argument form and
+    mistakes it for the passthrough.
+    """
+    if model is None and function_name is None:
+        return "agent"
+    return function_name
+
+
 @dataclass(slots=True)
 class AgentConfig:
     """Declarative configuration for an Agent.
@@ -229,8 +247,7 @@ class AgentConfig:
             )
         if self.model is not None and not self.model:
             raise ConfigurationError("AgentConfig.model must be a non-empty string")
-        if self.model is None and self.function_name is None:
-            self.function_name = "agent"
+        self.function_name = resolve_function_name(self.function_name, self.model)
         if self.function_name is not None and not self.function_name:
             raise ConfigurationError(
                 "AgentConfig.function_name must be a non-empty string"

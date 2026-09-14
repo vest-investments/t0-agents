@@ -6,7 +6,7 @@ from tensorzero import ToolChoice
 
 __version__ = "2.9.0"
 
-from t0_agents.core.agent import Agent
+from t0_agents.core.agent import AGENT_TAG, Agent
 from t0_agents.core.config import AgentConfig
 from t0_agents.core.conversation import ConversationUsage
 from t0_agents.core.elicitation_forwarder import (
@@ -95,6 +95,7 @@ from t0_agents.usage import (
 )
 
 __all__ = [
+    "AGENT_TAG",
     "CODEC_VERSION",
     "Agent",
     "AgentConfig",

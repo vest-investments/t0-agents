@@ -422,7 +422,7 @@ class Conversation(Generic[R]):
                 t0 = await self._app._ensure_t0()
                 memory = TensorZeroMemory(
                     t0,
-                    function_name=self._spec.function_name,
+                    function_name=self._spec.resolved_function_name,
                     tag_filter=self._tags or None,
                 )
             elif not hasattr(memory, "load_history"):

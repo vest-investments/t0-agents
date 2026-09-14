@@ -35,6 +35,10 @@ from t0_agents.stream.runner import StreamingAgentLoop
 
 logger = logging.getLogger(__name__)
 
+#: Observability tag carrying the agent name on every inference.  Read
+#: filters that scope to one agent must use this key, not a copy of it.
+AGENT_TAG = "t0_agents.agent"
+
 
 T = TypeVar("T")
 
@@ -687,7 +691,7 @@ class Agent:
         inherits the auto-tag without duplicating it.
         """
         return {
-            "t0_agents.agent": self._config.name,
+            AGENT_TAG: self._config.name,
             **(self._config.tags or {}),
             **(override or {}),
         }

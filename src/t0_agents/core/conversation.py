@@ -235,7 +235,9 @@ class ConversationIndex(Protocol):
 
     Scoping rides TensorZero **tags** (e.g. ``{"customer_id": cid}``), the same
     universal filter the rest of the memory layer uses, so the contract bakes in
-    no consumer-specific key or pagination model.
+    no consumer-specific key or pagination model.  ``App.conversations(agent)``
+    always includes ``t0_agents.agent`` among them — an index that stores the
+    tags its rows were written with scopes to the agent for free.
     """
 
     async def list_conversations(
