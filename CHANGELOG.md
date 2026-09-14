@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.9.0] — 2026-09-13
+
+`load_transcript` rebuilt what a person was shown and nothing of what
+it was derived from: a round whose input ended on tool results
+contributed only its reply, so a UI that turned a result into
+something on screen — a citation row under a market-analysis answer —
+had no way to draw it again on reload. The results were in the store
+the whole time, as the `user` message the gateway appends before the
+next inference.
+
+### Changed
+
+- **`TensorZeroMemory.load_transcript` emits a round's tool results.**
+  Each round contributes the user message its input ends on — the text
+  that opened the turn, or the previous round's results as the gateway
+  stored them — followed by its `output`, so a turn reads as its
+  opening text and then each round's results and reply in order. A
+  two-round turn now yields `user, assistant, user, assistant`, and a
+  parallel batch stays one `user` message with its blocks in stored
+  order. A consumer that shows only text skips the results as it skips
+  any non-text block. `load_history` is untouched.
+
 ## [2.8.1] — 2026-09-12
 
 In 2.8.0, `StructuredOutput` does not satisfy `OutputMode` under mypy.
