@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.10.1] — 2026-09-14
+
+`ToolResultEvent.server` has been `None` on every tool result in
+production. The loop probes the *outermost* `ToolProvider` for
+`SupportsServerAttribution`, and `CostTrackingMiddleware` — always on
+— installs `_UsageRollupToolProvider` as that outermost layer without
+the method, so whatever the runtime underneath could attribute was
+discarded one call from the consumer. `GuardedToolProvider` drops it
+the same way a layer down, which is why forwarding from the rollup
+alone still returns `None` wherever guardrails are configured.
+
+Three of the five wrappers — `FilteredToolProvider`,
+`SubAgentToolProvider` and `_ConversationView` — already forwarded it.
+The omission survived because every attribution test hands the loop a
+provider implementing `server_for` directly, so no test ever crossed a
+wrapper.
+
+### Fixed
+
+- **`_UsageRollupToolProvider` forwards `server_for`.** It is the
+  outermost provider on every run that tracks cost, which is all of
+  them, so this is the one that made the field dead rather than
+  unreliable.
+- **`GuardedToolProvider` forwards `server_for`.** Its docstring
+  asserted that only `list_tools` and `call_tool` are required by the
+  loop; that was the reasoning that produced the bug, and it is
+  corrected to say that a wrapper omitting the method erases
+  attribution for everything beneath it.
+
+### Notes
+
+- Consumers that worked around the dead field by keying on the
+  namespaced tool name are unaffected and need no change — the tool
+  name remains a valid `(server, tool)` identity.
+- No behaviour changes for a provider chain that could not attribute a
+  server: `server_for` still returns `None` rather than raising, and
+  the loop still probes with `isinstance`.
+
 ## [2.10.0] — 2026-09-13
 
 `app.conversations(agent)` returned the whole inference log. It read
