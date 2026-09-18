@@ -40,7 +40,12 @@ if TYPE_CHECKING:
     from t0_agents.core.config import AgentConfig
     from t0_agents.core.output import OutputMode
     from t0_agents.core.run import Run
-    from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
+    from t0_agents.core.types import (
+        AgentResult,
+        MemoryProvider,
+        ToolCallUsage,
+        ToolProvider,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +71,14 @@ Both :class:`tensorzero.types.ChatInferenceResponse` and
 by inheritance.  Callbacks accept either via duck typing — the
 parameter is typed as :class:`Any` to keep the call-site free of
 unions while preserving strict typing inside each callback body.
+"""
+
+
+OnToolRoundCallback = Callable[[tuple["ToolCallUsage", ...]], Awaitable[None]]
+"""Tool-round observation callback.
+
+Receives the round's :class:`~t0_agents.core.types.ToolCallUsage` values
+in dispatch order, after the results were appended to the transcript.
 """
 
 
@@ -112,9 +125,9 @@ class RunContext:
        current ``tool_provider``.  Middlewares wrap or replace
        ``tool_provider`` via :meth:`replace_tool_provider`; the previous
        provider stack is recorded on ``extras`` for audit.
-    3. **Per-run scratch** — ``on_inference`` carries the chained
-       inference callback assembled by middlewares calling
-       :meth:`chain_on_inference`.  ``prior_messages`` and
+    3. **Per-run scratch** — ``on_inference`` and ``on_tool_round`` carry
+       the chained callbacks assembled by middlewares calling
+       :meth:`chain_on_inference` / :meth:`chain_on_tool_round`.  ``prior_messages`` and
        ``system_arguments`` start as the caller's explicit values and
        may be augmented by :class:`MemoryMiddleware`.  ``extras`` is a
        free-form dict for middleware-private state (e.g.,
@@ -141,6 +154,7 @@ class RunContext:
 
     # 3. Per-run scratch
     on_inference: OnInferenceCallback | None = None
+    on_tool_round: OnToolRoundCallback | None = None
     prior_messages: list[Mapping[str, Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
     # Per-run override state threaded from ``Agent.invoke``:
@@ -186,6 +200,26 @@ class RunContext:
             await cb(response)
 
         self.on_inference = composed
+
+    def chain_on_tool_round(self, cb: OnToolRoundCallback) -> None:
+        """Compose ``cb`` after the existing ``on_tool_round`` callback.
+
+        Same composition rule as :meth:`chain_on_inference`: registration
+        order is firing order, and each callback receives the whole
+        round.  The terminal fires it once per dispatched tool round,
+        after the results are appended to the transcript.
+        """
+        existing = self.on_tool_round
+
+        if existing is None:
+            self.on_tool_round = cb
+            return
+
+        async def composed(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+            await existing(tool_calls)
+            await cb(tool_calls)
+
+        self.on_tool_round = composed
 
     def replace_tool_provider(self, tp: ToolProvider) -> None:
         """Replace ``ctx.tool_provider``, stacking the prior provider for audit.

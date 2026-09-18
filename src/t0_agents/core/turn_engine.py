@@ -22,9 +22,9 @@ import-direction constraints — this module never imports ``mcp/`` or
 * event yielding (streaming only);
 * ``list_tools`` → ``convert_tools`` → executor pick (I/O plus
   ``mcp.adapter``/executor imports that must stay out of ``core/``);
-* tool dispatch and the single-user-message append of results — two
-  lines per loop; the shared error contract already lives in
-  ``t0_agents.mcp.loop._execute_single_tool_call``.
+* tool dispatch itself — the shared error contract already lives in
+  ``t0_agents.mcp.loop._execute_single_tool_call``; the engine takes
+  over at :func:`complete_tool_round`, once the outcomes exist.
 """
 
 from __future__ import annotations
@@ -35,12 +35,12 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Protocol
 
-from tensorzero import Message, Text, Thought
+from tensorzero import Message, Text, Thought, ToolResult
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
-from t0_agents.core.types import AgentResult
+from t0_agents.core.types import AgentResult, ToolCallUsage
 
 if TYPE_CHECKING:
     from tensorzero import ToolChoice
@@ -236,15 +236,18 @@ async def complete_assistant_turn(
     response: ChatInferenceResponse | None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None,
     replay_thoughts: bool = False,
-) -> None:
+) -> str | None:
     """Post-inference sequence shared by both loops.
 
     Fires ``on_inference`` (BEFORE tool dispatch, so cost guardrails can
     block the next tool call), captures the episode / inference ids, and
-    appends the assistant turn to the replay ``messages``.  ``response``
-    is ``None`` only on the streaming degenerate path where the stream
-    ended without a usage chunk — the assistant turn is still appended,
-    ids are not captured.
+    appends the assistant turn to the replay ``messages``.  Returns the
+    captured inference id, which the loop hands to
+    :func:`complete_tool_round` so the round's tool calls are attributed
+    to the inference that emitted them.  ``response`` is ``None`` only on
+    the streaming degenerate path where the stream ended without a usage
+    chunk — the assistant turn is still appended, ids are not captured,
+    and ``None`` is returned.
 
     ``replay_thoughts`` decides whether that appended turn keeps its
     ``Thought`` blocks, and it is a statement about the provider the
@@ -275,13 +278,68 @@ async def complete_assistant_turn(
     Unified on the former — the hook only reads ``response.usage``, so
     the order relative to state mutation is unobservable to it.
     """
+    inference_id: str | None = None
     if response is not None:
         if on_inference is not None:
             await on_inference(response)
         state.episode_id = str(response.episode_id)
-        state.inference_ids.append(str(response.inference_id))
+        inference_id = str(response.inference_id)
+        state.inference_ids.append(inference_id)
     content = content_blocks if replay_thoughts else strip_thoughts(content_blocks)
     state.messages.append(Message(role="assistant", content=content))
+    return inference_id
+
+
+class ToolRoundOutcome(Protocol):
+    """The slice of one dispatched tool call :func:`complete_tool_round` reads.
+
+    ``mcp.loop._ToolOutcome`` satisfies it structurally; the engine never
+    imports ``mcp/``.  ``result`` is the T0 ``ToolResult`` fed back to the
+    model; the rest is the per-call observability that becomes a
+    :class:`~t0_agents.core.types.ToolCallUsage`.
+    """
+
+    result: ToolResult
+    duration_ms: float | None
+    is_error: bool
+    server: str | None
+
+
+async def complete_tool_round(
+    state: TurnState,
+    *,
+    outcomes: Sequence[ToolRoundOutcome],
+    inference_id: str | None,
+    on_tool_round: Callable[[tuple[ToolCallUsage, ...]], Awaitable[None]] | None,
+) -> None:
+    """Post-dispatch sequence shared by both loops.
+
+    Appends the round's results as ONE user message — N results in one
+    message, never N messages — and then fires ``on_tool_round`` with one
+    :class:`~t0_agents.core.types.ToolCallUsage` per outcome, in dispatch
+    order, each stamped with ``inference_id`` (the value
+    :func:`complete_assistant_turn` returned for this turn).  With
+    ``on_tool_round=None`` the transcript is byte-identical to the
+    hook-less loops.
+    """
+    state.messages.append(
+        Message(role="user", content=[outcome.result for outcome in outcomes])
+    )
+    if on_tool_round is None:
+        return
+    await on_tool_round(
+        tuple(
+            ToolCallUsage(
+                inference_id=inference_id,
+                tool_call_id=outcome.result.id,
+                name=outcome.result.name,
+                server=outcome.server,
+                duration_ms=outcome.duration_ms,
+                is_error=outcome.is_error,
+            )
+            for outcome in outcomes
+        )
+    )
 
 
 def raise_missing_tool_provider(*, entry_point: str) -> NoReturn:

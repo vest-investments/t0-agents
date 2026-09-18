@@ -8,7 +8,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from tensorzero import Message, Text, Thought, ToolCall
+from tensorzero import Message, Text, Thought, ToolCall, ToolResult
 from tensorzero.types import ChatInferenceResponse, TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
@@ -18,6 +18,7 @@ from t0_agents.core.turn_engine import (
     build_agent_result,
     build_inference_kwargs,
     complete_assistant_turn,
+    complete_tool_round,
     corrective_retry,
     is_recoverable,
     is_terminal_round,
@@ -29,6 +30,7 @@ from t0_agents.core.turn_engine import (
     strip_thoughts,
     validate_run_inputs,
 )
+from t0_agents.core.types import ToolCallUsage
 
 
 def _tool_call(name: str = "add") -> ToolCall:
@@ -256,6 +258,117 @@ async def test_complete_assistant_turn_without_response_appends_only() -> None:
     assert state.episode_id == "keep"
     assert state.inference_ids == []
     assert len(state.messages) == 1
+
+
+async def test_complete_assistant_turn_returns_the_captured_inference_id() -> None:
+    state = TurnState(messages=[])
+    inference_id = await complete_assistant_turn(
+        state,
+        content_blocks=[Text(type="text", text="x")],
+        response=cast(ChatInferenceResponse, _Response()),
+        on_inference=None,
+    )
+    assert inference_id == "00000000-0000-4000-8000-0000000000a1"
+    assert state.inference_ids == [inference_id]
+
+
+async def test_complete_assistant_turn_returns_none_without_response() -> None:
+    inference_id = await complete_assistant_turn(
+        TurnState(messages=[]),
+        content_blocks=[Text(type="text", text="x")],
+        response=None,
+        on_inference=None,
+    )
+    assert inference_id is None
+
+
+# ---------------------------------------------------------------------------
+# complete_tool_round
+# ---------------------------------------------------------------------------
+
+
+class _Outcome:
+    def __init__(
+        self,
+        result: ToolResult,
+        *,
+        duration_ms: float | None = 12.5,
+        is_error: bool = False,
+        server: str | None = "calc",
+    ) -> None:
+        self.result = result
+        self.duration_ms = duration_ms
+        self.is_error = is_error
+        self.server = server
+
+
+_ADD = ToolResult(name="add", result="3", id="tc-1")
+_GHOST = ToolResult(name="ghost", result="ERROR: tool name 'ghost' is not in the schema", id="tc-2")
+
+
+async def test_complete_tool_round_appends_the_results_as_one_user_message() -> None:
+    state = TurnState(messages=[])
+    await complete_tool_round(
+        state,
+        outcomes=[_Outcome(_ADD), _Outcome(_GHOST, duration_ms=None, is_error=True, server=None)],
+        inference_id="inf-1",
+        on_tool_round=None,
+    )
+    assert state.messages == [Message(role="user", content=[_ADD, _GHOST])]
+
+
+async def test_complete_tool_round_reports_one_usage_per_outcome_in_dispatch_order() -> None:
+    seen: list[tuple[ToolCallUsage, ...]] = []
+
+    async def hook(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+        seen.append(tool_calls)
+
+    hooked = TurnState(messages=[])
+    silent = TurnState(messages=[])
+    outcomes = [
+        _Outcome(_ADD),
+        _Outcome(_GHOST, duration_ms=None, is_error=True, server=None),
+    ]
+    await complete_tool_round(
+        hooked, outcomes=outcomes, inference_id="inf-1", on_tool_round=hook
+    )
+    await complete_tool_round(
+        silent, outcomes=outcomes, inference_id="inf-1", on_tool_round=None
+    )
+
+    assert seen == [
+        (
+            ToolCallUsage(
+                inference_id="inf-1",
+                tool_call_id="tc-1",
+                name="add",
+                server="calc",
+                duration_ms=12.5,
+                is_error=False,
+            ),
+            ToolCallUsage(
+                inference_id="inf-1",
+                tool_call_id="tc-2",
+                name="ghost",
+                server=None,
+                duration_ms=None,
+                is_error=True,
+            ),
+        )
+    ]
+    assert hooked.messages == silent.messages
+
+
+async def test_complete_tool_round_stamps_none_when_the_turn_had_no_inference_id() -> None:
+    seen: list[tuple[ToolCallUsage, ...]] = []
+
+    async def hook(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+        seen.append(tool_calls)
+
+    await complete_tool_round(
+        TurnState(messages=[]), outcomes=[_Outcome(_ADD)], inference_id=None, on_tool_round=hook
+    )
+    assert [c.inference_id for c in seen[0]] == [None]
 
 
 # ---------------------------------------------------------------------------
