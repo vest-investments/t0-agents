@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from t0_agents.core.types import RunUsage, Usage
-from t0_agents.usage import InferenceUsage, RunUsageRecord
+from t0_agents.usage import InferenceUsage, RunUsageRecord, ToolCallUsage
 
 AT = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
 
@@ -54,4 +54,22 @@ def record(run_id: str = "run-1", *, episode_id: str = "ep-1") -> RunUsageRecord
         error_class=None,
         started_at=AT,
         finished_at=AT + timedelta(seconds=1),
+        tool_calls=(
+            ToolCallUsage(
+                inference_id=f"{run_id}-inf-1",
+                tool_call_id="tc-1",
+                name="add",
+                server="calc",
+                duration_ms=12.5,
+                is_error=False,
+            ),
+            ToolCallUsage(
+                inference_id=f"{run_id}-inf-1",
+                tool_call_id="tc-2",
+                name="ghost",
+                server=None,
+                duration_ms=None,
+                is_error=True,
+            ),
+        ),
     )

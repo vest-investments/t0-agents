@@ -10,7 +10,12 @@ import pytest
 
 aiosqlite = pytest.importorskip("aiosqlite")
 
-from t0_agents.usage.sqlite import SqliteUsageLedger  # noqa: E402
+from t0_agents.usage.sqlite import (  # noqa: E402
+    _CREATE_INDEX,
+    _CREATE_INFERENCES,
+    _CREATE_RUNS,
+    SqliteUsageLedger,
+)
 from tests.test_usage._records import record  # noqa: E402
 
 _RUN_COLUMNS = (
@@ -24,6 +29,13 @@ _INFERENCE_COLUMNS = (
     "input_tokens, output_tokens, provider_cache_read_input_tokens, "
     "provider_cache_write_input_tokens, cost, tool_calls, finish_reason, at"
 )
+_TOOL_CALL_COLUMNS = (
+    "run_id, ordinal, inference_id, tool_call_id, name, server, duration_ms, is_error"
+)
+_TOOL_CALL_ROWS = [
+    ("run-1", 0, "run-1-inf-1", "tc-1", "add", "calc", 12.5, 0),
+    ("run-1", 1, "run-1-inf-1", "tc-2", "ghost", None, None, 1),
+]
 
 
 async def _rows(db_path: str, table: str, columns: str, order: str) -> list[tuple[Any, ...]]:
@@ -40,7 +52,7 @@ class TestSqliteUsageLedger:
         with pytest.raises(ValueError, match="InMemoryUsageLedger"):
             SqliteUsageLedger(db_path)
 
-    async def test_a_run_lands_as_one_run_row_and_one_row_per_inference(
+    async def test_a_run_lands_as_one_run_row_and_one_row_per_inference_and_tool_call(
         self, tmp_path: Path
     ) -> None:
         db_path = str(tmp_path / "usage.db")
@@ -67,6 +79,9 @@ class TestSqliteUsageLedger:
                 "2026-09-10T12:00:00.500000+00:00",
             ),
         ]
+        assert await _rows(
+            db_path, "usage_tool_calls", _TOOL_CALL_COLUMNS, "ordinal"
+        ) == _TOOL_CALL_ROWS
 
     async def test_a_repeated_run_id_is_kept_once(self, tmp_path: Path) -> None:
         db_path = str(tmp_path / "usage.db")
@@ -76,6 +91,22 @@ class TestSqliteUsageLedger:
 
         assert len(await _rows(db_path, "usage_runs", "run_id", "run_id")) == 1
         assert len(await _rows(db_path, "usage_inferences", "inference_id", "inference_id")) == 2
+        assert len(await _rows(db_path, "usage_tool_calls", "ordinal", "ordinal")) == 2
+
+    async def test_a_file_from_before_the_tool_calls_table_gains_it(
+        self, tmp_path: Path
+    ) -> None:
+        db_path = str(tmp_path / "usage.db")
+        async with aiosqlite.connect(db_path) as db:
+            for ddl in (_CREATE_RUNS, _CREATE_INFERENCES, _CREATE_INDEX):
+                await db.execute(ddl)
+            await db.commit()
+
+        await SqliteUsageLedger(db_path).record(record())
+
+        assert await _rows(
+            db_path, "usage_tool_calls", _TOOL_CALL_COLUMNS, "ordinal"
+        ) == _TOOL_CALL_ROWS
 
     async def test_concurrent_records_all_land(self, tmp_path: Path) -> None:
         db_path = str(tmp_path / "usage.db")
