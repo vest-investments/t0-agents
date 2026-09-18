@@ -19,7 +19,7 @@ from tensorzero.types import ToolCall
 from tensorzero.util import uuid7
 
 from t0_agents.core.middleware.base import Next, RunContext
-from t0_agents.core.types import AgentResult, RunUsage, Usage
+from t0_agents.core.types import AgentResult, RunUsage, ToolCallUsage, Usage
 from t0_agents.usage.ledger import UsageLedger
 from t0_agents.usage.records import InferenceUsage, RunOutcome, RunUsageRecord
 
@@ -145,6 +145,8 @@ class UsageLedgerMiddleware:
     swallowed on failure, so the ledger cannot change the run's result.
     ``tags`` are the merged map the gateway received.  A delegated
     sub-agent's inferences are recorded by its own chain, never folded in.
+    Tool calls arrive through ``ctx.on_tool_round`` one round at a time
+    and land flat on the record.
     """
 
     name = "usage_ledger"
@@ -167,6 +169,13 @@ class UsageLedgerMiddleware:
             )
 
         ctx.chain_on_inference(capture)
+
+        tool_calls: list[ToolCallUsage] = []
+
+        async def capture_round(round_calls: tuple[ToolCallUsage, ...]) -> None:
+            tool_calls.extend(round_calls)
+
+        ctx.chain_on_tool_round(capture_round)
 
         result: AgentResult[Any] | None = None
         outcome: RunOutcome = "failed"
@@ -200,5 +209,6 @@ class UsageLedgerMiddleware:
                 error_class=error_class,
                 started_at=started_at,
                 finished_at=datetime.now(UTC),
+                tool_calls=tuple(tool_calls),
             )
             await record_best_effort(self._ledger, record, timeout=self._timeout)

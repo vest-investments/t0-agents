@@ -29,7 +29,15 @@ from t0_agents.usage import (
 )
 from t0_agents.usage.middleware import capture_inference
 from tests._fake_mcp import FakeMCPClient
-from tests._fake_t0 import FakeChatResponse, FakeT0, FakeUsage
+from tests._fake_t0 import (
+    FakeChatResponse,
+    FakeT0,
+    FakeUsage,
+    chat_chunk,
+    final_chunk,
+    text_chunk,
+    tool_call_chunk,
+)
 
 EPISODE = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
@@ -361,3 +369,139 @@ class TestCaptureInference:
         assert captured.finish_reason is None
         assert captured.tool_calls == ()
         assert captured.usage.cost is None
+
+
+def _text_result(text: str) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structured_content=None,
+        meta=None,
+        data=None,
+        is_error=False,
+    )
+
+
+class _AttributingClient(FakeMCPClient):
+    def server_for(self, name: str) -> str | None:
+        return {"add": "math", "greet": "social"}.get(name)
+
+
+def _two_tool_client() -> _AttributingClient:
+    schema = {"type": "object", "properties": {}}
+    return _AttributingClient(
+        tools=[
+            MCPTool(name="add", description="add", inputSchema=schema),
+            MCPTool(name="greet", description="greet", inputSchema=schema),
+        ],
+        call_results={"add": _text_result("3"), "greet": _text_result("hi")},
+    )
+
+
+def _assert_each_inference_owns_its_calls(record: RunUsageRecord) -> None:
+    for inference in record.inferences:
+        attributed = tuple(
+            c.name for c in record.tool_calls if c.inference_id == inference.inference_id
+        )
+        assert attributed == inference.tool_calls
+
+
+class TestToolCallsAreCorrelated:
+    async def test_the_tool_loop_attributes_each_round_to_its_inference(self) -> None:
+        ledger = InMemoryUsageLedger()
+        first = FakeChatResponse(content=[_tool_call("add", "add")], episode_id=EPISODE)
+        second = FakeChatResponse(
+            content=[
+                ToolCall(
+                    id="tc-2",
+                    raw_name="greet",
+                    name="greet",
+                    raw_arguments='{"name": "x"}',
+                    arguments={"name": "x"},
+                )
+            ],
+            episode_id=EPISODE,
+        )
+        final = FakeChatResponse(content=[Text(type="text", text="done")], episode_id=EPISODE)
+        agent = _agent(FakeT0([first, second, final]), ledger, client=_two_tool_client())
+        await agent.invoke("do both").result()
+
+        record = ledger.runs[0]
+        _assert_each_inference_owns_its_calls(record)
+        assert [
+            (c.inference_id, c.tool_call_id, c.name, c.server, c.is_error)
+            for c in record.tool_calls
+        ] == [
+            (str(first.inference_id), "tc-1", "add", "math", False),
+            (str(second.inference_id), "tc-2", "greet", "social", False),
+        ]
+        assert all(c.duration_ms is not None for c in record.tool_calls)
+        assert [i.tool_calls for i in record.inferences] == [("add",), ("greet",), ()]
+
+    async def test_the_streaming_loop_attributes_the_same_way(self) -> None:
+        ledger = InMemoryUsageLedger()
+        first_id, second_id = UUID(int=1), UUID(int=2)
+        t0 = FakeT0(
+            [
+                [
+                    chat_chunk([tool_call_chunk("add", '{"a": 1, "b": 2}', block_id="tc-1")]),
+                    final_chunk(inference_id=first_id, episode_id=EPISODE),
+                ],
+                [
+                    chat_chunk([tool_call_chunk("greet", '{"name": "x"}', block_id="tc-2")]),
+                    final_chunk(inference_id=second_id, episode_id=EPISODE),
+                ],
+                [
+                    chat_chunk([text_chunk("done")]),
+                    final_chunk(episode_id=EPISODE),
+                ],
+            ]
+        )
+        agent = _agent(t0, ledger, client=_two_tool_client())
+        async for _ in agent.invoke("do both").events():
+            pass
+
+        record = ledger.runs[0]
+        _assert_each_inference_owns_its_calls(record)
+        assert [
+            (c.inference_id, c.tool_call_id, c.name, c.server, c.is_error)
+            for c in record.tool_calls
+        ] == [
+            (str(first_id), "tc-1", "add", "math", False),
+            (str(second_id), "tc-2", "greet", "social", False),
+        ]
+        assert [i.tool_calls for i in record.inferences] == [("add",), ("greet",), ()]
+
+    async def test_a_hallucinated_name_is_recorded_as_written_without_a_server(self) -> None:
+        ledger = InMemoryUsageLedger()
+        t0 = FakeT0(list(_two_turn_responses(_tool_call(None, "ghost"))))
+        agent = _agent(t0, ledger, client=_two_tool_client())
+        await agent.invoke("call ghost").result()
+
+        (call,) = ledger.runs[0].tool_calls
+        assert (call.name, call.server, call.duration_ms, call.is_error) == (
+            "ghost", None, None, True,
+        )
+        _assert_each_inference_owns_its_calls(ledger.runs[0])
+
+    async def test_unparseable_arguments_keep_the_server_but_no_duration(self) -> None:
+        ledger = InMemoryUsageLedger()
+        broken = ToolCall(
+            id="tc-1", raw_name="add", name="add", raw_arguments='{"a": 1', arguments=None
+        )
+        t0 = FakeT0(list(_two_turn_responses(broken)))
+        agent = _agent(t0, ledger, client=_two_tool_client())
+        await agent.invoke("add").result()
+
+        (call,) = ledger.runs[0].tool_calls
+        assert (call.name, call.server, call.duration_ms, call.is_error) == (
+            "add", "math", None, True,
+        )
+
+    async def test_a_run_without_tools_carries_no_tool_calls(self) -> None:
+        ledger = InMemoryUsageLedger()
+        t0 = FakeT0([FakeChatResponse(content=[Text(type="text", text="hi")])])
+        agent = _agent(t0, ledger)
+        await agent.invoke("hi").result()
+
+        assert ledger.runs[0].tool_calls == ()
+        assert isinstance(ledger.runs[0].tool_calls, tuple)

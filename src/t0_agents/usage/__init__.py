@@ -1,5 +1,6 @@
 """Usage subsystem: the UsageLedger protocol, its records, middleware and backends."""
 
+from t0_agents.core.types import ToolCallUsage
 from t0_agents.usage.in_memory import InMemoryUsageLedger
 from t0_agents.usage.ledger import UsageLedger
 from t0_agents.usage.middleware import UsageLedgerMiddleware
@@ -16,6 +17,7 @@ __all__ = [
     "RunOutcome",
     "RunUsageRecord",
     "SqliteUsageLedger",
+    "ToolCallUsage",
     "UsageLedger",
     "UsageLedgerMiddleware",
 ]
