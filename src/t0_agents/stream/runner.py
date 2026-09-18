@@ -47,6 +47,7 @@ from t0_agents.core.turn_engine import (
     build_agent_result,
     build_inference_kwargs,
     complete_assistant_turn,
+    complete_tool_round,
     corrective_retry,
     is_recoverable,
     is_terminal_round,
@@ -56,6 +57,7 @@ from t0_agents.core.turn_engine import (
     seed_messages,
     validate_run_inputs,
 )
+from t0_agents.core.types import ToolCallUsage
 from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
     ProgressCallback,
@@ -102,6 +104,7 @@ class StreamingAgentLoop:
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
+        on_tool_round: Callable[[tuple[ToolCallUsage, ...]], Awaitable[None]] | None = None,
         prior_messages: list[Message] | None = None,
         progress_sink: Callable[[ToolProgressEvent], Awaitable[None]] | None = None,
         model_name: str | None = None,
@@ -156,6 +159,10 @@ class StreamingAgentLoop:
         :class:`~t0_agents.core.events.ThoughtEvent` s are unaffected —
         the flag governs what the next request carries, not what a
         consumer sees.
+
+        ``on_tool_round`` mirrors :func:`~t0_agents.mcp.loop.run_agent`'s
+        kwarg of the same name and fires after the round's
+        :class:`ToolResultEvent` s are yielded.
 
         ``progress_sink`` receives a :class:`ToolProgressEvent` for every
         server-side progress notification a tool emits while executing.
@@ -279,7 +286,7 @@ class StreamingAgentLoop:
                         usage=final_usage_chunk.usage,
                     ),
                 )
-            await complete_assistant_turn(
+            inference_id = await complete_assistant_turn(
                 state,
                 content_blocks=assistant_blocks,
                 response=synthetic,
@@ -324,7 +331,6 @@ class StreamingAgentLoop:
                 parallel=parallel_tools,
                 progress_callback=progress_callback,
             )
-            tool_results = [outcome.result for outcome in outcomes]
             for tc_event, outcome in zip(
                 tool_calls_collected, outcomes, strict=True
             ):
@@ -337,7 +343,12 @@ class StreamingAgentLoop:
                     duration_ms=outcome.duration_ms,
                     server=outcome.server,
                 )
-            state.messages.append(Message(role="user", content=tool_results))
+            await complete_tool_round(
+                state,
+                outcomes=outcomes,
+                inference_id=inference_id,
+                on_tool_round=on_tool_round,
+            )
 
             text, response_source = mine_final_text(assistant_blocks)
             if is_terminal_round(
