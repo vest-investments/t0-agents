@@ -89,6 +89,7 @@ class RunContext:
 
     # 3. Per-run scratch
     on_inference: OnInferenceCallback | None = None
+    on_tool_round: OnToolRoundCallback | None = None
     prior_messages: list[Mapping[str, Any]] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
@@ -97,6 +98,7 @@ class RunContext:
     run: Run[Any] | None = None
 
     def chain_on_inference(self, cb: OnInferenceCallback) -> None: ...
+    def chain_on_tool_round(self, cb: OnToolRoundCallback) -> None: ...
     def replace_tool_provider(self, tp: ToolProvider) -> None: ...
 ```
 
@@ -117,6 +119,11 @@ Key fields by behaviour:
 - **`on_inference`** — composed via `ctx.chain_on_inference(cb)`.
   Multiple middlewares can observe each inference without
   overwriting each other; callbacks fire in registration order.
+- **`on_tool_round`** — composed via `ctx.chain_on_tool_round(cb)`,
+  same rule.  The terminal fires it once per dispatched tool round with
+  a `tuple[ToolCallUsage, ...]`, after the results are appended to the
+  transcript — and after `on_inference`, which fires before dispatch so
+  cost guardrails can still block the round.
 - **`extras`** — free-form per-middleware scratch.  Convention:
   prefix keys with the middleware name (e.g.
   `"_tool_provider_stack"`, `"_output_attempts"`).
@@ -185,7 +192,7 @@ provider.
 | `SubAgentMiddleware` | Wrap `tool_provider` with `_OrchestrationToolProvider`; thread `parent_episode_id` ContextVar | wrap on entry, restore on exit |
 | `GuardrailsMiddleware` | Fire `before_run` / `after_run`; wrap `tool_provider` with `GuardedToolProvider`; install cost-tracker for `max_cost` | full lifecycle |
 | `CostTrackingMiddleware` | Accumulate token + cost totals onto `Run.cost()` / `Run.usage()` | per-inference via `on_inference` |
-| `UsageLedgerMiddleware` | Capture every inference's gateway ids, usage and tool calls; hand the `UsageLedger` one `RunUsageRecord` per run | per-inference via `on_inference`; `finally` (record) |
+| `UsageLedgerMiddleware` | Capture every inference's gateway ids and usage, and every dispatched tool call; hand the `UsageLedger` one `RunUsageRecord` per run | per-inference via `on_inference`; per-round via `on_tool_round`; `finally` (record) |
 | `JsonRetryMiddleware` | Drive parse-failure retries for single-shot output modes | wraps terminal; loops on `Recovery.retry(hint)` |
 | `ObservabilityMiddleware` | Span-wrap the run via any `tracer.start_as_current_span(name)` | wraps terminal |
 
@@ -251,7 +258,10 @@ Present iff `AgentConfig.usage_ledger` is set (`usage_ledger=` on
 `variant_name`, the per-inference `Usage`, the tool-call names, the
 `finish_reason` — and in `finally` hands the ledger one `RunUsageRecord`
 with the run's totals, turn count and outcome (`completed` / `failed` /
-`cancelled`; the exception or cancellation still propagates).  Unlike
+`cancelled`; the exception or cancellation still propagates).  Each
+dispatched tool round arrives through `ctx.chain_on_tool_round` as one
+`ToolCallUsage` per call — name, id, server, duration, error flag, and
+the inference that emitted it; never arguments or results.  Unlike
 `MemoryMiddleware`, a run that produced no result is recorded too.
 
 The write is best-effort by contract: `asyncio.wait_for` with a 2-second

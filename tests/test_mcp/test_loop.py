@@ -31,7 +31,7 @@ from t0_agents.core.middleware.builtins import (
     _CumulativeUsage,
     _UsageRollupToolProvider,
 )
-from t0_agents.core.types import ToolProvider
+from t0_agents.core.types import ToolCallUsage, ToolProvider
 from t0_agents.guardrails.base import GuardrailContext
 from t0_agents.guardrails.runtime import GuardedToolProvider
 from t0_agents.mcp import (
@@ -1287,3 +1287,74 @@ class TestTerminalTools:
         assert result.response == "anything else?"
         assert result.turns == 2
         assert len(t0.calls) == 2
+
+
+class TestOnToolRound:
+    async def test_each_round_is_reported_under_the_inference_that_emitted_it(
+        self,
+    ) -> None:
+        class _Attributing(FakeMCPClient):
+            def server_for(self, name: str) -> str | None:
+                return {"add": "math", "greet": "social"}.get(name)
+
+        first = FakeChatResponse(content=[_tool_call(call_id="a")])
+        second = FakeChatResponse(
+            content=[
+                _tool_call(name="greet", raw_name="greet", call_id="b", arguments={"name": "x"})
+            ]
+        )
+        t0 = FakeT0([first, second, FakeChatResponse(content=[Text(text="done")])])
+        client = _Attributing(
+            tools=[_mcp_tool("add"), _mcp_tool("greet")],
+            call_results={"add": _make_result(data=5), "greet": _make_result(data="hi")},
+        )
+        rounds: list[tuple[ToolCallUsage, ...]] = []
+
+        async def on_tool_round(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+            rounds.append(tool_calls)
+
+        result = await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "do both",
+            "agent",
+            on_tool_round=on_tool_round,
+        )
+
+        assert [[c.name for c in r] for r in rounds] == [["add"], ["greet"]]
+        assert [[c.inference_id for c in r] for r in rounds] == [
+            [str(first.inference_id)],
+            [str(second.inference_id)],
+        ]
+        assert result.inference_ids[:2] == [str(first.inference_id), str(second.inference_id)]
+        assert [(c.tool_call_id, c.server, c.is_error) for r in rounds for c in r] == [
+            ("a", "math", False),
+            ("b", "social", False),
+        ]
+        assert all(c.duration_ms is not None for r in rounds for c in r)
+
+    async def test_without_the_hook_the_transcript_is_unchanged(self) -> None:
+        def _t0() -> FakeT0:
+            return FakeT0([
+                FakeChatResponse(content=[_tool_call(call_id="a")]),
+                FakeChatResponse(content=[Text(text="done")]),
+            ])
+
+        def _client() -> FakeMCPClient:
+            return FakeMCPClient(call_results={"add": _make_result(data=5)})
+
+        async def on_tool_round(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+            pass
+
+        hooked, silent = _t0(), _t0()
+        await run_agent(
+            cast(AsyncTensorZeroGateway, hooked),
+            cast(Client[Any], _client()),
+            "go",
+            "agent",
+            on_tool_round=on_tool_round,
+        )
+        await run_agent(
+            cast(AsyncTensorZeroGateway, silent), cast(Client[Any], _client()), "go", "agent"
+        )
+        assert hooked.calls[1]["input"]["messages"] == silent.calls[1]["input"]["messages"]

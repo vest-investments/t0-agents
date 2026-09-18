@@ -53,6 +53,23 @@ _CREATE_INDEX = """\
 CREATE INDEX IF NOT EXISTS idx_usage_inferences_run
 ON usage_inferences(run_id)"""
 
+_CREATE_TOOL_CALLS = """\
+CREATE TABLE IF NOT EXISTS usage_tool_calls (
+    run_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    inference_id TEXT,
+    tool_call_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    server TEXT,
+    duration_ms REAL,
+    is_error INTEGER NOT NULL,
+    PRIMARY KEY (run_id, ordinal)
+)"""
+
+_CREATE_TOOL_CALLS_INDEX = """\
+CREATE INDEX IF NOT EXISTS idx_usage_tool_calls_inference
+ON usage_tool_calls(inference_id)"""
+
 _INSERT_RUN = """\
 INSERT OR IGNORE INTO usage_runs (
     run_id, episode_id, function_name, tags, turns, outcome, error_class,
@@ -68,12 +85,20 @@ INSERT OR IGNORE INTO usage_inferences (
     provider_cache_write_input_tokens, cost, tool_calls, finish_reason, at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
+_INSERT_TOOL_CALL = """\
+INSERT OR IGNORE INTO usage_tool_calls (
+    run_id, ordinal, inference_id, tool_call_id, name, server, duration_ms, is_error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+
 
 class SqliteUsageLedger:
-    """Persistent, SQLite-backed ledger: one row per run, one per inference.
+    """Persistent, SQLite-backed ledger: one row per run, per inference, per tool call.
 
-    Each :meth:`record` opens its own connection and commits both tables in
-    one transaction.  Inserts are ``INSERT OR IGNORE`` on the primary keys,
+    Each :meth:`record` opens its own connection and commits the three tables
+    in one transaction.  ``usage_tool_calls`` is keyed by ``(run_id, ordinal)``
+    rather than by ``inference_id``, which SQLite would not deduplicate when
+    ``NULL``; a file created before the table existed gains it on the next
+    :meth:`record`.  Inserts are ``INSERT OR IGNORE`` on the primary keys,
     which is how the protocol's idempotency on ``run_id`` is met.  There is
     no read side — query the file with any SQLite client.  ``db_path`` must
     name a file: ``":memory:"`` and ``""`` are connection-scoped databases
@@ -96,6 +121,8 @@ class SqliteUsageLedger:
         await db.execute(_CREATE_RUNS)
         await db.execute(_CREATE_INFERENCES)
         await db.execute(_CREATE_INDEX)
+        await db.execute(_CREATE_TOOL_CALLS)
+        await db.execute(_CREATE_TOOL_CALLS_INDEX)
         await db.commit()
         self._tables_ready = True
 
@@ -141,6 +168,22 @@ class SqliteUsageLedger:
                         inference.at.isoformat(),
                     )
                     for inference in run.inferences
+                ],
+            )
+            await db.executemany(
+                _INSERT_TOOL_CALL,
+                [
+                    (
+                        run.run_id,
+                        ordinal,
+                        call.inference_id,
+                        call.tool_call_id,
+                        call.name,
+                        call.server,
+                        call.duration_ms,
+                        int(call.is_error),
+                    )
+                    for ordinal, call in enumerate(run.tool_calls)
                 ],
             )
             await db.commit()

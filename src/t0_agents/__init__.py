@@ -57,6 +57,7 @@ from t0_agents.core.types import (
     GuardrailLogEntry,
     MemoryProvider,
     RunUsage,
+    ToolCallUsage,
     ToolProvider,
 )
 from t0_agents.delegation import SubAgentToolProvider
@@ -157,6 +158,7 @@ __all__ = [
     "ToolCallDeltaEvent",
     "ToolCallEvent",
     "ToolCallOutput",
+    "ToolCallUsage",
     "ToolChoice",
     "ToolProgressEvent",
     "ToolProvider",

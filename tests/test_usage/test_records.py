@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import pytest
 
 from t0_agents.core.types import RunUsage, Usage
-from t0_agents.usage import InferenceUsage, RunUsageRecord, UsageLedger
+from t0_agents.usage import InferenceUsage, RunUsageRecord, ToolCallUsage, UsageLedger
 
 
 def _inference() -> InferenceUsage:
@@ -51,6 +51,21 @@ class TestRecordsAreValues:
         record = _record()
         with pytest.raises(dataclasses.FrozenInstanceError):
             record.outcome = "failed"  # type: ignore[misc]
+
+    def test_tool_call_usage_is_frozen(self) -> None:
+        call = ToolCallUsage(
+            inference_id="inf-1",
+            tool_call_id="tc-1",
+            name="add",
+            server="calc",
+            duration_ms=1.0,
+            is_error=False,
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            call.is_error = True  # type: ignore[misc]
+
+    def test_a_record_dispatching_no_tools_carries_an_empty_tuple(self) -> None:
+        assert _record().tool_calls == ()
 
 
 class TestUsageLedgerProtocol:

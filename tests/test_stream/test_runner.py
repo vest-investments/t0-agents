@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 from fastmcp.client.client import CallToolResult
@@ -12,6 +13,7 @@ from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
 from tensorzero.types import TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
+from t0_agents.core.types import ToolCallUsage
 from t0_agents.stream.events import (
     DoneEvent,
     ErrorEvent,
@@ -1025,3 +1027,62 @@ async def test_default_leaves_the_render_round_running() -> None:
     assert isinstance(done, DoneEvent)
     assert done.result.response == "anything else?"
     assert done.result.turns == 2
+
+
+async def test_streaming_loop_reports_each_round_under_its_inference() -> None:
+    class _AttributingMCP(FakeMCPClient):
+        def server_for(self, name: str) -> str | None:
+            return {"add": "math", "greet": "social"}.get(name)
+
+    first_id, second_id = uuid4(), uuid4()
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [tool_call_chunk(raw_name="add", raw_arguments='{"a":1,"b":2}', block_id="a")]
+                ),
+                final_chunk(inference_id=first_id),
+            ],
+            [
+                chat_chunk(
+                    [tool_call_chunk(raw_name="greet", raw_arguments='{"name":"x"}', block_id="b")]
+                ),
+                final_chunk(inference_id=second_id),
+            ],
+            [chat_chunk([text_chunk("done", block_id="t1")]), final_chunk()],
+        ],
+    )
+    schema = {"type": "object", "properties": {}}
+    fake_client = _AttributingMCP(
+        tools=[
+            MCPTool(name="add", description="add", inputSchema=schema),
+            MCPTool(name="greet", description="greet", inputSchema=schema),
+        ],
+        call_results={"add": _tool_result("3"), "greet": _tool_result("hi")},
+    )
+    rounds: list[tuple[ToolCallUsage, ...]] = []
+
+    async def on_tool_round(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+        rounds.append(tool_calls)
+
+    events = [
+        event
+        async for event in StreamingAgentLoop().stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "do both",
+            "agent",
+            on_tool_round=on_tool_round,
+        )
+    ]
+
+    assert [[c.name for c in r] for r in rounds] == [["add"], ["greet"]]
+    assert [[c.inference_id for c in r] for r in rounds] == [[str(first_id)], [str(second_id)]]
+    done = events[-1]
+    assert isinstance(done, DoneEvent)
+    assert done.result.inference_ids[:2] == [str(first_id), str(second_id)]
+    assert [(c.tool_call_id, c.server, c.is_error) for r in rounds for c in r] == [
+        ("a", "math", False),
+        ("b", "social", False),
+    ]
+    assert all(c.duration_ms is not None for r in rounds for c in r)

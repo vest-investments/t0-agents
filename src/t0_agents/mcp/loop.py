@@ -42,6 +42,7 @@ from t0_agents.core.turn_engine import (
     build_agent_result,
     build_inference_kwargs,
     complete_assistant_turn,
+    complete_tool_round,
     corrective_retry,
     is_recoverable,
     is_terminal_round,
@@ -56,6 +57,7 @@ from t0_agents.core.turn_engine import (
 from t0_agents.core.types import (
     AgentResult,
     SupportsServerAttribution,
+    ToolCallUsage,
     ToolProgressHandler,
 )
 from t0_agents.mcp.adapter import build_tool_result, convert_tools
@@ -369,6 +371,7 @@ async def run_agent(
     system_arguments: dict[str, Any] | None = None,
     system: str | None = None,
     on_inference: Callable[[ChatInferenceResponse], Awaitable[None]] | None = None,
+    on_tool_round: Callable[[tuple[ToolCallUsage, ...]], Awaitable[None]] | None = None,
     prior_messages: list[Message] | None = None,
     progress_callback: ProgressCallback | None = None,
     model_name: str | None = None,
@@ -475,6 +478,11 @@ async def run_agent(
             from ``response.usage.cost`` so ``max_cost`` can abort the
             run at the next tool call. ``None`` (the default) is a no-op
             that preserves today's behaviour byte-for-byte.
+        on_tool_round: Optional async callback invoked once per dispatched
+            tool round with one :class:`~t0_agents.core.types.ToolCallUsage`
+            per call, AFTER the results are appended to the transcript —
+            see :func:`~t0_agents.core.turn_engine.complete_tool_round`.
+            Used by the usage ledger. ``None`` (the default) is a no-op.
         progress_callback: Optional :data:`ProgressCallback` forwarded to
             the tool executors on every dispatch turn, so server-side
             ``ctx.report_progress(...)`` notifications reach
@@ -577,7 +585,7 @@ async def run_agent(
         # We cannot isinstance-check here because unit tests use duck-typed fakes.
         response = cast(ChatInferenceResponse, raw)
 
-        await complete_assistant_turn(
+        inference_id = await complete_assistant_turn(
             state,
             content_blocks=response.content,
             response=response,
@@ -631,9 +639,12 @@ async def run_agent(
             parallel=parallel_tools,
             progress_callback=progress_callback,
         )
-        tool_results = [outcome.result for outcome in outcomes]
-        # N tool results MUST go into a single user message, not N.
-        state.messages.append(Message(role="user", content=tool_results))
+        await complete_tool_round(
+            state,
+            outcomes=outcomes,
+            inference_id=inference_id,
+            on_tool_round=on_tool_round,
+        )
 
         text, response_source = mine_final_text(response.content)
         if is_terminal_round(

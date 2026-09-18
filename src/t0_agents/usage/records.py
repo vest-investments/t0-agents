@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
-from t0_agents.core.types import RunUsage, Usage
+from t0_agents.core.types import RunUsage, ToolCallUsage, Usage
 
 RunOutcome = Literal["completed", "cancelled", "failed"]
 """How a run ended, as recorded on :attr:`RunUsageRecord.outcome`."""
@@ -60,6 +60,10 @@ class RunUsageRecord:
     supplied none.  ``tags`` are the tags the gateway received, verbatim.
     ``error_class`` is the exception's class name when ``outcome`` is
     ``"failed"``, else ``None``.  Timestamps are aware UTC.
+    ``tool_calls`` is every tool call the run dispatched, flat and in
+    dispatch order, each carrying the ``inference_id`` that emitted it —
+    so for each inference ``i``, the names of the calls attributed to it
+    equal ``i.tool_calls``.  Empty when the run dispatched none.
     """
 
     run_id: str
@@ -73,3 +77,4 @@ class RunUsageRecord:
     error_class: str | None
     started_at: datetime
     finished_at: datetime
+    tool_calls: tuple[ToolCallUsage, ...] = ()

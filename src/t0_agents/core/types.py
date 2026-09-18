@@ -453,6 +453,28 @@ class RunUsage:
     cost_is_priced: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class ToolCallUsage:
+    """One tool call as the loop dispatched it — identity and outcome, never payload.
+
+    ``inference_id`` is the gateway id of the inference that emitted the
+    call, or ``None`` when the streaming turn ended without a usage chunk.
+    ``tool_call_id`` is the model's block id; ``name`` is the name the
+    model wrote, kept as written when the agent did not recognise it.
+    ``server`` is the mounted server the provider attributed, ``None``
+    when it could not.  ``duration_ms`` is ``None`` on the pre-dispatch
+    error branches (hallucinated name, invalid arguments) that never
+    reach the tool.  Arguments and results are deliberately absent.
+    """
+
+    inference_id: str | None
+    tool_call_id: str
+    name: str
+    server: str | None
+    duration_ms: float | None
+    is_error: bool
+
+
 #: Key under which a delegated sub-agent's billing usage rides home on the
 #: ``meta`` of its :class:`fastmcp.client.client.CallToolResult`.  Namespaced
 #: so it never collides with other ``meta`` content.  Written by

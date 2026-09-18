@@ -34,6 +34,7 @@ from t0_agents.core.middleware.base import (
     Middleware,
     Next,
     OnInferenceCallback,
+    OnToolRoundCallback,
     RunContext,
     build_pipeline,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "Next",
     "ObservabilityMiddleware",
     "OnInferenceCallback",
+    "OnToolRoundCallback",
     "RunContext",
     "SubAgentMiddleware",
     "build_pipeline",
