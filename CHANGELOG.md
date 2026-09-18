@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.11.0] — 2026-09-17
+
+The usage ledger knew which tools a run called and nothing else about
+the calls: `InferenceUsage.tool_calls` is a tuple of names. The per-call
+facts the executor already computed for `ToolResultEvent` — the block
+id, the attributed server, the wall-clock, the error flag — were
+discarded by both loops once the `ToolResult` message was built, so a
+ledger consumer could count calls but not slice them.
+
+### Added
+
+- **`ToolCallUsage`** — one frozen value per dispatched tool call:
+  `inference_id`, `tool_call_id`, `name`, `server`, `duration_ms`,
+  `is_error`. Never arguments or results. Root-exported.
+- **`RunUsageRecord.tool_calls`** — every call the run dispatched, flat
+  and in dispatch order, each stamped with the inference that emitted
+  it. For each inference `i`, the names of the calls carrying its id
+  equal `i.tool_calls`. Defaults to `()`, so existing constructors and
+  ledgers are unaffected.
+- **`RunContext.on_tool_round`** + **`chain_on_tool_round`** — the
+  second observation hook, fired once per dispatched round *after* the
+  results are appended. `on_inference` still fires *before* dispatch,
+  which is what lets cost guardrails block the next call.
+- **`complete_tool_round`** in the turn engine — the single home for
+  the post-dispatch append both loops used to do by hand, and the place
+  the round meets its inference id. `complete_assistant_turn` now
+  returns the id it captured (`str | None`).
+- **`run_agent(on_tool_round=)`** / **`StreamingAgentLoop.stream(on_tool_round=)`**
+  — the loop-level knob the two chat terminals forward from the
+  `RunContext`.
+- **`SqliteUsageLedger`** writes a third table, `usage_tool_calls`,
+  keyed `(run_id, ordinal)` with an index on `inference_id`. A file
+  created before this release gains the table on its next `record()`.
+
+### Notes
+
+- Transcripts are byte-identical when nothing registers the hook; a run
+  without a ledger builds no `ToolCallUsage`.
+- A `T0AgentsFatalError` raised from inside a tool ends the run before
+  the round completes, so that round leaves no tool-call rows. This is
+  the pre-existing executor contract, documented rather than changed.
+- The new sqlite table is keyed by ordinal rather than `inference_id`
+  because the latter is `NULL` on a streaming turn without a usage
+  chunk, and SQLite does not deduplicate `NULL` primary-key components.
+
 ## [2.10.1] — 2026-09-14
 
 `ToolResultEvent.server` has been `None` on every tool result in
