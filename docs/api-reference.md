@@ -653,11 +653,11 @@ chain that wraps a single terminal callable.
 | Symbol | Purpose |
 |--------|---------|
 | `Middleware` | Runtime-checkable Protocol; `name: str` + `async __call__(ctx, next_) -> AgentResult`. |
-| `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, output, t0, tool_provider, on_inference, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `replace_tool_provider(tp)`. |
+| `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, output, t0, tool_provider, on_inference, on_tool_round, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `chain_on_tool_round(cb)`, `replace_tool_provider(tp)`. |
 | `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour).  `load` / `save` failures are logged and swallowed; a `T0AgentsFatalError` from the backend propagates, and under `strategy="messages"` a failed `load_history` raises `MemoryHistoryUnavailableError` and ends the turn — see [Error handling](error-handling.md#memoryhistoryunavailableerror). |
 | `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
 | `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |
-| `UsageLedgerMiddleware(ledger, *, timeout=2.0)` | Captures every inference and hands the `UsageLedger` one `RunUsageRecord` per run in `finally`; best-effort — bounded, logged, never raised.  Present iff `AgentConfig.usage_ledger` is set. |
+| `UsageLedgerMiddleware(ledger, *, timeout=2.0)` | Captures every inference and every dispatched tool call, and hands the `UsageLedger` one `RunUsageRecord` per run in `finally`; best-effort — bounded, logged, never raised.  Present iff `AgentConfig.usage_ledger` is set. |
 | `SubAgentMiddleware(sub_agents)` | Wraps `tool_provider` with `_OrchestrationToolProvider`; binds `parent_episode_id` ContextVar. |
 | `JsonRetryMiddleware()` | Drives the parse-failure retry loop for single-shot output modes by consulting `OutputMode.recover()`; no-op pass-through for chat agents. |
 | `ObservabilityMiddleware(tracer=None)` | Wraps the run in `tracer.start_as_current_span(f"agent.invoke/{name}")`.  Opt-in. |
@@ -756,6 +756,7 @@ Reference backends under `t0_agents.usage`: `InMemoryUsageLedger`
 | `outcome` | `Literal["completed", "cancelled", "failed"]` | How the run ended. |
 | `error_class` | `str \| None` | The exception's class name when `outcome == "failed"`. |
 | `started_at`, `finished_at` | `datetime` | Aware UTC. |
+| `tool_calls` | `tuple[ToolCallUsage, ...]` | Every tool call the run dispatched, flat, in dispatch order; `()` when none. *(v2.11)* |
 
 ### `InferenceUsage`
 
@@ -768,6 +769,20 @@ Reference backends under `t0_agents.usage`: `InMemoryUsageLedger`
 | `tool_calls` | `tuple[str, ...]` | Tool-call names in content order; an unrecognised tool keeps the name the model wrote. |
 | `finish_reason` | `str \| None` | The gateway's `FinishReason` value, when carried. |
 | `at` | `datetime` | Aware UTC, at capture. |
+
+### `ToolCallUsage` *(v2.11)*
+
+Root-exported, also under `t0_agents.core.types` and `t0_agents.usage`.  One per dispatched tool
+call; never carries arguments or results.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inference_id` | `str \| None` | The gateway id of the inference that emitted the call; `None` when the streaming turn carried no usage chunk. For each inference `i`, the names of the calls with its id equal `i.tool_calls`. |
+| `tool_call_id` | `str` | The model's tool-call block id. |
+| `name` | `str` | The name the model wrote; an unrecognised tool keeps it as written. |
+| `server` | `str \| None` | The mounted server the provider attributed via `server_for`; `None` when it could not. |
+| `duration_ms` | `float \| None` | Wall-clock of `call_tool`; `None` on the pre-dispatch error branches (hallucinated name, unparseable arguments). |
+| `is_error` | `bool` | The dispatch error branch or `CallToolResult.is_error`. |
 
 See [Token usage → Persisting usage](usage.md#persisting-usage--usageledger).
 
