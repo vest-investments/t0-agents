@@ -133,6 +133,7 @@ class ScriptedAgent(Agent):
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[Mapping[str, Any]] | None = None,
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
@@ -154,6 +155,7 @@ class ScriptedAgent(Agent):
             system=system,
             system_arguments=system_arguments,
             prior_messages=prior_messages,
+            extra_body=extra_body,
         )
         return ScriptedRun(
             input_,

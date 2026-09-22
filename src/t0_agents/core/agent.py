@@ -215,6 +215,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[Mapping[str, Any]] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -233,6 +234,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[Mapping[str, Any]] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -250,6 +252,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[Mapping[str, Any]] | None = None,
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
@@ -337,6 +340,7 @@ class Agent:
             system=system,
             system_arguments=system_arguments,
             prior_messages=prior_messages,
+            extra_body=extra_body,
         )
         return Run(
             self,
@@ -438,6 +442,7 @@ class Agent:
             variant_name=self._config.variant,
             params=self._config.params,
             cache_options=self._config.cache,
+            extra_body=ctx.extra_body,
             **extra_kwargs,
         )
 
@@ -493,6 +498,7 @@ class Agent:
             variant_name=self._config.variant,
             params=self._config.params,
             cache_options=self._config.cache,
+            extra_body=ctx.extra_body,
             **extra_kwargs,
         ):
             if isinstance(event, DoneEvent):
