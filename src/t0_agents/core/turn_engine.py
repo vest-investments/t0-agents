@@ -33,7 +33,7 @@ import fnmatch
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Protocol
 
@@ -147,6 +147,7 @@ def build_inference_kwargs(
     system_arguments: dict[str, Any] | None,
     params: dict[str, Any] | None,
     cache_options: dict[str, Any] | None,
+    extra_body: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``t0.inference(...)`` kwargs shared by both loops.
 
@@ -155,13 +156,17 @@ def build_inference_kwargs(
     both are ``None``.  Empty ``function_name`` coalesces to ``None`` so
     a ``model_name``-routed call omits the field.  The streaming loop
     adds ``stream=True`` on top.
+
+    ``extra_body`` is emitted only when it is not ``None``, so a caller
+    that passes no patches sends the request it sent before the
+    parameter existed.
     """
     input_dict: dict[str, Any] = {"messages": messages}
     if system is not None:
         input_dict["system"] = system
     elif system_arguments is not None:
         input_dict["system"] = system_arguments
-    return {
+    kwargs: dict[str, Any] = {
         "function_name": function_name or None,
         "model_name": model_name,
         "variant_name": variant_name,
@@ -175,6 +180,9 @@ def build_inference_kwargs(
         "params": params,
         "cache_options": cache_options,
     }
+    if extra_body is not None:
+        kwargs["extra_body"] = list(extra_body)
+    return kwargs
 
 
 def is_recoverable(err: TensorZeroError) -> bool:
