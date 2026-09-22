@@ -77,6 +77,23 @@ async def test_the_chat_loop_omits_the_key_without_patches() -> None:
     assert "extra_body" not in gateway.calls[0]
 
 
+async def test_the_streaming_loop_omits_the_key_without_patches() -> None:
+    gateway = MockStreamingGateway([[Text(text="hi")]])
+
+    async for _ in _chat(gateway)("q").events():
+        pass
+
+    assert "extra_body" not in gateway.calls[0]
+
+
+async def test_an_explicitly_empty_extra_body_reaches_the_gateway() -> None:
+    gateway = MockGateway.script([[Text(type="text", text="hi")]])
+
+    await _chat(gateway)("q").with_(extra_body=[])
+
+    assert gateway.calls[0]["extra_body"] == []
+
+
 async def test_the_single_shot_terminal_omits_the_key_without_patches() -> None:
     gateway = MockGateway.script_json([{"raw": '{"answer": "hi"}'}])
 
