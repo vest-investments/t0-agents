@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -56,6 +56,7 @@ from t0_agents.core.turn_engine import (
 )
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     SupportsServerAttribution,
     ToolCallUsage,
     ToolProgressHandler,
@@ -378,6 +379,7 @@ async def run_agent(
     variant_name: str | None = None,
     params: dict[str, Any] | None = None,
     cache_options: dict[str, Any] | None = None,
+    extra_body: Sequence[ExtraBodyPatch] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 
@@ -510,6 +512,11 @@ async def run_agent(
         cache_options: TensorZero cache options
             (``{"enabled": ..., "max_age_s": ...}``) forwarded to every
             ``t0.inference()`` call.
+        extra_body: Inference-time provider-body patches in the
+            TensorZero shape, e.g.
+            ``[{"variant_name": "v", "pointer": "/reasoning_effort",
+            "value": "max"}]``, forwarded to every ``t0.inference()``
+            call.  ``None`` omits the kwarg entirely.
 
     Returns:
         ``AgentResult`` with the joined text of the terminating turn, the
@@ -567,6 +574,7 @@ async def run_agent(
                     system_arguments=system_arguments,
                     params=params,
                     cache_options=cache_options,
+                    extra_body=extra_body,
                 )
             )
         except TensorZeroError as e:

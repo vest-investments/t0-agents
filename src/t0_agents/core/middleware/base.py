@@ -28,7 +28,7 @@ inner inference loop (``run_agent`` for chat,
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from t0_agents.core.run import Run
     from t0_agents.core.types import (
         AgentResult,
+        ExtraBodyPatch,
         MemoryProvider,
         ToolCallUsage,
         ToolProvider,
@@ -146,6 +147,7 @@ class RunContext:
     tags: dict[str, str] | None
     system: str | None
     system_arguments: dict[str, Any] | None
+    extra_body: Sequence[ExtraBodyPatch] | None
     output: OutputMode[Any] | None
 
     # 2. Gateway + tools

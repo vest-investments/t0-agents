@@ -4,7 +4,7 @@ import logging
 
 from tensorzero import ToolChoice
 
-__version__ = "2.11.0"
+__version__ = "2.12.0"
 
 from t0_agents.core.agent import AGENT_TAG, Agent
 from t0_agents.core.config import AgentConfig
@@ -53,6 +53,7 @@ from t0_agents.core.run import Run, RunInput, RunState
 from t0_agents.core.structured import StructuredInferenceResult, permissive_parse
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     Guardrail,
     GuardrailLogEntry,
     MemoryProvider,
@@ -113,6 +114,7 @@ __all__ = [
     "ElicitationRequestedEvent",
     "ElicitationResolvedEvent",
     "ErrorEvent",
+    "ExtraBodyPatch",
     "FilteredToolProvider",
     "Guardrail",
     "GuardrailBlockedError",

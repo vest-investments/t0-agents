@@ -153,6 +153,23 @@ def test_inference_kwargs_empty_function_name_coalesces_to_none() -> None:
     assert _kwargs(function_name="", model_name="openai::gpt")["function_name"] is None
 
 
+def test_inference_kwargs_omits_extra_body_when_unset() -> None:
+    assert "extra_body" not in _kwargs()
+
+
+def test_inference_kwargs_copies_the_given_extra_body() -> None:
+    patches = [{"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}]
+    emitted = _kwargs(extra_body=patches)["extra_body"]
+    assert emitted == [
+        {"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}
+    ]
+    assert emitted is not patches  # caller's list is not aliased into the request
+
+
+def test_inference_kwargs_keeps_an_explicitly_empty_extra_body() -> None:
+    assert _kwargs(extra_body=[])["extra_body"] == []
+
+
 # ---------------------------------------------------------------------------
 # is_recoverable / corrective_retry
 # ---------------------------------------------------------------------------

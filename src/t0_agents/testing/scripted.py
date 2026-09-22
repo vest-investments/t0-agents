@@ -37,7 +37,12 @@ from t0_agents.core.config import AgentConfig
 from t0_agents.core.output import OutputMode
 from t0_agents.core.outputs.chat import ChatOutput
 from t0_agents.core.run import Run, RunInput, build_run_input
-from t0_agents.core.types import AgentResult, MemoryProvider, ToolProvider
+from t0_agents.core.types import (
+    AgentResult,
+    ExtraBodyPatch,
+    MemoryProvider,
+    ToolProvider,
+)
 from t0_agents.stream.events import AgentEvent, DoneEvent
 
 __all__ = ["ScriptedAgent", "ScriptedRun"]
@@ -133,6 +138,7 @@ class ScriptedAgent(Agent):
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[ExtraBodyPatch] | None = None,
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
@@ -154,6 +160,7 @@ class ScriptedAgent(Agent):
             system=system,
             system_arguments=system_arguments,
             prior_messages=prior_messages,
+            extra_body=extra_body,
         )
         return ScriptedRun(
             input_,

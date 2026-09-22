@@ -68,6 +68,19 @@ class TestReplaySameAgent:
         await replayed.result()
 
 
+    async def test_replay_preserves_extra_body(self) -> None:
+        fake_t0 = FakeT0([_resp("first"), _resp("second")])
+        agent = _make_agent(t0=fake_t0)
+        patch = {"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}
+        original = agent.invoke("hello", extra_body=[patch])
+        await original.result()
+        replayed = await original.replay()
+        await replayed.result()
+        assert fake_t0.calls[1]["extra_body"] == [
+            {"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}
+        ]
+
+
 class TestReplayDifferentAgent:
     async def test_replay_against_a_different_agent(self) -> None:
         fake_t0_a = FakeT0([_resp("from-a")])

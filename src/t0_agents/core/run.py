@@ -37,6 +37,7 @@ from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     MemoryProvider,
     RunUsage,
     ToolProvider,
@@ -110,6 +111,7 @@ class RunInput:
     system: str | None = None
     system_arguments: Mapping[str, Any] | None = None
     prior_messages: tuple[Mapping[str, Any], ...] = ()
+    extra_body: tuple[ExtraBodyPatch, ...] | None = None
 
 
 class Run(Generic[T]):
@@ -330,6 +332,11 @@ class Run(Generic[T]):
             tags=self._dict_or_none(self._input.tags),
             system=self._input.system,
             system_arguments=self._dict_or_none(self._input.system_arguments),
+            extra_body=(
+                list(self._input.extra_body)
+                if self._input.extra_body is not None
+                else None
+            ),
             output=self._output,
             t0=agent._t0,
             tool_provider=tool_provider,
@@ -648,6 +655,11 @@ class Run(Generic[T]):
                 if self._input.prior_messages
                 else None
             ),
+            extra_body=(
+                list(self._input.extra_body)
+                if self._input.extra_body is not None
+                else None
+            ),
             middleware=self._middleware,
             output=self._output,
             context=self._context,
@@ -683,6 +695,11 @@ class Run(Generic[T]):
             system_arguments=self._dict_or_none(self._input.system_arguments),
             system=self._input.system,
             prior_messages=transcript,
+            extra_body=(
+                list(self._input.extra_body)
+                if self._input.extra_body is not None
+                else None
+            ),
             middleware=self._middleware,
             output=self._output,
             context=self._context,
@@ -822,6 +839,7 @@ def build_run_input(
     system: str | None = None,
     system_arguments: Mapping[str, Any] | None = None,
     prior_messages: Sequence[Mapping[str, Any]] | None = None,
+    extra_body: Sequence[ExtraBodyPatch] | None = None,
 ) -> RunInput:
     """Build a :class:`RunInput` from :meth:`Agent.invoke` kwargs.
 
@@ -830,7 +848,10 @@ def build_run_input(
     (``RunInput`` is frozen, so callers should pass immutable shapes
     or accept that the snapshot reflects the dict at call time);
     ``prior_messages`` is materialised into a tuple to make the
-    snapshot fully hashable / safely shareable across replays.
+    snapshot fully hashable / safely shareable across replays;
+    ``extra_body`` likewise, except that ``None`` (no patches) stays
+    distinct from an empty sequence (patch list the caller chose to
+    send empty) — only the former omits the gateway key.
     """
     return RunInput(
         user_message=user_message,
@@ -840,4 +861,5 @@ def build_run_input(
         system=system,
         system_arguments=system_arguments,
         prior_messages=tuple(prior_messages) if prior_messages else (),
+        extra_body=tuple(extra_body) if extra_body is not None else None,
     )

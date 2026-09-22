@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.12.0] — 2026-09-21
+
+TensorZero applies `extra_body` patches to the provider request body at
+inference time — the way to override a provider-level setting for one
+call instead of for a whole variant. No caller could send them:
+`params` reaches `chat_completion` and everything below it was fixed by
+`tensorzero.toml`.
+
+### Added
+
+- **`FluentRun.with_(extra_body=…)`** / **`Agent.invoke(extra_body=…)`** —
+  a list of TensorZero extra-body patches
+  (`{variant_name | model_provider_name, pointer, value}`, or the same
+  carrying `delete: true`), forwarded unchanged to
+  `AsyncTensorZeroGateway.inference`. A passthrough: no validation and
+  no provider-specific shape, so what a patch means is the gateway's
+  contract, not this library's.
+- **`run_agent(extra_body=)`** / **`StreamingAgentLoop.stream(extra_body=)`**
+  — the loop-level kwarg both chat terminals forward from the
+  `RunContext`.
+- **`RunInput.extra_body`** / **`RunContext.extra_body`** /
+  **`InferenceRequest.extra_body`** — the per-call snapshot, the value
+  middleware sees, and the single-shot request descriptor. The first
+  two default to `None`; `RunContext.extra_body` is required, like the
+  rest of its identity group, so a hand-built `RunContext` must pass it.
+- **`ExtraBodyPatch`** — root-exported alias, `ExtraBody | Mapping[str, Any]`.
+  The gateway takes either form, and the SDK's generated `ExtraBody`
+  variants are not `Mapping` subclasses, so a caller building
+  `VariantExtraBody(...)` type-checks against this and would not against
+  a bare `Mapping`.
+
+### Notes
+
+- The gateway kwarg is emitted only when `extra_body` is not `None`, so
+  a run that does not use it issues the request it issued before this
+  release. An explicitly empty list is a caller's choice and is sent as
+  `[]`.
+- `Run.replay()` and `Run.fork()` carry the patches onto the derived run,
+  alongside `tags` / `system` / `system_arguments` / `prior_messages`.
+- `run_structured_inference` does not take `extra_body`; the JSON path
+  is unchanged.
+
 ## [2.11.0] — 2026-09-17
 
 The usage ledger knew which tools a run called and nothing else about

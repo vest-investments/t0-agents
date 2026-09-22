@@ -25,6 +25,7 @@ from t0_agents.core.output import (
 from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     MemoryProvider,
     ToolProvider,
 )
@@ -215,6 +216,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[ExtraBodyPatch] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -233,6 +235,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[ExtraBodyPatch] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -250,6 +253,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[ExtraBodyPatch] | None = None,
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
@@ -337,6 +341,7 @@ class Agent:
             system=system,
             system_arguments=system_arguments,
             prior_messages=prior_messages,
+            extra_body=extra_body,
         )
         return Run(
             self,
@@ -438,6 +443,7 @@ class Agent:
             variant_name=self._config.variant,
             params=self._config.params,
             cache_options=self._config.cache,
+            extra_body=ctx.extra_body,
             **extra_kwargs,
         )
 
@@ -493,6 +499,7 @@ class Agent:
             variant_name=self._config.variant,
             params=self._config.params,
             cache_options=self._config.cache,
+            extra_body=ctx.extra_body,
             **extra_kwargs,
         ):
             if isinstance(event, DoneEvent):
@@ -602,6 +609,9 @@ class Agent:
             model_name=self._config.model,
             variant_name=self._config.variant,
             cache_options=self._config.cache,
+            extra_body=(
+                list(ctx.extra_body) if ctx.extra_body is not None else None
+            ),
         )
 
         # --- 2. Apply the output mode's request shaping ---
@@ -630,6 +640,8 @@ class Agent:
             inference_kwargs["tool_choice"] = req.tool_choice
         if req.additional_tools is not None:
             inference_kwargs["additional_tools"] = req.additional_tools
+        if req.extra_body is not None:
+            inference_kwargs["extra_body"] = req.extra_body
 
         response = await self._t0.inference(**inference_kwargs)
 

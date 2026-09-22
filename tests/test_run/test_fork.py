@@ -81,6 +81,18 @@ class TestForkContinuation:
         assert role == "user"
         assert content == "and what is y?"
 
+    async def test_fork_preserves_extra_body(self) -> None:
+        fake_t0 = FakeT0([_resp("first answer"), _resp("second answer")])
+        agent = _make_agent(fake_t0)
+        patch = {"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}
+        original = agent.invoke("what is x?", extra_body=[patch])
+        await original.result()
+        forked = await original.fork("and what is y?")
+        await forked.result()
+        assert fake_t0.calls[1]["extra_body"] == [
+            {"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}
+        ]
+
     async def test_forked_runs_have_distinct_episodes(self) -> None:
         fake_t0 = FakeT0([_resp("first answer"), _resp("second answer")])
         agent = _make_agent(fake_t0)

@@ -102,6 +102,7 @@ async def run_agent(
     system_arguments: dict[str, Any] | None = None,
     system: str | None = None,
     prior_messages: list[Message] | None = None,
+    extra_body: Sequence[Mapping[str, Any]] | None = None,
 ) -> AgentResult:
 ```
 
@@ -124,6 +125,7 @@ async def run_agent(
 | `system_arguments` | `dict[str, Any] \| None` | `None` | Forwarded to TensorZero as `input.system` for the system-template render. When the function declares a system schema, the dict must match the schema directly — its keys are the schema-described properties (no `arguments` wrapper). Used to fill MiniJinja variables declared in the function's system template (e.g. `{{ max_turns }}`). When `Agent.invoke` / `Run.events` is the caller, this is shallow-merged with the memory strategy's `memory_context` injection — caller keys win on collision. See [Memory](memory.md#combining-memory-with-caller-supplied-template-variables). |
 | `system` | `str \| None` | `None` | Raw system prompt forwarded to TensorZero as `input.system` (string form). Mutually exclusive with `system_arguments`. Only valid when the TensorZero function does **not** declare `schemas.system.path` — the gateway returns HTTP 400 otherwise. Escape hatch for prompt-as-a-service flows where the prompt body itself is runtime data; prefer `system_arguments` (with a configured template) for production code so ClickHouse captures structured prompt variables instead of opaque strings. See [Runtime system prompt: `system` vs `system_arguments`](#runtime-system-prompt-system-vs-system_arguments). |
 | `prior_messages` | `list[Message] \| None` | `None` | TensorZero-native message history to seed the loop with. Used by `Agent.invoke` when `memory_strategy="messages"` is in effect (see [Memory](memory.md)). When `None` or empty, the loop starts with a single `Message(role="user", content=user_message)`, byte-identical to behaviour pre-flag. |
+| `extra_body` | `Sequence[Mapping[str, Any]] \| None` | `None` | Inference-time patches applied to the provider request body, forwarded to every `t0.inference()` call in the TensorZero shape — `[{"variant_name": "v", "pointer": "/reasoning_effort", "value": "max"}]`, or the same with `"delete": true`. `None` omits the kwarg entirely, so a caller that passes no patches sends the request it sent before the parameter existed. |
 
 ### Returns
 
@@ -609,6 +611,7 @@ class RunInput:
     system: str | None = None
     system_arguments: Mapping[str, Any] | None = None
     prior_messages: tuple[Mapping[str, Any], ...] = ()
+    extra_body: tuple[Mapping[str, Any], ...] | None = None
 ```
 
 The :class:`OutputMode` for the invocation is stored separately on
@@ -653,7 +656,7 @@ chain that wraps a single terminal callable.
 | Symbol | Purpose |
 |--------|---------|
 | `Middleware` | Runtime-checkable Protocol; `name: str` + `async __call__(ctx, next_) -> AgentResult`. |
-| `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, output, t0, tool_provider, on_inference, on_tool_round, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `chain_on_tool_round(cb)`, `replace_tool_provider(tp)`. |
+| `RunContext` | Mutable per-run state threaded through the chain.  Carries config, user_message, episode_id, tags, system, system_arguments, extra_body, output, t0, tool_provider, on_inference, on_tool_round, prior_messages, extras, result, run.  Methods: `chain_on_inference(cb)`, `chain_on_tool_round(cb)`, `replace_tool_provider(tp)`. |
 | `MemoryMiddleware(provider, strategy)` | Load + inject + save memory records around the run (parity with v0.12 inline behaviour).  `load` / `save` failures are logged and swallowed; a `T0AgentsFatalError` from the backend propagates, and under `strategy="messages"` a failed `load_history` raises `MemoryHistoryUnavailableError` and ends the turn — see [Error handling](error-handling.md#memoryhistoryunavailableerror). |
 | `GuardrailsMiddleware(guardrails)` | `before_run`/`after_run` hooks, `GuardedToolProvider` wrap, cost-budget tracker on `GuardrailContext`. |
 | `CostTrackingMiddleware()` | Always-on `RunUsage` accumulator; populates `Run.cost()` / `Run.usage()`. |

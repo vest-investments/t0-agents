@@ -236,6 +236,7 @@ class Agent:
         system: str | None = None,
         system_arguments: dict[str, Any] | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[Mapping[str, Any]] | None = None,
         middleware: Sequence[Middleware] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,
