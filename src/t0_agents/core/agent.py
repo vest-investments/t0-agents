@@ -25,6 +25,7 @@ from t0_agents.core.output import (
 from t0_agents.core.run import Run, build_run_input
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     MemoryProvider,
     ToolProvider,
 )
@@ -215,7 +216,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
-        extra_body: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[ExtraBodyPatch] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -234,7 +235,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = ...,
         system: str | None = ...,
         prior_messages: Sequence[Mapping[str, Any]] | None = ...,
-        extra_body: Sequence[Mapping[str, Any]] | None = ...,
+        extra_body: Sequence[ExtraBodyPatch] | None = ...,
         middleware: Sequence[Any] | None = ...,
         eager: bool = ...,
         context: Mapping[str, Any] | None = ...,
@@ -252,7 +253,7 @@ class Agent:
         system_arguments: dict[str, Any] | None = None,
         system: str | None = None,
         prior_messages: Sequence[Mapping[str, Any]] | None = None,
-        extra_body: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[ExtraBodyPatch] | None = None,
         middleware: Sequence[Any] | None = None,
         eager: bool = True,
         context: Mapping[str, Any] | None = None,

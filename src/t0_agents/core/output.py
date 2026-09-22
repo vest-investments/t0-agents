@@ -42,7 +42,7 @@ from typing import (
 from t0_agents.core.structured import ParseStrategy
 
 if TYPE_CHECKING:
-    from t0_agents.core.types import AgentResult
+    from t0_agents.core.types import AgentResult, ExtraBodyPatch
 
 
 __all__ = [
@@ -95,7 +95,7 @@ class InferenceRequest:
     model_name: str | None = None
     variant_name: str | None = None
     cache_options: dict[str, Any] | None = None
-    extra_body: list[Mapping[str, Any]] | None = None
+    extra_body: list[ExtraBodyPatch] | None = None
 
 
 @dataclass(slots=True)

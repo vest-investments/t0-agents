@@ -1,19 +1,28 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields
 from typing import (
     Any,
     Generic,
     Literal,
     Protocol,
+    TypeAlias,
     TypeVar,
     cast,
     overload,
     runtime_checkable,
 )
 
+from tensorzero import ExtraBody
+
 from t0_agents.core.output import OutputDiagnostics
 from t0_agents.core.structured import ParseStrategy
+
+# The gateway accepts either form (`inference(extra_body=List[ExtraBody | Dict])`),
+# and the SDK's generated ExtraBody variants are NOT Mapping subclasses — narrowing
+# this to Mapping type-checks here but rejects every SDK-typed patch at the caller.
+ExtraBodyPatch: TypeAlias = ExtraBody | Mapping[str, Any]
 
 
 @runtime_checkable

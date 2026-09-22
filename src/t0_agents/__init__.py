@@ -53,6 +53,7 @@ from t0_agents.core.run import Run, RunInput, RunState
 from t0_agents.core.structured import StructuredInferenceResult, permissive_parse
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     Guardrail,
     GuardrailLogEntry,
     MemoryProvider,
@@ -113,6 +114,7 @@ __all__ = [
     "ElicitationRequestedEvent",
     "ElicitationResolvedEvent",
     "ErrorEvent",
+    "ExtraBodyPatch",
     "FilteredToolProvider",
     "Guardrail",
     "GuardrailBlockedError",

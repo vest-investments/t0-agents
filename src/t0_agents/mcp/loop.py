@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -56,6 +56,7 @@ from t0_agents.core.turn_engine import (
 )
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     SupportsServerAttribution,
     ToolCallUsage,
     ToolProgressHandler,
@@ -378,7 +379,7 @@ async def run_agent(
     variant_name: str | None = None,
     params: dict[str, Any] | None = None,
     cache_options: dict[str, Any] | None = None,
-    extra_body: Sequence[Mapping[str, Any]] | None = None,
+    extra_body: Sequence[ExtraBodyPatch] | None = None,
 ) -> AgentResult:
     """Run the agent loop end-to-end and return the final response.
 

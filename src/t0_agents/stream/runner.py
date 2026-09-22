@@ -23,7 +23,7 @@ to :func:`run_agent`.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import Any, cast
 
 from fastmcp import Client
@@ -57,7 +57,7 @@ from t0_agents.core.turn_engine import (
     seed_messages,
     validate_run_inputs,
 )
-from t0_agents.core.types import ToolCallUsage
+from t0_agents.core.types import ExtraBodyPatch, ToolCallUsage
 from t0_agents.mcp.adapter import convert_tools
 from t0_agents.mcp.loop import (
     ProgressCallback,
@@ -111,7 +111,7 @@ class StreamingAgentLoop:
         variant_name: str | None = None,
         params: dict[str, Any] | None = None,
         cache_options: dict[str, Any] | None = None,
-        extra_body: Sequence[Mapping[str, Any]] | None = None,
+        extra_body: Sequence[ExtraBodyPatch] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Drive the streaming loop and yield every event.
 

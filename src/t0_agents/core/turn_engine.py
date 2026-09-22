@@ -33,14 +33,14 @@ import fnmatch
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, NoReturn, Protocol
 
 from tensorzero import Message, Text, Thought, ToolResult
 
 from t0_agents.core.exceptions import MaxTurnsExceededError, T0AgentsFatalError
-from t0_agents.core.types import AgentResult, ToolCallUsage
+from t0_agents.core.types import AgentResult, ExtraBodyPatch, ToolCallUsage
 
 if TYPE_CHECKING:
     from tensorzero import ToolChoice
@@ -147,7 +147,7 @@ def build_inference_kwargs(
     system_arguments: dict[str, Any] | None,
     params: dict[str, Any] | None,
     cache_options: dict[str, Any] | None,
-    extra_body: Sequence[Mapping[str, Any]] | None = None,
+    extra_body: Sequence[ExtraBodyPatch] | None = None,
 ) -> dict[str, Any]:
     """Assemble the ``t0.inference(...)`` kwargs shared by both loops.
 
