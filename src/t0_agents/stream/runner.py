@@ -23,7 +23,7 @@ to :func:`run_agent`.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast
 
 from fastmcp import Client
@@ -111,6 +111,7 @@ class StreamingAgentLoop:
         variant_name: str | None = None,
         params: dict[str, Any] | None = None,
         cache_options: dict[str, Any] | None = None,
+        extra_body: Sequence[Mapping[str, Any]] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """Drive the streaming loop and yield every event.
 
@@ -234,6 +235,7 @@ class StreamingAgentLoop:
                     system_arguments=system_arguments,
                     params=params,
                     cache_options=cache_options,
+                    extra_body=extra_body,
                 ),
             )
             if err is not None:
