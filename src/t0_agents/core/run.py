@@ -37,6 +37,7 @@ from t0_agents.core.middleware.base import RunContext
 from t0_agents.core.output import OutputMode
 from t0_agents.core.types import (
     AgentResult,
+    ExtraBodyPatch,
     MemoryProvider,
     RunUsage,
     ToolProvider,
@@ -110,7 +111,7 @@ class RunInput:
     system: str | None = None
     system_arguments: Mapping[str, Any] | None = None
     prior_messages: tuple[Mapping[str, Any], ...] = ()
-    extra_body: tuple[Mapping[str, Any], ...] | None = None
+    extra_body: tuple[ExtraBodyPatch, ...] | None = None
 
 
 class Run(Generic[T]):
@@ -654,6 +655,11 @@ class Run(Generic[T]):
                 if self._input.prior_messages
                 else None
             ),
+            extra_body=(
+                list(self._input.extra_body)
+                if self._input.extra_body is not None
+                else None
+            ),
             middleware=self._middleware,
             output=self._output,
             context=self._context,
@@ -689,6 +695,11 @@ class Run(Generic[T]):
             system_arguments=self._dict_or_none(self._input.system_arguments),
             system=self._input.system,
             prior_messages=transcript,
+            extra_body=(
+                list(self._input.extra_body)
+                if self._input.extra_body is not None
+                else None
+            ),
             middleware=self._middleware,
             output=self._output,
             context=self._context,
@@ -828,7 +839,7 @@ def build_run_input(
     system: str | None = None,
     system_arguments: Mapping[str, Any] | None = None,
     prior_messages: Sequence[Mapping[str, Any]] | None = None,
-    extra_body: Sequence[Mapping[str, Any]] | None = None,
+    extra_body: Sequence[ExtraBodyPatch] | None = None,
 ) -> RunInput:
     """Build a :class:`RunInput` from :meth:`Agent.invoke` kwargs.
 
