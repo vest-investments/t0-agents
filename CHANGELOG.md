@@ -29,6 +29,11 @@ call instead of for a whole variant. No caller could send them:
   middleware sees, and the single-shot request descriptor. The first
   two default to `None`; `RunContext.extra_body` is required, like the
   rest of its identity group, so a hand-built `RunContext` must pass it.
+- **`ExtraBodyPatch`** — root-exported alias, `ExtraBody | Mapping[str, Any]`.
+  The gateway takes either form, and the SDK's generated `ExtraBody`
+  variants are not `Mapping` subclasses, so a caller building
+  `VariantExtraBody(...)` type-checks against this and would not against
+  a bare `Mapping`.
 
 ### Notes
 
@@ -36,6 +41,8 @@ call instead of for a whole variant. No caller could send them:
   a run that does not use it issues the request it issued before this
   release. An explicitly empty list is a caller's choice and is sent as
   `[]`.
+- `Run.replay()` and `Run.fork()` carry the patches onto the derived run,
+  alongside `tags` / `system` / `system_arguments` / `prior_messages`.
 - `run_structured_inference` does not take `extra_body`; the JSON path
   is unchanged.
 

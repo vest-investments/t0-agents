@@ -19,9 +19,8 @@ from tensorzero import ExtraBody
 from t0_agents.core.output import OutputDiagnostics
 from t0_agents.core.structured import ParseStrategy
 
-# The gateway accepts either form (`inference(extra_body=List[ExtraBody | Dict])`),
-# and the SDK's generated ExtraBody variants are NOT Mapping subclasses — narrowing
-# this to Mapping type-checks here but rejects every SDK-typed patch at the caller.
+# The SDK's generated ExtraBody variants are not Mapping subclasses: narrowing this
+# to Mapping type-checks here and rejects every SDK-typed patch at the caller.
 ExtraBodyPatch: TypeAlias = ExtraBody | Mapping[str, Any]
 
 
