@@ -28,6 +28,7 @@ def _make_ctx() -> RunContext:
         tags=None,
         system=None,
         system_arguments=None,
+        extra_body=None,
         output=None,
         t0=cast(Any, None),
         tool_provider=None,
