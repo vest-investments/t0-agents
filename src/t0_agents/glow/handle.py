@@ -59,6 +59,7 @@ _WITH_KWARGS = frozenset(
         "system_arguments",
         "system",
         "prior_messages",
+        "extra_body",
         "middleware",
         "context",
         "prompt_vars",
@@ -200,14 +201,19 @@ class FluentRun(Generic[T]):
         """Attach per-call :meth:`Agent.invoke` overrides, returning a new FluentRun.
 
         Accepts the per-call invoke surface — ``episode_id``, ``tags``,
-        ``system_arguments``, ``prior_messages``, ``middleware``,
-        ``context``, ``system`` — enabling multi-turn exchanges
-        (``episode_id`` + ``prior_messages``), tenancy (``tags``), and
-        server-side prompt templates (``system_arguments``) from glow.
+        ``system_arguments``, ``prior_messages``, ``extra_body``,
+        ``middleware``, ``context``, ``system`` — enabling multi-turn
+        exchanges (``episode_id`` + ``prior_messages``), tenancy
+        (``tags``), and server-side prompt templates
+        (``system_arguments``) from glow.
         ``prompt_vars`` fills ``{placeholders}`` in the effective system
         prompt (the docstring, or an explicit ``system=``) client-side
         via ``str.format`` — mutually exclusive with
         ``system_arguments`` (TZ server-side templates).
+        ``extra_body`` is a list of TensorZero extra-body patches —
+        ``{variant_name | model_provider_name, pointer, value}``, or the
+        same with ``delete: true`` — applied to the provider request body
+        at inference time.
 
         Unlike :meth:`text` / :meth:`json` / :meth:`as_`, ``.with_()`` is
         NOT an output override: it preserves ``value_transform`` and the
