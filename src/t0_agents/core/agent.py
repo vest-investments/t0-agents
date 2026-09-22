@@ -608,6 +608,9 @@ class Agent:
             model_name=self._config.model,
             variant_name=self._config.variant,
             cache_options=self._config.cache,
+            extra_body=(
+                list(ctx.extra_body) if ctx.extra_body is not None else None
+            ),
         )
 
         # --- 2. Apply the output mode's request shaping ---
@@ -636,6 +639,8 @@ class Agent:
             inference_kwargs["tool_choice"] = req.tool_choice
         if req.additional_tools is not None:
             inference_kwargs["additional_tools"] = req.additional_tools
+        if req.extra_body is not None:
+            inference_kwargs["extra_body"] = req.extra_body
 
         response = await self._t0.inference(**inference_kwargs)
 

@@ -70,8 +70,9 @@ class InferenceRequest:
 
     ``params`` follows the TensorZero shape:
     ``{"chat_completion": {"json_mode": "strict"}}`` — set by
-    :meth:`JsonOutput.shape_inference`.  ``output_schema`` likewise maps
-    onto the top-level TZ kwarg of the same name.  ``tool_choice``
+    :meth:`JsonOutput.shape_inference`.  ``output_schema`` and
+    ``extra_body`` likewise map onto the top-level TZ kwarg of the same
+    name, the latter only when it is not ``None``.  ``tool_choice``
     accepts :class:`tensorzero.ToolChoice` values (``"auto"``,
     ``"required"``, ``"off"``, or ``{"specific": "<tool>"}``).
 
@@ -94,6 +95,7 @@ class InferenceRequest:
     model_name: str | None = None
     variant_name: str | None = None
     cache_options: dict[str, Any] | None = None
+    extra_body: list[Mapping[str, Any]] | None = None
 
 
 @dataclass(slots=True)
