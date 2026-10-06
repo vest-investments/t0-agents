@@ -19,9 +19,12 @@ from t0_agents.stream.runner import StreamingAgentLoop
 from tests._fake_t0 import FakeT0
 from tests.test_parity._scenario import (
     FUNCTION_NAME,
+    GEMINI_SIGNATURES,
     TERMINAL_TOOLS,
     USER_MESSAGE,
     call_to_dict,
+    make_gemini_nonstreaming_responses,
+    make_gemini_streaming_responses,
     make_mcp_client,
     make_nonstreaming_responses,
     make_streaming_responses,
@@ -162,3 +165,75 @@ async def test_loop_and_runner_end_a_terminal_round_equivalently() -> None:
     assert all(c.pop("stream") is None for c in loop_calls)
     assert all(c.pop("stream") is True for c in stream_calls)
     assert loop_calls == stream_calls
+
+
+GEMINI_SIGNED_CALLS = [
+    [],
+    [(GEMINI_SIGNATURES[0], "tc-1")],
+    [(GEMINI_SIGNATURES[0], "tc-1"), (GEMINI_SIGNATURES[1], "tc-2")],
+]
+
+
+def _signatures_ahead_of_calls(calls: list[dict[str, Any]]) -> list[list[tuple[str, Any]]]:
+    """Per request, each replayed signature-only thought and the id of the block after it.
+
+    The gateway folds such a thought into its successor, so the successor
+    is the part the signature lands on.
+    """
+    return [
+        [
+            (block["signature"], successor.get("id"))
+            for message in call["messages"]
+            if message["role"] == "assistant"
+            for block, successor in zip(message["content"], message["content"][1:])
+            if block["kind"] == "thought" and block["text"] is None
+        ]
+        for call in calls
+    ]
+
+
+async def test_loop_replays_each_gemini_signature_ahead_of_its_call() -> None:
+    t0 = FakeT0(responses=make_gemini_nonstreaming_responses(preamble=True))
+    await run_agent(
+        cast(Any, t0),
+        cast(Any, make_mcp_client()),
+        USER_MESSAGE,
+        FUNCTION_NAME,
+        replay_thoughts=True,
+    )
+
+    calls = [call_to_dict(c) for c in t0.calls]
+    assert _signatures_ahead_of_calls(calls) == GEMINI_SIGNED_CALLS
+
+
+async def test_loop_and_runner_replay_gemini_signatures_equivalently() -> None:
+    t0_loop = FakeT0(responses=make_gemini_nonstreaming_responses(preamble=False))
+    loop_result = await run_agent(
+        cast(Any, t0_loop),
+        cast(Any, make_mcp_client()),
+        USER_MESSAGE,
+        FUNCTION_NAME,
+        replay_thoughts=True,
+    )
+
+    t0_stream = FakeT0(responses=make_gemini_streaming_responses(preamble=False))
+    events = [
+        e
+        async for e in StreamingAgentLoop().stream(
+            cast(Any, t0_stream),
+            cast(Any, make_mcp_client()),
+            USER_MESSAGE,
+            FUNCTION_NAME,
+            replay_thoughts=True,
+        )
+    ]
+    (done,) = [e for e in events if isinstance(e, DoneEvent)]
+
+    assert result_to_dict(loop_result) == result_to_dict(done.result)
+
+    loop_calls = [call_to_dict(c) for c in t0_loop.calls]
+    stream_calls = [call_to_dict(c) for c in t0_stream.calls]
+    assert all(c.pop("stream") is None for c in loop_calls)
+    assert all(c.pop("stream") is True for c in stream_calls)
+    assert loop_calls == stream_calls
+    assert _signatures_ahead_of_calls(stream_calls) == GEMINI_SIGNED_CALLS
