@@ -177,6 +177,38 @@ async def test_assembler_thought_empty_text_and_summary_dropped() -> None:
     assert thoughts[0].text == "real"
 
 
+async def test_assembler_signature_only_thought_keeps_its_signature_silently() -> None:
+    """A signature with no text is recorded for the rebuild but never streamed."""
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([thought_chunk(block_id="1", signature="sig-only")]),
+            final_chunk(),
+        ]
+    )
+    assert not [e for e in events if isinstance(e, ThoughtDeltaEvent | ThoughtEvent)]
+    assert assembler.thought_blocks == {}
+    assert assembler.thought_metadata == {
+        "1": {"signature": "sig-only", "provider_type": None}
+    }
+
+
+async def test_assembler_block_order_follows_first_appearance_across_kinds() -> None:
+    assembler, _ = await _drain_with_assembler(
+        [
+            chat_chunk([text_chunk("Adding ", block_id="0")]),
+            chat_chunk([text_chunk("first.", block_id="0")]),
+            chat_chunk([thought_chunk(block_id="1", signature="sig-only")]),
+            chat_chunk([tool_call_chunk("add", "{}", block_id="0")]),
+            final_chunk(),
+        ]
+    )
+    assert assembler.block_order == [
+        ("text", "0"),
+        ("thought", "1"),
+        ("tool_call", "0"),
+    ]
+
+
 async def test_assembler_mixed_blocks_in_stream() -> None:
     events = await _drain(
         [

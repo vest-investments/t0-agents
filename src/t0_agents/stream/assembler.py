@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Literal
 
 from tensorzero.types import (
     ChatChunk,
@@ -41,6 +42,8 @@ from t0_agents.stream.events import (
 
 logger = logging.getLogger(__name__)
 
+BlockKind = Literal["text", "thought", "tool_call"]
+
 
 class TurnStreamAssembler:
     """Folds one turn's T0 chunk stream into the ``AgentEvent`` stream.
@@ -60,6 +63,7 @@ class TurnStreamAssembler:
         self._thought: dict[str, str] = {}
         self._thought_meta: dict[str, dict[str, str | None]] = {}
         self._invalid_args: dict[str, str] = {}
+        self._order: dict[tuple[BlockKind, str], None] = {}
 
     @property
     def text_blocks(self) -> dict[str, str]:
@@ -84,8 +88,24 @@ class TurnStreamAssembler:
         provider that verifies its own reasoning on replay rejects a
         block whose signature is missing, so this survives the rebuild
         the same way the text does.
+
+        Also holds blocks that carry a signature and no text — Gemini's
+        ``thoughtSignature`` on the part it signs, which the gateway
+        splits off as its own thought.  Those never reach
+        :attr:`thought_blocks`, so no empty ``ThoughtEvent`` is emitted.
         """
         return self._thought_meta
+
+    @property
+    def block_order(self) -> list[tuple[BlockKind, str]]:
+        """Every block as ``(kind, id)``, in the order it first appeared.
+
+        Ids are unique only within a kind.  The order is meaning on
+        replay: the gateway folds a signature-only thought into the block
+        after it, so a rebuild in any other order moves the signature
+        off the call it signs.
+        """
+        return list(self._order)
 
     @property
     def tool_calls(self) -> dict[str, dict[str, str]]:
@@ -144,10 +164,12 @@ class TurnStreamAssembler:
         self, block: object
     ) -> AsyncIterator[AgentEvent]:
         if isinstance(block, TextChunk):
+            self._order["text", block.id] = None
             self._text[block.id] = self._text.get(block.id, "") + block.text
             yield TextDeltaEvent(id=block.id, delta=block.text)
             return
         if isinstance(block, ToolCallChunk):
+            self._order["tool_call", block.id] = None
             state = self._tool.setdefault(
                 block.id, {"raw_name": "", "raw_arguments": ""}
             )
@@ -171,14 +193,17 @@ class TurnStreamAssembler:
             summary_part = block.summary_text or ""
             separator = "\n" if text_part and summary_part else ""
             delta = text_part + separator + summary_part
-            if not delta:
+            if not delta and not block.signature:
                 return
-            self._thought[block.id] = self._thought.get(block.id, "") + delta
+            self._order["thought", block.id] = None
             meta = self._thought_meta.setdefault(
                 block.id, {"signature": None, "provider_type": None}
             )
             meta["signature"] = block.signature or meta["signature"]
             meta["provider_type"] = block.provider_type or meta["provider_type"]
+            if not delta:
+                return
+            self._thought[block.id] = self._thought.get(block.id, "") + delta
             yield ThoughtDeltaEvent(id=block.id, delta=delta)
             return
         if isinstance(block, UnknownChunk):

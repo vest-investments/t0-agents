@@ -433,12 +433,16 @@ class StreamingAgentLoop:
         complete shape read locally by the final-answer / thought fallback
         (:func:`_final_text`) and by the ``on_inference`` cost mirror.
 
-        Reasoning precedes the answer, which is the order the
+        Blocks keep the order they first appeared in the stream
+        (:attr:`TurnStreamAssembler.block_order`), which is the order the
         non-streaming path receives whole from the gateway.  Every local
         reader partitions by type and is indifferent to it, but a turn
         replaying its reasoning (``replay_thoughts``) puts this list on
-        the wire, and the two loops must not describe the same turn
-        differently.
+        the wire, where the gateway folds a signature-only thought into
+        the block after it — so the two loops must not describe the same
+        turn differently.  A thought that arrived as a signature alone
+        rebuilds with ``text=None``, the shape the non-streaming path
+        receives.
 
         The rebuild mirrors the two zeroings TensorZero applies on the
         non-streaming path but not on chunks: a name outside
@@ -452,20 +456,24 @@ class StreamingAgentLoop:
         ``raw_arguments`` its canonical serialisation — the same bytes
         :func:`~t0_agents.wire.stages.project` puts on ``arguments_json``.
         """
+        calls = {tc.id: tc for tc in tool_calls}
         blocks: list[Any] = []
-        for _tid, thought in assembler.thought_blocks.items():
-            meta = assembler.thought_metadata.get(_tid, {})
-            blocks.append(
-                Thought(
-                    type="thought",
-                    text=thought,
-                    signature=meta.get("signature"),
-                    provider_type=meta.get("provider_type"),
+        for kind, block_id in assembler.block_order:
+            if kind == "text":
+                blocks.append(Text(type="text", text=assembler.text_blocks[block_id]))
+                continue
+            if kind == "thought":
+                meta = assembler.thought_metadata[block_id]
+                blocks.append(
+                    Thought(
+                        type="thought",
+                        text=assembler.thought_blocks.get(block_id),
+                        signature=meta["signature"],
+                        provider_type=meta["provider_type"],
+                    )
                 )
-            )
-        for _tid, text in assembler.text_blocks.items():
-            blocks.append(Text(type="text", text=text))
-        for tc in tool_calls:
+                continue
+            tc = calls[block_id]
             name = tc.name if tc.name in known_tool_names else None
             invalid_raw = assembler.invalid_tool_args.get(tc.id)
             if invalid_raw is not None:

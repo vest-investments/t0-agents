@@ -218,6 +218,96 @@ def make_terminal_streaming_responses() -> list[Any]:
     ]
 
 
+GEMINI_SIGNATURES = ("CiQBjz1rX+8kq/4Tz0Wm==", "CiQBjz1rXwPaW1w7Lnq3==", "CiQBjz1rX3fV6dQe")
+GEMINI_PROVIDER = "gcp_vertex_gemini"
+GEMINI_INFERENCE_IDS = tuple(
+    UUID(f"00000000-0000-4000-8000-0000000000b{n}") for n in (1, 2, 3)
+)
+
+
+def _gemini_rounds(*, preamble: bool) -> list[list[Any]]:
+    """Gemini 3's three rounds as gateway 2026.6.0 returns them.
+
+    Each ``thoughtSignature`` is split off the part it signs into an empty
+    ``Thought`` directly ahead of it; the final answer's trails its text.
+    ``preamble`` adds the sentence Gemini writes before a call when asked to.
+    """
+
+    def signed(n: int) -> Thought:
+        return Thought(
+            type="thought",
+            text=None,
+            signature=GEMINI_SIGNATURES[n],
+            provider_type=GEMINI_PROVIDER,
+        )
+
+    def lead(text: str) -> list[Any]:
+        return [Text(type="text", text=text)] if preamble else []
+
+    return [
+        [
+            *lead("Adding first."),
+            signed(0),
+            ToolCall(
+                type="tool_call",
+                id="tc-1",
+                name="add",
+                raw_name="add",
+                arguments={"a": 1, "b": 2},
+                raw_arguments='{"a": 1, "b": 2}',
+            ),
+        ],
+        [
+            *lead("Now the greeting."),
+            signed(1),
+            ToolCall(
+                type="tool_call",
+                id="tc-2",
+                name="greet",
+                raw_name="greet",
+                arguments={"name": "x"},
+                raw_arguments='{"name": "x"}',
+            ),
+        ],
+        [Text(type="text", text=FINAL_ANSWER), signed(2)],
+    ]
+
+
+def make_gemini_nonstreaming_responses(*, preamble: bool) -> list[Any]:
+    return [
+        FakeChatResponse(content=blocks, episode_id=EPISODE_ID, inference_id=inference_id)
+        for blocks, inference_id in zip(
+            _gemini_rounds(preamble=preamble), GEMINI_INFERENCE_IDS, strict=True
+        )
+    ]
+
+
+def make_gemini_streaming_responses(*, preamble: bool) -> list[Any]:
+    """The same rounds as chunk scripts, one chunk per block, gateway ids."""
+
+    def chunk(block: Any) -> Any:
+        if isinstance(block, Text):
+            return text_chunk(block.text, block_id="0")
+        if isinstance(block, Thought):
+            return thought_chunk(
+                block_id="1", signature=block.signature, provider_type=block.provider_type
+            )
+        return tool_call_chunk(block.raw_name, block.raw_arguments, block_id=block.id)
+
+    return [
+        [
+            *(
+                chat_chunk([chunk(b)], episode_id=EPISODE_ID, inference_id=inference_id)
+                for b in blocks
+            ),
+            final_chunk(episode_id=EPISODE_ID, inference_id=inference_id),
+        ]
+        for blocks, inference_id in zip(
+            _gemini_rounds(preamble=preamble), GEMINI_INFERENCE_IDS, strict=True
+        )
+    ]
+
+
 def block_to_dict(block: Any) -> dict[str, Any]:
     """Stable dict projection of a TensorZero content block for snapshots."""
     if isinstance(block, Text):

@@ -123,7 +123,8 @@ def thought_chunk(
     Reasoning models surface content via either ``text`` (raw thought, the
     common case) or ``summary_text`` (provider-side summary — e.g. gpt-oss
     harmony's analysis channel, OpenAI o-series reasoning summaries).  Tests
-    pass either or both; at least one must be non-empty.
+    pass either or both, or neither with a ``signature`` — the signature-only
+    chunk gateway 2026.6.0 emits for Gemini's ``thoughtSignature``.
     """
     return ThoughtChunk(
         id=block_id,
