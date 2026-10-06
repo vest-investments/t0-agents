@@ -352,7 +352,7 @@ never invents copy for a genuinely empty turn.
 | `TextDeltaEvent` | Each assistant-text chunk | `id`, `delta` |
 | `TextEndEvent` | Once per text block after its final delta | `id` |
 | `ToolCallDeltaEvent` | Each partial tool-call delta (name/args) | `id`, `raw_name_delta`, `raw_arguments_delta` |
-| `ToolCallEvent` | Once per tool call, args parsed | `id`, `name`, `arguments: dict[str, Any]` |
+| `ToolCallEvent` | Once per tool call, args parsed; consecutive Gemini calls to one tool, which the gateway streams under one id, arrive as `0`, `0.1`, `0.2`, … | `id`, `name`, `arguments: dict[str, Any]` |
 | `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool`, `structured: dict \| None` (raw structured payload, additive) |
 | `ThoughtDeltaEvent` | Each reasoning-model thought chunk with text; a signature-only chunk (Gemini 3's `thoughtSignature`) emits none and is kept for replay | `id`, `delta` |
 | `ThoughtEvent` | Once per thought block after its final delta | `id`, `text` |
