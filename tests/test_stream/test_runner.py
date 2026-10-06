@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ import pytest
 from fastmcp.client.client import CallToolResult
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
-from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall
+from tensorzero import AsyncTensorZeroGateway, Text, Thought, ToolCall, ToolResult
 from tensorzero.types import TensorZeroError, ThoughtSummaryBlock
 
 from t0_agents.core.exceptions import MaxTurnsExceededError
@@ -543,6 +544,76 @@ async def test_streaming_rebuild_carries_a_signature_only_thought(
     thought = assistant["content"][0]
     assert thought.text is None
     assert thought.signature == signature
+
+
+async def test_streaming_replays_same_name_gemini_calls_as_separate_calls() -> None:
+    """Three parallel calls to one tool, streamed by the gateway under one id.
+
+    Each is dispatched with its own arguments, and the next round sends
+    three calls, each answered by its own result, behind the signature.
+    """
+    signature = "CiQBjz1rX+8kq/4Tz0Wm=="
+    args = [{"a": 1, "b": 2}, {"a": 3, "b": 4}, {"a": 5, "b": 6}]
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([thought_chunk(block_id="1", signature=signature)]),
+                chat_chunk([tool_call_chunk("add", json.dumps(args[0]), block_id="0")]),
+                chat_chunk([tool_call_chunk("", json.dumps(args[1]), block_id="0")]),
+                chat_chunk([tool_call_chunk("", json.dumps(args[2]), block_id="0")]),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("3, 7 and 11", block_id="0")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"add": _tool_result("sum")},
+    )
+
+    async for _ in StreamingAgentLoop().stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "Add 1+2, 3+4 and 5+6.",
+        "agent",
+        replay_thoughts=True,
+    ):
+        pass
+
+    assert [(n, a) for n, a, _ in fake_client.call_tool_invocations] == [
+        ("add", a) for a in args
+    ]
+    messages = fake_t0.calls[1]["input"]["messages"]
+    assistant = next(m for m in messages if m["role"] == "assistant")
+    assert [type(b).__name__ for b in assistant["content"]] == [
+        "Thought",
+        "ToolCall",
+        "ToolCall",
+        "ToolCall",
+    ]
+    calls = assistant["content"][1:]
+    assert [(c.id, c.name, c.arguments) for c in calls] == [
+        ("0", "add", args[0]),
+        ("0.1", "add", args[1]),
+        ("0.2", "add", args[2]),
+    ]
+    results = [
+        b
+        for m in messages
+        if m["role"] == "user" and not isinstance(m["content"], str)
+        for b in m["content"]
+        if isinstance(b, ToolResult)
+    ]
+    assert [r.id for r in results] == ["0", "0.1", "0.2"]
 
 
 async def test_streaming_loop_max_turns_raises() -> None:
