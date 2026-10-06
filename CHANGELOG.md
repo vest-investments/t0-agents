@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.13.1] — 2026-10-06
+
+Gateway 2026.6.0 mints a streamed Gemini tool-call id only when the
+function name changes. When Gemini calls one tool several times in a
+round, every call arrives under the same id and only the first carries
+the name, so the streaming loop concatenated their arguments and the
+next round failed at the gateway: `Error 400 … Error parsing tool call
+arguments as JSON Value: trailing characters`. It reproduced on every
+attempt with both `gemini-2.5-flash` and `gemini-3.8-flash`. The
+non-streaming loop receives distinct ids from the gateway and was not
+affected.
+
+### Fixed
+
+- **Same-name Gemini calls streamed under one id are split.** A
+  tool-call chunk that is a whole JSON object, arriving after the
+  current call's arguments already form one, starts the next call. It
+  keeps the name and takes the id `"{id}.{n}"` (`0`, `0.1`, `0.2`, …).
+  The ids are local: Gemini pairs a call with its response by name.
+
+### Notes
+
+- A second object that arrives in fragments is still one call with
+  invalid arguments, as before: only Gemini's whole-object chunks split.
+
 ## [2.13.0] — 2026-10-06
 
 Gemini 3 requires a tool loop to return each round's thought signature
