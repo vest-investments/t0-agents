@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.13.0] — 2026-10-06
+
+Gemini 3 requires a tool loop to return each round's thought signature
+on the call it signed. Gateway 2026.6.0 splits that `thoughtSignature`
+off into a `Thought` with a signature and no text, directly ahead of
+the call, and folds it back into whatever block follows it on input.
+The streaming loop lost it twice: the assembler dropped any thought
+chunk without text before reading its signature, and the rebuild
+grouped blocks by type, so a sentence written before the call moved
+the signature onto the text. Neither failed: with no signed call in
+the replay, the gateway stamps `skip_thought_signature_validator` and
+Vertex accepts it. The non-streaming loop passes blocks through whole
+and was already correct.
+
+### Fixed
+
+- **A signature-only thought is kept for replay.** The assembler
+  records its signature in `thought_metadata` and the runner rebuilds
+  it as `Thought(text=None, signature=…)`, the shape the non-streaming
+  path receives. It emits no `ThoughtDeltaEvent` or `ThoughtEvent`, so
+  nothing new reaches a consumer's stream.
+- **The streaming rebuild keeps stream order.** Blocks are rebuilt in
+  first-appearance order across text, thoughts and tool calls, the
+  order the non-streaming path receives, instead of thoughts, then
+  text, then calls.
+
+### Added
+
+- **`TurnStreamAssembler.block_order`** — every block as `(kind, id)`
+  in first-appearance order. Ids are unique only within a kind.
+
+### Notes
+
+- `replay_thoughts` still defaults to `False`, and with it off nothing
+  changes: thoughts are stripped before the replay as before.
+- Reasoning streams ahead of the answer, so a DeepSeek turn rebuilds
+  exactly as it did.
+- The tensorzero 2026.6.0 Python client drops `provider_type` when it
+  parses a `ThoughtChunk`, so a streamed thought replays with
+  `provider_type=None`. The gateway accepts it for Vertex Gemini.
+
 ## [2.12.0] — 2026-09-21
 
 TensorZero applies `extra_body` patches to the provider request body at
