@@ -18,6 +18,7 @@ uv run pytest -k "test_name"       # Run a single test by name
 uv run ruff check src/             # Lint
 uv run ruff check --fix src/       # Lint with auto-fix
 uv run mypy src/                   # Type check (strict mode)
+bash ci/checks.sh                  # The CI gate (Cloud Build t0-agents-pr)
 
 # Local TensorZero gateway (needed for integration tests and examples)
 docker compose up -d               # Boots gateway:2026.6.0 + clickhouse:lts; needs GROQ_API_KEY in .env
