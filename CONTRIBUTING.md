@@ -172,13 +172,8 @@ vocabulary — scenarios, assertions, fixtures, and the embedded path.
 
 ## Before you open a PR
 
-Run this sequence. If anything fails, don't submit:
-
-```bash
-uv run ruff check src/ tests/
-uv run mypy src/
-uv run pytest -m "not integration and not embedded"
-```
+Run `bash ci/checks.sh`, the gate Cloud Build's `t0-agents-pr` runs on
+every PR. If anything fails, don't submit.
 
 If you touched `pyproject.toml`'s dependency ranges, also resolve
 without the lockfile — every command above reads `uv.lock`, so a range
@@ -203,11 +198,16 @@ GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest -m embedded
 ```
 
 Leave `CHANGELOG.md` alone. Release notes are written as a versioned
-block in their own release PR, which touches exactly four files and no
+block in their own release PR, which touches exactly five files and no
 `src/` or `tests/` — an empty `tests/` diff is what makes a hung suite
 attributable to the environment rather than to the release. Adding an
 `[Unreleased]` section here breaks that; the repo has never carried
 one.
+
+The release PR bumps `VERSION`, `pyproject.toml` and
+`src/t0_agents/__init__.py` together (`ci/checks.sh` fails if they
+differ). Merging it tags `vX.Y.Z` from `VERSION` (Cloud Build
+`t0-agents-release`); don't tag by hand.
 
 ## Documentation
 
