@@ -175,7 +175,8 @@ async def chat(query: str) -> None:
    (`TextDeltaEvent`, `ToolCallDeltaEvent`, `ThoughtDeltaEvent`).
 3. When the chunk iterator ends, the assembler flushes consolidation
    events — one `TextEndEvent` per text block, one `ToolCallEvent`
-   (with parsed args) per tool call, one `ThoughtEvent` per thought —
+   (with parsed args) per tool call, one `ThoughtEvent` per thought that
+   carried text —
    then the runner emits `TurnEndEvent(turn=N)`.
 4. If the assistant emitted tool calls, the runner executes them via
    the same `execute_tool_calls` path `Agent.invoke()` uses, yields one
@@ -353,7 +354,7 @@ never invents copy for a genuinely empty turn.
 | `ToolCallDeltaEvent` | Each partial tool-call delta (name/args) | `id`, `raw_name_delta`, `raw_arguments_delta` |
 | `ToolCallEvent` | Once per tool call, args parsed | `id`, `name`, `arguments: dict[str, Any]` |
 | `ToolResultEvent` | Once per tool, after the executor returns | `id`, `name`, `result: str`, `is_error: bool`, `structured: dict \| None` (raw structured payload, additive) |
-| `ThoughtDeltaEvent` | Each reasoning-model thought chunk | `id`, `delta` |
+| `ThoughtDeltaEvent` | Each reasoning-model thought chunk with text; a signature-only chunk (Gemini 3's `thoughtSignature`) emits none and is kept for replay | `id`, `delta` |
 | `ThoughtEvent` | Once per thought block after its final delta | `id`, `text` |
 | `ToolProgressEvent` | Each server-side `ctx.report_progress(...)` while a tool runs | `id` (matches the `ToolCallEvent`), `progress: float`, `total: float \| None`, `message: str \| None` |
 | `TurnEndEvent` | Once per turn, after all blocks are assembled | `turn: int` |
