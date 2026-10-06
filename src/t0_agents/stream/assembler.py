@@ -84,6 +84,11 @@ class TurnStreamAssembler:
         provider that verifies its own reasoning on replay rejects a
         block whose signature is missing, so this survives the rebuild
         the same way the text does.
+
+        Also holds blocks that carry a signature and no text — Gemini's
+        ``thoughtSignature`` on the part it signs, which the gateway
+        splits off as its own thought.  Those never reach
+        :attr:`thought_blocks`, so no empty ``ThoughtEvent`` is emitted.
         """
         return self._thought_meta
 
@@ -171,14 +176,16 @@ class TurnStreamAssembler:
             summary_part = block.summary_text or ""
             separator = "\n" if text_part and summary_part else ""
             delta = text_part + separator + summary_part
-            if not delta:
+            if not delta and not block.signature:
                 return
-            self._thought[block.id] = self._thought.get(block.id, "") + delta
             meta = self._thought_meta.setdefault(
                 block.id, {"signature": None, "provider_type": None}
             )
             meta["signature"] = block.signature or meta["signature"]
             meta["provider_type"] = block.provider_type or meta["provider_type"]
+            if not delta:
+                return
+            self._thought[block.id] = self._thought.get(block.id, "") + delta
             yield ThoughtDeltaEvent(id=block.id, delta=delta)
             return
         if isinstance(block, UnknownChunk):

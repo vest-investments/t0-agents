@@ -482,6 +482,69 @@ async def test_streaming_rebuild_carries_the_reasoning_signature() -> None:
     assert thought.provider_type == "acme"
 
 
+@pytest.mark.parametrize("replay_thoughts", [True, False])
+async def test_streaming_rebuild_carries_a_signature_only_thought(
+    replay_thoughts: bool,
+) -> None:
+    """A signature with no reasoning text is replayed as it arrived.
+
+    The shape is gateway 2026.6.0's for Gemini 3: the ``thoughtSignature``
+    on a function-call part streams as its own empty thought, ahead of
+    the call.  Without it the gateway stamps a dummy signature on the
+    replayed call. Stripped like any thought when replay is off.
+    """
+    signature = "CiQBjz1rX+8kq/4Tz0Wm=="
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk([thought_chunk(block_id="1", signature=signature)]),
+                chat_chunk(
+                    [tool_call_chunk(raw_name="add", raw_arguments="{}", block_id="0")]
+                ),
+                final_chunk(),
+            ],
+            [
+                chat_chunk([text_chunk("sum is 3", block_id="0")]),
+                final_chunk(),
+            ],
+        ],
+    )
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(
+                name="add",
+                description="add two numbers",
+                inputSchema={"type": "object", "properties": {}},
+            )
+        ],
+        call_results={"add": _tool_result("3")},
+    )
+
+    events = [
+        e
+        async for e in StreamingAgentLoop().stream(
+            cast(AsyncTensorZeroGateway, fake_t0),
+            cast(Any, fake_client),
+            "What is 1+2?",
+            "agent",
+            replay_thoughts=replay_thoughts,
+        )
+    ]
+
+    assert not [e for e in events if isinstance(e, ThoughtDeltaEvent | ThoughtEvent)]
+    assistant = next(
+        m for m in fake_t0.calls[1]["input"]["messages"] if m["role"] == "assistant"
+    )
+    kinds = [type(b).__name__ for b in assistant["content"]]
+    if not replay_thoughts:
+        assert kinds == ["ToolCall"]
+        return
+    assert kinds == ["Thought", "ToolCall"]
+    thought = assistant["content"][0]
+    assert thought.text is None
+    assert thought.signature == signature
+
+
 async def test_streaming_loop_max_turns_raises() -> None:
     """Exhausting max_turns surfaces MaxTurnsExceededError."""
     # Each turn emits one tool call that the client can dispatch indefinitely.

@@ -438,7 +438,9 @@ class StreamingAgentLoop:
         reader partitions by type and is indifferent to it, but a turn
         replaying its reasoning (``replay_thoughts``) puts this list on
         the wire, and the two loops must not describe the same turn
-        differently.
+        differently.  A thought that arrived as a signature alone
+        rebuilds with ``text=None``, the shape the non-streaming path
+        receives.
 
         The rebuild mirrors the two zeroings TensorZero applies on the
         non-streaming path but not on chunks: a name outside
@@ -453,14 +455,13 @@ class StreamingAgentLoop:
         :func:`~t0_agents.wire.stages.project` puts on ``arguments_json``.
         """
         blocks: list[Any] = []
-        for _tid, thought in assembler.thought_blocks.items():
-            meta = assembler.thought_metadata.get(_tid, {})
+        for tid, meta in assembler.thought_metadata.items():
             blocks.append(
                 Thought(
                     type="thought",
-                    text=thought,
-                    signature=meta.get("signature"),
-                    provider_type=meta.get("provider_type"),
+                    text=assembler.thought_blocks.get(tid),
+                    signature=meta["signature"],
+                    provider_type=meta["provider_type"],
                 )
             )
         for _tid, text in assembler.text_blocks.items():
