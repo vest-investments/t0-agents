@@ -64,6 +64,7 @@ class TurnStreamAssembler:
         self._thought_meta: dict[str, dict[str, str | None]] = {}
         self._invalid_args: dict[str, str] = {}
         self._order: dict[tuple[BlockKind, str], None] = {}
+        self._tool_ids: dict[str, list[str]] = {}
 
     @property
     def text_blocks(self) -> dict[str, str]:
@@ -169,15 +170,16 @@ class TurnStreamAssembler:
             yield TextDeltaEvent(id=block.id, delta=block.text)
             return
         if isinstance(block, ToolCallChunk):
-            self._order["tool_call", block.id] = None
+            tool_id, name_delta = self._route_tool_call(block)
+            self._order["tool_call", tool_id] = None
             state = self._tool.setdefault(
-                block.id, {"raw_name": "", "raw_arguments": ""}
+                tool_id, {"raw_name": "", "raw_arguments": ""}
             )
-            state["raw_name"] += block.raw_name
+            state["raw_name"] += name_delta
             state["raw_arguments"] += block.raw_arguments
             yield ToolCallDeltaEvent(
-                id=block.id,
-                raw_name_delta=block.raw_name,
+                id=tool_id,
+                raw_name_delta=name_delta,
                 raw_arguments_delta=block.raw_arguments,
             )
             return
@@ -222,6 +224,30 @@ class TurnStreamAssembler:
         yield ErrorEvent(
             message=f"unrecognised block type: {type(block).__name__}",
         )
+
+    def _route_tool_call(self, block: ToolCallChunk) -> tuple[str, str]:
+        """The accumulator ``id`` and name delta for one tool-call chunk.
+
+        Gateway 2026.6.0 streams consecutive Gemini calls to the same tool
+        under one ``id`` and names only the first: it mints an id only when
+        the function name changes (``check_new_tool_call_name``).  Gemini
+        sends each call as one whole JSON object, so a chunk that is a whole
+        object, arriving after the current call's arguments already form
+        one, starts the next call — ``"{id}.{n}"``, same name.  The ids
+        stay local: Gemini pairs a call with its response by name.  A
+        fragment of a second object is not a whole object and still fails
+        as ambiguous, as it did before.
+        """
+        ids = self._tool_ids.setdefault(block.id, [block.id])
+        current = self._tool.get(ids[-1])
+        if (
+            current is None
+            or not _is_json_object(block.raw_arguments)
+            or not _is_json_object(current["raw_arguments"])
+        ):
+            return ids[-1], block.raw_name
+        ids.append(f"{block.id}.{len(ids)}")
+        return ids[-1], block.raw_name or current["raw_name"]
 
     async def _flush_tool_call(
         self, tool_id: str, state: dict[str, str]
@@ -290,3 +316,10 @@ class TurnStreamAssembler:
             yield ToolCallEvent(id=tool_id, name=name, arguments={})
             return
         yield ToolCallEvent(id=tool_id, name=name, arguments=parsed)
+
+
+def _is_json_object(raw: str) -> bool:
+    try:
+        return isinstance(json.loads(raw), dict)
+    except json.JSONDecodeError:
+        return False

@@ -347,6 +347,60 @@ async def test_assembler_second_object_is_not_salvaged() -> None:
     assert assembler.invalid_tool_args == {"c1": raw}
 
 
+async def test_assembler_splits_same_name_gemini_calls_streamed_under_one_id() -> None:
+    """Gateway 2026.6.0's shape for three parallel Gemini calls to one tool.
+
+    Captured live: one id for all three, the name on the first only, each
+    chunk a whole object.  Concatenated, the replayed arguments 400 at the
+    gateway on the next round.
+    """
+    args = [{"series_id": s, "start_date": "2025-10-01"} for s in ("CPIAUCSL", "DGS10", "UNRATE")]
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([thought_chunk(block_id="1", signature="sig-only")]),
+            chat_chunk([tool_call_chunk("get_series", json.dumps(args[0]), block_id="0")]),
+            chat_chunk([tool_call_chunk("", json.dumps(args[1]), block_id="0")]),
+            chat_chunk([tool_call_chunk("", json.dumps(args[2]), block_id="0")]),
+            final_chunk(),
+        ]
+    )
+    assert [e for e in events if isinstance(e, ErrorEvent)] == []
+    calls = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert [(c.id, c.name, c.arguments) for c in calls] == [
+        ("0", "get_series", args[0]),
+        ("0.1", "get_series", args[1]),
+        ("0.2", "get_series", args[2]),
+    ]
+    deltas = [e for e in events if isinstance(e, ToolCallDeltaEvent)]
+    assert [(d.id, d.raw_name_delta) for d in deltas] == [
+        ("0", "get_series"),
+        ("0.1", "get_series"),
+        ("0.2", "get_series"),
+    ]
+    assert assembler.block_order == [
+        ("thought", "1"),
+        ("tool_call", "0"),
+        ("tool_call", "0.1"),
+        ("tool_call", "0.2"),
+    ]
+
+
+async def test_assembler_second_object_in_fragments_is_not_split() -> None:
+    """Only a whole object starts a call; a fragmented one stays ambiguous."""
+    raw = ['{"a": 1}', '{"b"', ": 2}"]
+    assembler, events = await _drain_with_assembler(
+        [
+            chat_chunk([tool_call_chunk(raw_name="add", raw_arguments=raw[0], block_id="c1")]),
+            chat_chunk([tool_call_chunk(raw_arguments=raw[1], block_id="c1")]),
+            chat_chunk([tool_call_chunk(raw_arguments=raw[2], block_id="c1")]),
+            final_chunk(),
+        ]
+    )
+    (call,) = [e for e in events if isinstance(e, ToolCallEvent)]
+    assert call.id == "c1" and call.arguments == {}
+    assert assembler.invalid_tool_args == {"c1": "".join(raw)}
+
+
 async def test_assembler_tool_args_non_object() -> None:
     events = await _drain(
         [
