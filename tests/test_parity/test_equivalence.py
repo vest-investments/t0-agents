@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import pytest
+
 from t0_agents.mcp.loop import run_agent
 from t0_agents.stream.events import DoneEvent
 from t0_agents.stream.runner import StreamingAgentLoop
@@ -206,8 +208,12 @@ async def test_loop_replays_each_gemini_signature_ahead_of_its_call() -> None:
     assert _signatures_ahead_of_calls(calls) == GEMINI_SIGNED_CALLS
 
 
-async def test_loop_and_runner_replay_gemini_signatures_equivalently() -> None:
-    t0_loop = FakeT0(responses=make_gemini_nonstreaming_responses(preamble=False))
+@pytest.mark.parametrize("preamble", [False, True])
+async def test_loop_and_runner_replay_gemini_signatures_equivalently(
+    preamble: bool,
+) -> None:
+    """With text ahead of the call, the signature must still precede the call."""
+    t0_loop = FakeT0(responses=make_gemini_nonstreaming_responses(preamble=preamble))
     loop_result = await run_agent(
         cast(Any, t0_loop),
         cast(Any, make_mcp_client()),
@@ -216,7 +222,7 @@ async def test_loop_and_runner_replay_gemini_signatures_equivalently() -> None:
         replay_thoughts=True,
     )
 
-    t0_stream = FakeT0(responses=make_gemini_streaming_responses(preamble=False))
+    t0_stream = FakeT0(responses=make_gemini_streaming_responses(preamble=preamble))
     events = [
         e
         async for e in StreamingAgentLoop().stream(

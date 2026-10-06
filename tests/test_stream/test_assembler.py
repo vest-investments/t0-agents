@@ -192,6 +192,23 @@ async def test_assembler_signature_only_thought_keeps_its_signature_silently() -
     }
 
 
+async def test_assembler_block_order_follows_first_appearance_across_kinds() -> None:
+    assembler, _ = await _drain_with_assembler(
+        [
+            chat_chunk([text_chunk("Adding ", block_id="0")]),
+            chat_chunk([text_chunk("first.", block_id="0")]),
+            chat_chunk([thought_chunk(block_id="1", signature="sig-only")]),
+            chat_chunk([tool_call_chunk("add", "{}", block_id="0")]),
+            final_chunk(),
+        ]
+    )
+    assert assembler.block_order == [
+        ("text", "0"),
+        ("thought", "1"),
+        ("tool_call", "0"),
+    ]
+
+
 async def test_assembler_mixed_blocks_in_stream() -> None:
     events = await _drain(
         [
