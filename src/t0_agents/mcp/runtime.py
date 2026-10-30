@@ -43,7 +43,7 @@ from fastmcp.exceptions import ToolError
 from mcp.shared._httpx_utils import McpHttpClientFactory
 from mcp.shared.exceptions import McpError
 
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.exceptions import ConfigurationError, T0AgentsError
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -801,7 +801,9 @@ class MCPRuntime:
                 *self._teardown_tasks, return_exceptions=True
             )
 
-    async def list_tools(self) -> list[mcp.types.Tool]:
+    async def list_tools(
+        self, *, require_every_server: bool = False
+    ) -> list[mcp.types.Tool]:
         """Merged inventory with namespace prefixes applied runtime-side.
 
         Naming is identical to the composite path's ``mount(namespace=…)``:
@@ -822,6 +824,10 @@ class MCPRuntime:
         staleness — a tool added to a server while it is unreachable
         stays invisible until it answers again.  An unreachable server
         never raises; a genuine name collision still does.
+
+        ``require_every_server=True`` raises :class:`T0AgentsError` for a
+        handle that has never answered instead of excluding it — for a
+        caller that keeps what this merge returns.
         """
         per_handle = await asyncio.gather(
             *(
@@ -836,6 +842,12 @@ class MCPRuntime:
             if isinstance(result, BaseException):
                 fallback = handle._last_known
                 if fallback is None:
+                    if require_every_server:
+                        raise T0AgentsError(
+                            f"MCP server {handle.key!r} did not answer "
+                            f"list_tools ({result!r}) and has no prior "
+                            f"inventory"
+                        ) from result
                     logger.warning(
                         "MCP server %r did not answer list_tools (%r) and "
                         "has no prior inventory; excluding it from this "

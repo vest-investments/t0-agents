@@ -26,7 +26,7 @@ from fastmcp.client.tasks import TaskNotificationHandler
 from fastmcp.client.transports import SSETransport, StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.exceptions import ConfigurationError, T0AgentsError
 from t0_agents.glow import MCPServer
 from t0_agents.mcp.elicitation import auto_approve_handler
 from t0_agents.mcp.runtime import (
@@ -963,6 +963,16 @@ async def test_list_tools_excludes_a_server_that_never_answered(
         "'dark'" in record.message and "no prior inventory" in record.message
         for record in caplog.records
     )
+
+
+async def test_list_tools_requiring_every_server_raises_for_one_that_never_answered() -> None:
+    dead = MCPServer(url=_refused_url(), namespace="dark")._to_spec()
+    healthy = _spec(_named_server("mem", "probe"), namespace="mem")
+
+    async with asyncio.timeout(15):
+        async with MCPRuntime([healthy, dead], tool_list_timeout=2.0) as runtime:
+            with pytest.raises(T0AgentsError, match="'dark'"):
+                await runtime.list_tools(require_every_server=True)
 
 
 async def test_list_tools_serves_last_known_after_the_server_dies(
