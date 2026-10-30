@@ -822,8 +822,9 @@ class MCPRuntime:
         inventory is served (ignoring the TTL); a handle that has never
         answered is excluded from this merge.  The accepted cost is
         staleness — a tool added to a server while it is unreachable
-        stays invisible until it answers again.  An unreachable server
-        never raises; a genuine name collision still does.
+        stays invisible until it answers again.  On this default path an
+        unreachable server never raises; a genuine name collision always
+        does.
 
         ``require_every_server=True`` raises :class:`T0AgentsError` for a
         handle that has never answered instead of excluding it — for a
