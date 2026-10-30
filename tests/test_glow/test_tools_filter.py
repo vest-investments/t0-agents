@@ -14,6 +14,7 @@ Gateway-free throughout:
 
 from __future__ import annotations
 
+import socket
 import warnings
 from typing import Any, cast
 
@@ -22,7 +23,7 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents.core.agent import Agent
 from t0_agents.core.config import AgentConfig
-from t0_agents.core.exceptions import ConfigurationError
+from t0_agents.core.exceptions import ConfigurationError, T0AgentsError
 from t0_agents.delegation import SubAgentToolProvider
 from t0_agents.glow import App, MCPServer
 from t0_agents.glow.app import _resolve_tool_filter
@@ -33,6 +34,14 @@ from t0_agents.tooling import FilteredToolProvider
 
 def _fake_t0() -> AsyncTensorZeroGateway:
     return cast(AsyncTensorZeroGateway, object())
+
+
+def _refused_url() -> str:
+    """A URL on a just-released local port — connects are refused fast."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"http://127.0.0.1:{port}/mcp"
 
 
 async def _tool_names(wrapper: Any) -> set[str]:
@@ -194,6 +203,58 @@ async def test_dead_pattern_warns_at_build_time() -> None:
     with pytest.warns(UserWarning, match="matched no available tool"):
         async with app.lifespan():
             assert await _tool_names(typo) == set()
+
+
+async def test_boot_fails_when_a_filtered_agent_misses_a_server() -> None:
+    """The filter resolves once: a server absent from the boot inventory
+    would stay filtered out for the App's lifetime."""
+    app = App(
+        t0=_fake_t0(), servers=[MCPServer(url=_refused_url(), namespace="dark")]
+    )
+
+    @app.agent("chat", tools=["dark_probe"])
+    async def chat(q: str) -> str:  # type: ignore[empty-body]
+        """Needs the dark server."""
+
+    with pytest.raises(T0AgentsError, match="'dark'"):
+        async with app.lifespan():
+            pass
+
+
+async def test_a_late_filtered_agent_fails_when_a_server_never_answered() -> None:
+    app = App(
+        t0=_fake_t0(), servers=[MCPServer(url=_refused_url(), namespace="dark")]
+    )
+
+    @app.tool
+    async def weather() -> str:
+        return "w"
+
+    async with app.lifespan():
+
+        @app.agent("late", tools=["dark_probe"])
+        async def late(q: str) -> str:  # type: ignore[empty-body]
+            """Registered after boot."""
+
+        with pytest.raises(T0AgentsError, match="'dark'"):
+            await late("hi")
+
+
+async def test_boot_without_filters_excludes_a_server_that_never_answered() -> None:
+    app = App(
+        t0=_fake_t0(), servers=[MCPServer(url=_refused_url(), namespace="dark")]
+    )
+
+    @app.tool
+    async def weather() -> str:
+        return "w"
+
+    @app.agent("chat")
+    async def chat(q: str) -> str:  # type: ignore[empty-body]
+        """Sees whatever answers."""
+
+    async with app.lifespan():
+        assert await _tool_names(chat) == {"weather"}
 
 
 def test_bare_string_at_the_decorator_fails_on_declaration() -> None:
