@@ -221,6 +221,27 @@ async def test_boot_fails_when_a_filtered_agent_misses_a_server() -> None:
             pass
 
 
+async def test_a_toolless_agent_boots_beside_a_server_that_never_answered() -> None:
+    app = App(
+        t0=_fake_t0(), servers=[MCPServer(url=_refused_url(), namespace="dark")]
+    )
+
+    @app.agent("mute", tools=[])
+    async def mute(q: str) -> str:  # type: ignore[empty-body]
+        """Toolless by declaration."""
+
+    async with app.lifespan():
+        assert await _tool_names(mute) == set()
+
+        @app.agent("late_mute", tools=[])
+        async def late_mute(q: str) -> str:  # type: ignore[empty-body]
+            """Toolless, registered after boot."""
+
+        late_spec = app._agent_registry["late_mute"]
+        await app._ensure_ready_for(late_spec)
+        assert late_spec.resolved_tools == set()
+
+
 async def test_a_late_filtered_agent_fails_when_a_server_never_answered() -> None:
     app = App(
         t0=_fake_t0(), servers=[MCPServer(url=_refused_url(), namespace="dark")]

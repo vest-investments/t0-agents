@@ -18,7 +18,7 @@ reported them to the user as unavailable rather than failing.
 ### Fixed
 
 - **A `tools=` filter is never resolved without a server.** When any
-  agent has a `tools=` filter, build raises `T0AgentsError` naming a
+  agent has a non-empty `tools=` filter, build raises `T0AgentsError` naming a
   server that has never answered; an agent registered after build
   raises the same at first use. An App without a filter still boots
   without the server and lists it once it answers.

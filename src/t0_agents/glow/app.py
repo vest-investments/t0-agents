@@ -1050,9 +1050,7 @@ class App:
         # filtered out for the App's lifetime.
         live_names: set[str] = set()
         if self._owned_client is not None:
-            filtered = any(
-                spec.tools is not None for spec in self._agent_registry.values()
-            )
+            filtered = any(spec.tools for spec in self._agent_registry.values())
             live_names = {
                 tool.name
                 for tool in await self._owned_client.list_tools(
@@ -1145,7 +1143,7 @@ class App:
                 live_names = {
                     tool.name
                     for tool in await self._owned_client.list_tools(
-                        require_every_server=True
+                        require_every_server=bool(spec.tools)
                     )
                 }
                 spec.resolved_tools = _resolve_tool_filter(
