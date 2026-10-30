@@ -214,7 +214,9 @@ timeout leaves nothing to resolve the request), so each handle's share of the
 fan-out is bounded by `MCPRuntime(tool_list_timeout=)`. A server that cannot
 answer within it degrades — its last-known inventory is served, or it is
 excluded if it never answered — instead of hanging the merge for every
-conversation in the process.
+conversation in the process. Resolving a `tools=` filter is the exception: it
+happens once, so a server that never answered raises `T0AgentsError` there
+instead of being excluded for the App's lifetime.
 
 Two ground truths worth committing to memory (mcp SDK 1.27.0, source-verified):
 

@@ -78,7 +78,11 @@ the process.  Compared to composing servers by hand:
   and re-listed once; failing that, its last-known inventory is served
   (a tool added while it is unreachable stays invisible until it
   answers again); a server that has never answered is skipped with a
-  warning.
+  warning.  The exception is resolving an agent's `tools=` filter, which
+  happens once (at build, or at first use for an agent registered
+  later): there a server that has never answered raises
+  `T0AgentsError` naming it, since the filter would otherwise leave
+  its tools out for the App's lifetime.
 - **Session-loss recovery.**  A server rollout that terminates warm
   sessions is absorbed on both paths.  On a call, the runtime rebuilds
   the client and re-sends exactly once when the rejection provably
