@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.13.2] — 2026-10-30
+
+An agent's `tools=` filter resolves once, at build, against the
+inventory of that moment. A server that had never answered was left
+out of that inventory with a warning, so the filter dropped every name
+it serves and kept them out after the server came back: the runtime
+re-lists the server on the next turn, but the filter no longer admits
+its tools. A process that booted while one server was still starting
+ran without that server's tools until it restarted, and the model
+reported them to the user as unavailable rather than failing.
+
+### Fixed
+
+- **A `tools=` filter is never resolved without a server.** When any
+  agent has a non-empty `tools=` filter, build raises `T0AgentsError` naming a
+  server that has never answered; an agent registered after build
+  raises the same at first use. An App without a filter still boots
+  without the server and lists it once it answers.
+
+### Added
+
+- **`MCPRuntime.list_tools(require_every_server=True)`** raises
+  `T0AgentsError` for a server that has never answered instead of
+  excluding it.
+
+### Notes
+
+- Per-turn listing is unchanged: after build, an unreachable server
+  still degrades to its last-known inventory or is skipped.
+- A failed build is recovered by whatever restarts the process; while
+  the server stays down, an App with a filter does not start.
+
 ## [2.13.1] — 2026-10-06
 
 Gateway 2026.6.0 mints a streamed Gemini tool-call id only when the

@@ -1045,11 +1045,17 @@ class App:
         # build-time diagnostic that turns prefix-guessing bugs into a visible
         # warning.  A separate pass *before* the build loop so a parent
         # agent's recursion into its sub-agent specs sees their resolved
-        # filters already set.
+        # filters already set.  A filter is resolved once, so a server
+        # missing from this inventory fails the boot rather than staying
+        # filtered out for the App's lifetime.
         live_names: set[str] = set()
         if self._owned_client is not None:
+            filtered = any(spec.tools for spec in self._agent_registry.values())
             live_names = {
-                tool.name for tool in await self._owned_client.list_tools()
+                tool.name
+                for tool in await self._owned_client.list_tools(
+                    require_every_server=filtered
+                )
             }
         for agent_spec in self._agent_registry.values():
             if agent_spec.tools is not None:
@@ -1135,7 +1141,10 @@ class App:
                 and self._client_entered
             ):
                 live_names = {
-                    tool.name for tool in await self._owned_client.list_tools()
+                    tool.name
+                    for tool in await self._owned_client.list_tools(
+                        require_every_server=bool(spec.tools)
+                    )
                 }
                 spec.resolved_tools = _resolve_tool_filter(
                     spec.name, spec.tools, live_names
