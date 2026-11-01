@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.13.3] — 2026-11-01
+
+### Fixed
+
+- **A streamed inference's usage record carries its `variant_name` and
+  `finish_reason`.** The streaming loop's `on_inference` response copied
+  only the ids and usage from the final chunk, so the usage ledger
+  recorded both as `None` for every streamed inference, and an A/B split
+  could not be read from it.
+
 ## [2.13.2] — 2026-10-30
 
 An agent's `tools=` filter resolves once, at build, against the
