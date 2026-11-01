@@ -370,6 +370,26 @@ class TestCaptureInference:
         assert captured.tool_calls == ()
         assert captured.usage.cost is None
 
+    async def test_a_streamed_inference_records_its_final_chunks_variant_and_finish_reason(
+        self,
+    ) -> None:
+        ledger = InMemoryUsageLedger()
+        t0 = FakeT0(
+            [
+                [
+                    chat_chunk([text_chunk("done")]),
+                    final_chunk(variant_name="arm_b", finish_reason=FinishReason.STOP),
+                ]
+            ]
+        )
+        agent = _agent(t0, ledger)
+        async for _ in agent.invoke("hi").events():
+            pass
+
+        (inference,) = ledger.runs[0].inferences
+        assert inference.variant_name == "arm_b"
+        assert inference.finish_reason == "stop"
+
 
 def _text_result(text: str) -> CallToolResult:
     return CallToolResult(

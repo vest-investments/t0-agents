@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 from tensorzero.types import (
     ChatChunk,
+    FinishReason,
     TextChunk,
     ThoughtChunk,
     ToolCallChunk,
@@ -162,6 +163,7 @@ def final_chunk(
     episode_id: UUID | None = None,
     inference_id: UUID | None = None,
     variant_name: str = "test-variant",
+    finish_reason: FinishReason | None = None,
 ) -> ChatChunk:
     """Build the terminal ``ChatChunk`` — empty content, populated ``usage``."""
     return ChatChunk(
@@ -170,6 +172,7 @@ def final_chunk(
         variant_name=variant_name,
         content=[],
         usage=Usage(input_tokens=input_tokens, output_tokens=output_tokens),  # type: ignore[call-arg]
+        finish_reason=finish_reason,
     )
 
 

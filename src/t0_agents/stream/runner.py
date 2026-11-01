@@ -285,6 +285,8 @@ class StreamingAgentLoop:
                         content=assistant_blocks,
                         episode_id=final_usage_chunk.episode_id,
                         inference_id=final_usage_chunk.inference_id,
+                        variant_name=final_usage_chunk.variant_name,
+                        finish_reason=final_usage_chunk.finish_reason,
                         usage=final_usage_chunk.usage,
                     ),
                 )
@@ -506,14 +508,22 @@ class StreamingAgentLoop:
 class _SyntheticChatResponse:
     """Duck-typed mirror of ``ChatInferenceResponse`` for the streaming path.
 
-    Only carries the fields the ``on_inference`` cost-tracker reads
-    (``usage``, ``usage.cost``).  ``Agent.invoke`` casts the real SDK return
-    value to ``ChatInferenceResponse`` and the cost-tracker never isinstance-
-    checks, so this duck-type fits the contract and keeps streaming behaviour
-    byte-equivalent for guardrails.
+    Only carries the fields the ``on_inference`` hooks read: the cost-tracker
+    (``usage``, ``usage.cost``) and the usage ledger (``variant_name``,
+    ``finish_reason``).  ``Agent.invoke`` casts the real SDK return value to
+    ``ChatInferenceResponse`` and neither hook isinstance-checks, so this
+    duck-type fits the contract and keeps streaming behaviour byte-equivalent
+    for guardrails.
     """
 
-    __slots__ = ("content", "episode_id", "inference_id", "usage")
+    __slots__ = (
+        "content",
+        "episode_id",
+        "finish_reason",
+        "inference_id",
+        "usage",
+        "variant_name",
+    )
 
     def __init__(
         self,
@@ -521,11 +531,15 @@ class _SyntheticChatResponse:
         content: list[Any],
         episode_id: Any,
         inference_id: Any,
+        variant_name: str,
+        finish_reason: Any,
         usage: Any,
     ) -> None:
         self.content = content
         self.episode_id = episode_id
         self.inference_id = inference_id
+        self.variant_name = variant_name
+        self.finish_reason = finish_reason
         self.usage = usage
 
 
