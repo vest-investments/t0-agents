@@ -16,7 +16,7 @@ checks you should run before opening a pull request.
 ## Setup
 
 ```bash
-git clone https://github.com/sproutfi/t0-agents.git
+git clone https://github.com/vest-investments/t0-agents.git
 cd t0-agents
 uv sync
 ```
