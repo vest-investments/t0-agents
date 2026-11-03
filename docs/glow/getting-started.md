@@ -1,7 +1,7 @@
 # Getting started with `t0_agents.glow`
 
 > **Experimental.** Public API on the
-> [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
+> [`experimental/glow`](https://github.com/vest-investments/t0-agents/tree/experimental/glow)
 > branch is unstable.  Known limitations are catalogued at
 > [`limitations.md`](limitations.md); the escape hatch to the v1.0
 > `Agent` lives at [`escape-hatch.md`](escape-hatch.md).

@@ -1,7 +1,7 @@
 # `t0_agents.glow` — the eight-line path
 
 > **Experimental.**  Public API on the
-> [`experimental/glow`](https://github.com/sproutfi/t0-agents/tree/experimental/glow)
+> [`experimental/glow`](https://github.com/vest-investments/t0-agents/tree/experimental/glow)
 > branch is unstable until merged to `main`.
 
 A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
