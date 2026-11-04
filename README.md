@@ -12,7 +12,7 @@ ClickHouse-backed observability for you.  Two surfaces, one engine:
 `t0_agents.glow` for the four-line decorator path, the canonical
 `Agent` surface for the moments you need every escape hatch.
 
-> **Status**: Alpha. APIs are stabilising. Pinned against `tensorzero >= 2026.6.0` and `fastmcp >= 3.2.3`.
+> **Status**: Beta, built and used in production by Vest. Requires `tensorzero >= 2026.6.0` and `fastmcp >= 3.2.3`.
 
 ## Four lines, one agent.
 
@@ -29,8 +29,8 @@ print(await tutor("How do I say hello in formal Japanese?"))
 
 The docstring is the system prompt.  The return annotation picks the
 [`OutputMode`](docs/output-modes.md).  `await tutor(...)` returns the
-unwrapped string directly.  Install with the extra:
-`pip install 't0-agents[glow]'`.  Full tour at
+unwrapped string directly.  Install with the `[glow]` extra
+([Install](#install)).  Full tour at
 [`docs/glow/`](docs/glow/index.md).
 
 ## When you need the controls — drop down to Agent.
@@ -129,33 +129,27 @@ streaming, multi-agent, HTTP serving, the test harness, and the
 You pay only for what you use.  Base = adapter + loop + `Agent` +
 `InMemoryMemory` + guardrails + streaming + composition + testing.
 Everything that pulls a heavier third-party dependency lives behind an
-optional extra.
+optional extra.  Install from a release tag:
 
 ```bash
 # Base install (no Docker, no FastAPI, no SQLite).
-pip install t0-agents
+pip install "t0-agents @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
 
-# Adds pydantic + the @app.agent decorator surface (the four-line path).
-pip install 't0-agents[glow]'
-
-# Adds aiosqlite for cross-process memory persistence.
-pip install 't0-agents[memory-sqlite]'
-
-# Adds FastAPI + Uvicorn + Pydantic + sse-starlette for HTTP serving.
-pip install 't0-agents[serve]'
-
-# Adds Pydantic for StructuredOutput[M].
-pip install 't0-agents[pydantic]'
-
-# Combine extras as needed:
-pip install 't0-agents[glow,memory-sqlite,serve,pydantic]'
+# With the extras you need:
+pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
 ```
+
+| Extra | Adds |
+| --- | --- |
+| `glow` | pydantic + the `@app.agent` decorator surface (the four-line path) |
+| `memory-sqlite` | aiosqlite for cross-process memory and usage persistence |
+| `serve` | FastAPI + Uvicorn + Pydantic + sse-starlette for HTTP serving |
+| `pydantic` | Pydantic for `StructuredOutput[M]` |
 
 Or with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-uv add t0-agents                                   # base
-uv add 't0-agents[glow,memory-sqlite,serve,pydantic]' # with extras
+uv add "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
 ```
 
 ## Documentation
@@ -221,10 +215,10 @@ heavier extras live behind named installs.
 
 ## Status & Limitations
 
-t0-agents is **Alpha**.  APIs are stabilising between minor versions
-but may still change; pin to a specific `1.x.y` when consuming from
-another project (e.g. `pip install 't0-agents==1.0.1'` or
-`t0-agents @ git+https://github.com/<owner>/t0-agents.git@v1.0.1`).
+t0-agents is **Beta**: the API may still change between minor
+versions, and every change is recorded in [CHANGELOG.md](CHANGELOG.md).
+Pin a release tag when consuming from another project, as in
+[Install](#install).
 
 Known caveats today:
 
@@ -251,7 +245,8 @@ Known caveats today:
 ## Development
 
 ```bash
-uv sync                                     # install dev dependencies
+uv sync --all-extras                        # install dev dependencies and every extra
+bash ci/checks.sh                           # the gate every pull request runs
 uv run pytest -m "not integration and not embedded"   # offline unit tests
 uv run pytest -m integration                # requires docker compose up
 uv run pytest -m embedded                   # requires RUN_EMBEDDED_TESTS=1 + provider key
@@ -263,4 +258,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full pull-request workflow and th
 
 ## License
 
-MIT.  See [pyproject.toml](pyproject.toml) and [CHANGELOG.md](CHANGELOG.md).
+MIT.  See [LICENSE](LICENSE).
