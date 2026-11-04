@@ -111,7 +111,7 @@ Project conventions:
   imported from `mcp/`.
 - Extras are opt-in — no new hard dependency in base `pyproject.toml`.
   New third-party deps go under an extra (`[memory-sqlite]`,
-  `[serve]`, `[cli]`, etc.) and the submodule that needs them wraps
+  `[serve]`, etc.) and the submodule that needs them wraps
   the import in a `try`/`except ImportError` that raises a clear
   `T0AgentsError` naming the missing extra.
 
@@ -181,7 +181,7 @@ that no longer installs stays green here and breaks only for people
 installing the package:
 
 ```bash
-uv run --isolated --no-project --with ".[cli,glow]" \
+uv run --isolated --no-project --with ".[serve,glow]" \
   python -c "import t0_agents; print(t0_agents.__version__)"
 ```
 

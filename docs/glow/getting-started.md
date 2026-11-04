@@ -61,15 +61,6 @@ providers have credentials in the environment (e.g. `GROQ_API_KEY`).
 Production deployments should keep `build_http` against a managed
 gateway.
 
-Run an agent without writing a `main()` at all:
-
-```bash
-t0-agents run examples.glow.01_hello:app --agent tutor "hi"
-```
-
-(`--agent` is optional when the App registers exactly one agent.  See
-[`../cli.md`](../cli.md) for the REPL / one-shot / serve forms.)
-
 Install glow with the extra:
 
 ```bash

@@ -57,10 +57,6 @@ FastAPI, Uvicorn, Pydantic, and `sse-starlette>=2.0`:
 pip install 't0-agents[serve]'
 ```
 
-The TUI renderer that consumes the same events lives in
-`t0_agents.cli` behind the `[cli]` extra — see
-[`docs/cli.md`](cli.md).
-
 ## Quickstart
 
 ### Easiest — `stream_text()`, the text one-liner
@@ -449,20 +445,6 @@ out on `DoneEvent`.  For a terminal UI `print(text, end="",
 flush=True)` is enough; for a web UI, forward each `TextDeltaEvent` to
 the client as soon as it arrives.
 
-### Intermediate — REPL with Rich
-
-[`examples/agent/10_cli/`](../examples/agent/10_cli/) wraps `Run.events()` in a
-`rich.live.Live` display.  `t0_agents.cli.TUIRenderer` folds the event
-iterator into a live panel; `rich_elicitation_handler` provides
-browser-free `Prompt.ask()` modals when a tool calls `ctx.elicit()`.
-
-```bash
-uv run t0-agents run examples.10_cli.agent:assistant
-```
-
-See [`docs/cli.md`](cli.md) for the factory convention and the three
-CLI subcommands (`run`, `serve`, `info`).
-
 ### Advanced — HTTP with SSE, WebSocket, and elicitation
 
 [`examples/agent/07_streaming/`](../examples/agent/07_streaming/) ships a
@@ -751,11 +733,7 @@ Streaming makes a single agent's work visible. When a single agent is not enough
 - [`examples/agent/07_streaming/`](../examples/agent/07_streaming/) —
   runnable browser demo covering every event type and the
   elicitation round-trip.
-- [`examples/agent/10_cli/`](../examples/agent/10_cli/) — streaming REPL with
-  Rich and `rich_elicitation_handler`.
 - [`docs/elicitation.md`](elicitation.md) — the HITL contract the WS
   route bridges.
 - [`docs/serving.md`](serving.md) — non-streaming `POST /chat` and
   `POST /feedback` endpoints.
-- [`docs/cli.md`](cli.md) — `t0-agents run`, the TUI consumer of the
-  same event stream.

@@ -359,9 +359,9 @@ uv add t0-agents --extra pydantic
 `ImportError` surfaces as `ConfigurationError` with an install hint
 that points at this extra.
 
-The `[serve]` and `[cli]` extras also pull pydantic transitively (for
-FastAPI), so users of either may already have pydantic available
-without explicitly adding `[pydantic]`.
+The `[serve]` extra also pulls pydantic transitively (for FastAPI),
+so its users may already have pydantic available without explicitly
+adding `[pydantic]`.
 
 ---
 

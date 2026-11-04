@@ -278,8 +278,7 @@ composes eagerly against the built agent.
 The **caller owns the glow lifecycle** — keep the App entered for the
 server's lifetime, mirroring `share_client`'s caller-owns-the-Client
 contract.  Concretely: build the FastAPI app and run the server inside
-one `async with glow_app:` bracket (this is exactly what `t0-agents
-serve mymodule:app` does for you):
+one `async with glow_app:` bracket:
 
 ```python
 # launcher.py
@@ -303,12 +302,11 @@ if __name__ == "__main__":
 ```
 
 `share_client=True` (the default) serves every session over the glow
-App's own connected FastMCP client, so the same elicitation caveat as
-the CLI's serve mode applies; a **toolless** glow App has no client and
-raises `create_app`'s standard `share_client` error — compose
-`create_app` directly with a `client_factory` for that shape.  The
-one-liner for development is `t0-agents serve mymodule:app --agent
-tutor` (see [`cli.md`](cli.md#glow-app-specs)).
+App's own connected FastMCP client, so it suits tools that never call
+`ctx.elicit()` (see [Why a fresh Client per
+session](#why-a-fresh-client-per-session)); a **toolless** glow App has
+no client and raises `create_app`'s standard `share_client` error —
+compose `create_app` directly with a `client_factory` for that shape.
 
 ### `SessionFactory`
 
@@ -833,7 +831,7 @@ queries and feedback-emission patterns.
 
 ---
 
-The FastAPI layer covered above is the right target for production deployments. For development, quick demos, and local exploration, the `[cli]` extra ships a `t0-agents` console script that wraps the same `create_app(...)` behind `t0-agents serve`, adds an interactive `run` REPL that consumes `Run.events()` directly, and an `info` command that introspects any loaded agent factory. That is the subject of the next chapter: [CLI](cli.md).
+The FastAPI layer covered above is the right target for production deployments. Keeping it, and every layer beneath it, from regressing is the subject of the final chapter: `t0_agents.testing` provides `MockGateway` for deterministic unit tests (no Docker, no API keys) and `EmbeddedGatewayHelper` for real-inference integration tests without a long-lived gateway. See [Testing](testing.md).
 
 ## See also
 
@@ -850,8 +848,6 @@ The FastAPI layer covered above is the right target for production deployments. 
   `Agent.invoke`.
 - [Multi-agent composition](multi-agent.md) — sub-agents registered
   via `AgentConfig.sub_agents`.
-- [CLI](cli.md) — `t0-agents serve` wraps `create_app` with
-  `share_client=True` defaults for quick deployments.
 - [Observability](observability.md) — ClickHouse queries, dashboards,
   feedback patterns.
 - [Error handling](error-handling.md) — library-wide exception
