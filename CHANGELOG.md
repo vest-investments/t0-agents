@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.14.0] — 2026-11-03
+
+The first public release. The repository is published under the MIT
+licence with a security policy, the terminal UI leaves the package,
+and glow is documented as the stable, primary surface. Apart from the
+terminal UI, no public API changes.
+
+### Removed
+
+- **`t0_agents.cli`, the `[cli]` extra and the `t0-agents` console
+  script.**  The terminal UI (`run`, `serve`, `info`, `TUIRenderer`,
+  the Rich elicitation handlers, `load_agent_factory`) leaves the
+  package; 2.13.3 is the last release that ships it, and the
+  `wip/cli-tui` branch keeps its last state.  Serve a glow
+  App with `create_app_from_glow` and uvicorn
+  ([Serving](docs/serving.md#glow-apps)), and run the examples as
+  Python scripts.  The `10_cli` example and `docs/cli.md` go with it.
+- **`scripts/robustness_sanity.py`**, which only ran against one
+  private deployment.
+
+### Added
+
+- **`LICENSE`** (MIT) and **`SECURITY.md`**: report a vulnerability
+  through GitHub private vulnerability reporting, never in an issue.
+
+### Changed
+
+- **Development Status is Beta**, and glow is documented as the
+  stable, primary surface: the `experimental/glow` banners and the 1.x
+  version claims are gone, and the module table in `docs/index.md`
+  lists `tooling`, `usage` and `wire`.
+- **The README installs from the release tag** until the package is on
+  PyPI.
+- **`/info` and `/feedback` are documented as unauthenticated**; serve
+  the app behind your own auth ([Serving](docs/serving.md)).
+- Docs, examples and test fixtures use example hosts and generic
+  header names; `CONTRIBUTING.md` states that a fork's pull request
+  builds only after a maintainer's `/gcbrun`.
+
 ## [2.13.3] — 2026-11-01
 
 ### Fixed
