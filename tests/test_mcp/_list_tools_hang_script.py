@@ -8,9 +8,9 @@ hang, poisoning later App+uvicorn tests into order-dependent hangs; as
 a subprocess the driver's hard timeout converts the hang into a loud
 failure.
 
-This is the regression proof for the 2026-08-04 vest-ai incident: four
-servers answered the inventory fan-out, mcp-fred did not, and the turn
-hung forever.  Against a pre-fix runtime this script never exits.
+This is the regression proof for a production incident: four servers
+answered the inventory fan-out, a fifth did not, and the turn hung
+forever.  Against a pre-fix runtime this script never exits.
 
 Prints ``LIST-TOOLS-OK <names> <elapsed>s`` and exits 0 when the merged
 inventory comes back within the deadline despite the wedged server.

@@ -3,7 +3,7 @@
 ``project`` is the stateless event→frame translation (including the
 frozen terminal-error mapping); the stateful stages get their own test
 groups as they land. The end-to-end public projection is pinned
-separately by the ported vest-ai golden in ``test_public_golden.py``.
+separately by the ported golden in ``test_public_golden.py``.
 """
 
 from __future__ import annotations
@@ -541,7 +541,7 @@ class TestWithTextFallback:
         assert TextDeltaFrame(block_id="inf-1", delta="answer") in out
 
     async def test_saw_text_rearms_per_run_on_a_long_lived_stream(self) -> None:
-        """Deliberate deviation from vest-ai's projector, which never
+        """Deliberate deviation from the original projector, which never
         re-arms ``_saw_text`` and so suppresses the reasoning fallback
         for every run after the first texty one on the same connection.
         The library re-arms per run, consistent with the status

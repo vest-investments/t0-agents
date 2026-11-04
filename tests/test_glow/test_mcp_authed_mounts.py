@@ -237,8 +237,8 @@ async def test_authed_mount_propagates_identity_headers() -> None:
 
 
 async def test_per_message_app_lifecycle_over_shared_server() -> None:
-    """vest-ai builds a fresh App per user message; consecutive lifespans
-    against one server must each mount, list, and call cleanly (the
+    """A consumer may build a fresh App per user message; consecutive
+    lifespans against one server must each mount, list, and call cleanly (the
     compat proof for the runtime swap).
 
     Skipped when the ``serve`` extra (uvicorn) is absent."""

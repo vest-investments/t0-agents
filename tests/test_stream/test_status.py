@@ -1,7 +1,7 @@
 """Vectors for :mod:`t0_agents.stream.status` — the ported status policy.
 
 Ported from the production suite that pinned this policy at its origin
-(vest-ai's StatusTranslator): originals re-emit first; ``Calling …``
+(a consumer's StatusTranslator): originals re-emit first; ``Calling …``
 never dedupes; ``Thinking…`` dedupes within a contiguous thought block
 and is suppressed after a tool call until a terminal event re-arms it;
 tool identity splits on the longest known server prefix.

@@ -1,4 +1,4 @@
-"""Public-wire golden — the vest-ai byte-compat gate, ported at dict level.
+"""Public-wire golden — a production byte-compat gate, ported at dict level.
 
 For every event variant and every stateful fallback sequence, the
 public projection ``project → with_text_fallback → public_allowlist``
@@ -66,7 +66,7 @@ literal for the same reason."""
 class _GoldenMapper:
     """Frozen snapshot of the canonical public wire shape.
 
-    Ported verbatim (dict level) from vest-ai's byte-compat gate:
+    Ported verbatim (dict level) from a consumer's byte-compat gate:
     tracks whether a non-blank ``TextDeltaEvent`` was emitted during
     the turn so it can decide, on ``DoneEvent``, what to synthesise
     before ``done`` — the reasoning fallback ``chunk`` + ``end`` from

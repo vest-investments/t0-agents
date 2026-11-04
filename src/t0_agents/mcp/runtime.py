@@ -75,7 +75,7 @@ _SESSION_TERMINATED_CODE = 32600
 
 # A server whose SDK predates that mapping rejects an unknown session id
 # with a bare 400 instead.  Not an SDK contract but an observed server
-# behaviour (mcp-customers, staging and prod), and it never reaches the
+# behaviour seen in production, and it never reaches the
 # JSON-RPC layer — the transport raises for status first, so this shape
 # arrives as `httpx.HTTPStatusError`.
 _SESSION_REJECTED_STATUS = 400

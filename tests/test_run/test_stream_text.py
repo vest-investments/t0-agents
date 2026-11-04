@@ -5,7 +5,7 @@ emit no ``TextDeltaEvent`` (``response_source == "thought"``,
 ``AgentResult.response`` populated).  ``fallback=True`` (default) covers
 that path — and any other no-text turn with a non-blank response — by
 yielding ``result.response`` once after the stream drains.  The gate is
-"no non-blank delta streamed", matching the vest-ai MobileProjector belt
+"no non-blank delta streamed", matching the production projector belt
 this generalises; the library never invents retry copy for a genuinely
 empty turn.
 """
