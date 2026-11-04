@@ -856,11 +856,16 @@ class _WedgeableClient:
         self.hang_enter = hang_enter
         self.enter_error = enter_error
         self.enter_calls = 0
+        self.enter_cancelled = False
 
     async def __aenter__(self) -> _WedgeableClient:
         self.enter_calls += 1
         if self.hang_enter:
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.enter_cancelled = True
+                raise
         if self.enter_error is not None:
             raise self.enter_error
         return self
@@ -938,6 +943,7 @@ async def test_connect_bounds_a_handshake_that_never_answers(
     assert handle._connected
     assert handle.client is plan.minted[1]
     assert wedged.enter_calls == 1
+    assert wedged.enter_cancelled
 
 
 async def test_connect_remints_after_a_failed_enter() -> None:
