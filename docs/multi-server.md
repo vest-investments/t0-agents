@@ -62,7 +62,9 @@ the process.  Compared to composing servers by hand:
 
 - **Warm connections.**  The handshake happens once per server on first
   use; a warm tool call is a single POST.  (The pre-2.2 composite proxy
-  reconnected on every remote call.)
+  reconnected on every remote call.)  A handshake that has not finished
+  within 30 s raises `TimeoutError`, and the next call starts on a fresh
+  client.
 - **Mount-parity naming.**  `namespace="math"` prefixes tools as
   `math_add`; `prefix=False` presents names verbatim.
 - **Fail-loud collisions.**  Two mounts producing the same final tool
