@@ -1286,7 +1286,7 @@ async def test_failed_inventory_recovery_falls_back_to_last_known(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Recovery is attempted first; only when the rebuilt client also
-    fails does M2's degradation apply — and it still never raises.
+    fails does the last-known degradation apply — and it still never raises.
     Both warnings must appear, in that order: the re-list attempt, then
     the last-known fallback."""
     clock = _Clock()

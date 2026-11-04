@@ -11,7 +11,7 @@ Two first-class capabilities land here:
 
 The unit tests pin glow's contract (which transport it builds); the
 guarded end-to-end witness proves the four identity headers actually
-reach a server over real HTTP — mirroring the M9 pilot witness.
+reach a server over real HTTP.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ async def test_remote_target_timeout_factory_pins_read_and_mints_fresh_clients()
 
 async def test_authed_mount_propagates_identity_headers() -> None:
     """The four identity headers (3 static + 1 via ``httpx.Auth``) reach a
-    server over real HTTP through glow's mount — the M9 witness, in-loop.
+    server over real HTTP through glow's mount.
 
     Skipped when the ``serve`` extra (uvicorn) is absent."""
     uvicorn = pytest.importorskip("uvicorn")
@@ -238,8 +238,7 @@ async def test_authed_mount_propagates_identity_headers() -> None:
 
 async def test_per_message_app_lifecycle_over_shared_server() -> None:
     """A consumer may build a fresh App per user message; consecutive
-    lifespans against one server must each mount, list, and call cleanly (the
-    compat proof for the runtime swap).
+    lifespans against one server must each mount, list, and call cleanly.
 
     Skipped when the ``serve`` extra (uvicorn) is absent."""
     uvicorn = pytest.importorskip("uvicorn")
