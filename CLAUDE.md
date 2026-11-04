@@ -4,63 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-t0-agents is a Python library that bridges TensorZero (LLM inference gateway) and FastMCP (MCP server framework), enabling LLM agents to discover and execute tools exposed by MCP servers through TensorZero's inference gateway. Alpha status — not production-ready.
+t0-agents is a Python agent framework over the TensorZero gateway (inference, episodes, observability) and FastMCP (tools). Beta. Two surfaces, one engine: `t0_agents.glow` (`App`, `@app.agent`) is the primary API, and every glow agent compiles to a `t0_agents.Agent`, the explicit surface (`Agent`, `Run[T]`, `Middleware`, `OutputMode[T]`).
 
 ## Commands
 
 ```bash
-uv sync                            # Install dependencies (creates venv automatically)
-uv run pytest                      # Run all tests (integration tests fail unless gateway is up)
-uv run pytest -m "not integration" # Offline tests only — safe default
-uv run pytest -m integration       # Requires `docker compose up` first
-uv run pytest tests/test_mcp/test_adapter.py  # Run a single test file
-uv run pytest -k "test_name"       # Run a single test by name
-uv run ruff check src/             # Lint
-uv run ruff check --fix src/       # Lint with auto-fix
-uv run mypy src/                   # Type check (strict mode)
-bash ci/checks.sh                  # The CI gate (Cloud Build t0-agents-pr)
-
-# Local TensorZero gateway (needed for integration tests and examples)
-docker compose up -d               # Boots gateway:2026.6.0 + clickhouse:lts; needs GROQ_API_KEY in .env
-docker compose down                # Stop containers (ClickHouse data persists in named volume)
+uv sync --all-extras                                  # dev group + every extra; mypy src/ needs the extras
+bash ci/checks.sh                                     # the PR gate (Cloud Build t0-agents-pr)
+uv run pytest -m "not integration and not embedded"   # offline suite
+uv run pytest tests/test_glow/test_app.py -k "name"   # one file / one test
+uv run ruff check src/ tests/
+uv run mypy src/                                      # strict
+docker compose up -d                                  # gateway + ClickHouse for -m integration; GROQ_API_KEY in .env
+GROQ_API_KEY=... RUN_EMBEDDED_TESTS=1 uv run pytest -m embedded
 ```
 
-## Architecture
+## Layout
 
-**Agent loop flow:** User query → TensorZero inference (with tool list) → LLM returns text + tool calls → execute tools via FastMCP client → feed results back → loop until done or max turns → return `AgentResult`. Tools and the MCP `Client` are optional; single-shot output modes and chat-only agents work without them (`run_agent(..., tool_provider=None)` skips `list_tools()` and never allocates a FastMCP server).
+`src/t0_agents/`, one package per row of the module table in `docs/index.md`:
 
-Two key modules under `src/t0_agents/`:
+- `glow/`: `App`, `@app.agent`, `@app.tool`, `Depends`, `MCPServer`, conversations, `FluentRun`.
+- `core/`: `Agent`, `AgentConfig`, `Run[T]`, the middleware chain, output modes, exceptions, the elicitation forwarder.
+- `mcp/`: the tool adapter, the loop (`run_agent`) and `MCPRuntime` (one warm client per server). It imports only `core` and itself.
+- `stream/`: the `AgentEvent` union, the streaming loop and assembler, status hints.
+- `memory/`: `MemoryProvider` with in-memory, SQLite and TensorZero backends. `usage/`: `UsageLedger` with in-memory and SQLite backends.
+- `guardrails/`: policy guardrails. `tooling/`: `FilteredToolProvider`, the `tools=` allow-list.
+- `delegation/`: sub-agents as `{name}_ask` tools. `serve/`: the `create_app` FastAPI layer. `wire/`: the versioned frame contract for stream consumers.
+- `testing/`: `MockGateway`, `MockToolProvider`, assertions and pytest fixtures, shipped in the base install.
 
-- **`mcp/adapter.py`** — Converts FastMCP tools to TensorZero's JSON Schema format, serializes tool results back. Three functions: `convert_tools`, `serialize_tool_result`, `build_tool_result`.
-- **`mcp/loop.py`** — Orchestrates the agent loop. `run_agent` is the main entry point (re-exported from package root). Also contains `execute_tool_calls` and `has_tool_calls`.
-- **`core/types.py`** — `AgentResult` dataclass (response, episode_id, inference_ids, turns).
-- **`core/exceptions.py`** — `MaxTurnsExceededError`.
-
-Public API: `from t0_agents import run_agent`
+Tests mirror the packages under `tests/test_<package>/`; shared fakes are `tests/_fake_t0.py`, `tests/_fake_mcp.py` and `tests/server.py`. Unmarked tests are offline and are the gate; `integration` needs `docker compose up`, `embedded` needs `RUN_EMBEDDED_TESTS=1`. `docs/` is a progressive tour (`docs/index.md`) and changes with the code.
 
 ## Code Style & Conventions
 
-- Python >= 3.11, targeting 3.11/3.12/3.13
-- mypy strict mode — all code must be fully typed
-- Ruff rules: E, F, I, N, UP, RUF. Line length 100.
-- Async-first: agent loop and tool execution are async. Tests use `asyncio_mode = "auto"` (no `@pytest.mark.asyncio` decorator needed).
-- `src/` layout with hatchling build backend
+- Python >= 3.11 (3.11–3.13), mypy strict, ruff `E, F, I, N, UP, RUF`, line length 100.
+- Async-first; tests run with `asyncio_mode = "auto"`.
+- No new hard dependency: a third-party package goes behind an extra, imported in a `try`/`except ImportError` that names the extra.
+- Feature PRs leave `CHANGELOG.md` alone. A release is its own PR touching `CHANGELOG.md`, `VERSION`, `pyproject.toml`, `src/t0_agents/__init__.py` and `uv.lock`; merging it tags `vX.Y.Z` (CONTRIBUTING.md § Before you open a PR).
 
 ## Commit & PR Conventions
 
-This library will be made public, so commit history is part of the deliverable — keep it readable.
+The commit history is public and part of the deliverable — keep it readable.
 
-- **Never open a PR with a single giant commit.** Whenever the user asks to push changes and open a PR, split the work into multiple commits that tell the story of what was implemented. Each commit should be a logical, self-contained step (e.g. new module → internal call-site migration → test migration → docs → CHANGELOG). A non-trivial PR typically has 5–10 commits telling the story of the change, not 1.
-- **One concern per commit.** Mixing a refactor, a new feature, and unrelated test fixes in the same commit is a smell — split them.
-- **Match the existing style.** Conventional-commit prefixes (`feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs(scope): …`, `refactor(scope): …`) as seen in `git log`. Imperative mood, lowercase summary, ≤ 72 char first line, body wrapped at ~72 for the "why".
-- **Group, don't squash mid-stream.** If you've been working in a single session, plan the commit boundaries before staging — don't dump everything into one `git add -A` at the end.
+- **Never open a PR with a single giant commit.** Split the work into commits that tell the story of the change, each a logical, self-contained step (e.g. new module → call-site migration → tests → docs). A non-trivial PR typically has 5–10 commits.
+- **One concern per commit.** A refactor, a feature and unrelated test fixes go in separate commits.
+- **Match the existing style.** Conventional-commit prefixes (`feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs(scope): …`, `refactor(scope): …`), imperative mood, lowercase summary, ≤ 72 char first line, body wrapped at ~72 for the "why".
 - Co-authored-by trailers are fine and expected when Claude assisted.
-
-## Test Infrastructure
-
-- `tests/server.py` — Shared FastMCP test server. Tools: `add(a, b)`, `greet(name)`, `search(params: SearchParams)` (Pydantic-model parameter), `echo_no_docs(value)` (no docstring, anchors the `description=None` case)
-- `tests/conftest.py` — `mcp_client` fixture (typed `Client[Any]`) returns a disconnected `Client(mcp)`; tests enter the context themselves with `async with mcp_client:`
-- `tests/test_infrastructure.py` — Infrastructure validations. The inference test is marked `@pytest.mark.integration`
-- `tests/test_mcp/test_adapter.py` — Unit tests for the tools and results adapter
-- `tests/test_mcp/test_integration.py` — Integration tests for the full MCP bridge; module-level `pytestmark = pytest.mark.integration`
-- Integration tests marked with `@pytest.mark.integration` require `docker compose up` to be running
