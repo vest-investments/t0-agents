@@ -65,6 +65,11 @@ _TOOL_LIST_TTL_SECONDS = 60.0
 # clear), which as an inventory deadline would be no deadline at all.
 _TOOL_LIST_TIMEOUT_SECONDS = 10.0
 
+# Deadline on a handle's first enter.  Not the call's ``timeout``: that
+# may be ``None`` for a call that waits on a human, and a dropped
+# handshake would then hold the handle's lock forever.
+_CONNECT_TIMEOUT_SECONDS = 30.0
+
 _POOL_IDLE_TTL_SECONDS = 900.0
 _POOL_MAX_SIZE = 1024
 
@@ -401,6 +406,10 @@ class _ServerHandle:
         wedges, turning a transient outage into a permanent one).  The
         except arm re-mints while still holding the lock, so no queued
         caller can ever observe the tainted client.
+
+        The enter is bounded by ``_CONNECT_TIMEOUT_SECONDS``: a handshake
+        whose ``initialize`` response never arrives raises
+        :class:`TimeoutError` instead of hanging every queued caller.
         """
         if self._connected:
             return
@@ -408,7 +417,8 @@ class _ServerHandle:
             if self._connected:
                 return
             try:
-                await self._stack.enter_async_context(self.client)
+                async with asyncio.timeout(_CONNECT_TIMEOUT_SECONDS):
+                    await self._stack.enter_async_context(self.client)
             except BaseException:
                 self._remint_locked()
                 raise
