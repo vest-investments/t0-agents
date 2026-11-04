@@ -16,7 +16,8 @@ terminal UI, no public API changes.
 - **`t0_agents.cli`, the `[cli]` extra and the `t0-agents` console
   script.**  The terminal UI (`run`, `serve`, `info`, `TUIRenderer`,
   the Rich elicitation handlers, `load_agent_factory`) leaves the
-  package; its last state is the `wip/cli-tui` branch.  Serve a glow
+  package; 2.13.3 is the last release that ships it, and the
+  `wip/cli-tui` branch keeps its last state.  Serve a glow
   App with `create_app_from_glow` and uvicorn
   ([Serving](docs/serving.md#glow-apps)), and run the examples as
   Python scripts.  The `10_cli` example and `docs/cli.md` go with it.
