@@ -859,8 +859,8 @@ async def test_streaming_loop_thought_only_raw_text_yields_response() -> None:
 
 async def test_streaming_loop_still_emits_thought_events_for_devui() -> None:
     """DevUI no-regression: a thought+text turn still surfaces
-    ThoughtDeltaEvent/ThoughtEvent so the cli/tui devui surface keeps
-    rendering reasoning — the final response is the ``Text`` block and the
+    ThoughtDeltaEvent/ThoughtEvent so a devui keeps rendering
+    reasoning — the final response is the ``Text`` block and the
     ``_final_text`` change does not suppress thought events."""
     fake_t0 = FakeT0(
         responses=[
