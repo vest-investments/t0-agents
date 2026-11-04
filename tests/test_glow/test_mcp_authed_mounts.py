@@ -213,9 +213,9 @@ async def test_authed_mount_propagates_identity_headers() -> None:
                     url=f"http://127.0.0.1:{port}/mcp",
                     namespace="svc",
                     headers={
-                        "X-Vest-Customer-Id": "c-1",
-                        "X-Vest-Customer-Token": "tok-1",
-                        "X-Vest-Session-Source": "api",
+                        "X-Tenant-Id": "c-1",
+                        "X-Tenant-Token": "tok-1",
+                        "X-Session-Source": "api",
                     },
                     auth=_ServiceAuth("service-token"),
                 )
@@ -230,9 +230,9 @@ async def test_authed_mount_propagates_identity_headers() -> None:
         server.should_exit = True
         await serve_task
 
-    assert seen.get("x-vest-customer-id") == "c-1"
-    assert seen.get("x-vest-customer-token") == "tok-1"
-    assert seen.get("x-vest-session-source") == "api"
+    assert seen.get("x-tenant-id") == "c-1"
+    assert seen.get("x-tenant-token") == "tok-1"
+    assert seen.get("x-session-source") == "api"
     assert seen.get("x-service-auth-token") == "service-token"
 
 
@@ -271,7 +271,7 @@ async def test_per_message_app_lifecycle_over_shared_server() -> None:
                     MCPServer(
                         url=f"http://127.0.0.1:{port}/mcp",
                         namespace="svc",
-                        headers={"X-Vest-Customer-Id": f"c-{message}"},
+                        headers={"X-Tenant-Id": f"c-{message}"},
                         auth=_ServiceAuth("service-token"),
                     )
                 ],
