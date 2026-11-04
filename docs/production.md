@@ -22,6 +22,13 @@ client = Client("https://mcp.example.com/mcp")
 # For auth: use StreamableHttpTransport with headers={"Authorization": "Bearer <token>"}
 ```
 
+Mount the server's final URL. The MCP transports follow a redirect only
+within the URL's origin (same scheme, host and port, or http to https on the
+same host), such as a 307/308 that adds a trailing slash. A mount whose URL
+redirects to another origin never connects: `MCPRuntime` leaves its tools
+out of the inventory, and a call raises `httpx.HTTPStatusError` naming the
+location.
+
 ## TensorZero gateway deployment
 
 **Development**: use Docker Compose. The project includes a compose file that boots the gateway and ClickHouse.
@@ -266,6 +273,11 @@ resolve.
 `fastmcp.server.auth` is documented upstream as unstable even across patch
 releases; t0-agents does not import it, so its churn does not affect this
 library.
+
+3.2.4 carries one open advisory, GHSA-7xgj-8392-5q4r (fixed in 3.4.10): a
+FastMCP server that combines a component `AuthCheck` with a transform skips
+the check on direct calls. t0-agents sets neither, so the fix waits for the
+audited 3.4 bump; a deployment serving its own FastMCP with both should not.
 
 ## Rate limits and quotas
 

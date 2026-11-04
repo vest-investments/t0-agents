@@ -155,7 +155,7 @@ uv add "t0-agents[glow]"
 Or straight from a release tag:
 
 ```bash
-pip install "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
+pip install "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
 ```
 
 ## Documentation
@@ -223,7 +223,7 @@ heavier extras live behind named installs.
 
 t0-agents is **Beta**: the API may still change between minor
 versions, and every change is recorded in [CHANGELOG.md](CHANGELOG.md).
-Pin a version (`t0-agents==2.14.0`) or a release tag when consuming
+Pin a version (`t0-agents==X.Y.Z`) or a release tag when consuming
 from another project; see [Install](#install).
 
 Known caveats today:

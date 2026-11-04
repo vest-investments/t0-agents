@@ -8,17 +8,17 @@ tool call because each proxied call ran ``client.new()`` against a
 disconnected target; here the handshake happens once per server on first
 use and every later call rides the same warm session.
 
-Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.27.0:
+Design notes, verified against installed fastmcp 3.2.4 / mcp SDK 1.30.0:
 
 * fastmcp ``Client`` context managers are reentrant and refcounted, and the
   SDK session multiplexes concurrent requests by request id — one warm
   client per server serves any number of concurrent conversations.
-* The server side may reap idle sessions: ``StreamableHTTPSessionManager``
-  accepts ``session_idle_timeout`` (seconds; default ``None`` = never,
-  incompatible with stateless mode).  A reaped/rolled session surfaces on
-  the next call as ``McpError`` with ``error.code == 32600`` ("Session
-  terminated") — the SDK maps the transport's HTTP 404 to that error
-  *before dispatch*, so the request provably never executed.
+* The server side reaps idle sessions: ``StreamableHTTPSessionManager``
+  closes a stateful session idle for ``session_idle_timeout`` seconds
+  (default 1800; unused in stateless mode).  A reaped/rolled session
+  surfaces on the next call as ``McpError`` with ``error.code == 32600``
+  ("Session terminated") — the SDK maps the transport's HTTP 404 to that
+  error *before dispatch*, so the request provably never executed.
 * ``tools/list_changed`` notifications ride the server's GET stream, which
   the SDK abandons after 2 failed reconnects; a TTL on any inventory cache
   is the backstop for silently-lost notifications, not a luxury.
@@ -69,7 +69,7 @@ _POOL_IDLE_TTL_SECONDS = 900.0
 _POOL_MAX_SIZE = 1024
 
 # The SDK maps a POST rejected with HTTP 404 (dead/rolled session) to a
-# JSON-RPC error with this positive literal code — mcp 1.27.0
+# JSON-RPC error with this positive literal code — mcp 1.30.0
 # streamable_http.py `_send_session_terminated_error`.
 _SESSION_TERMINATED_CODE = 32600
 
