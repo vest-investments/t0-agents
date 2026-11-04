@@ -22,6 +22,13 @@ client = Client("https://mcp.example.com/mcp")
 # For auth: use StreamableHttpTransport with headers={"Authorization": "Bearer <token>"}
 ```
 
+Mount the server's final URL. The MCP transports follow a redirect only
+within the URL's origin (same scheme, host and port, or http to https on the
+same host), such as a 307/308 that adds a trailing slash. A mount whose URL
+redirects to another origin never connects: `MCPRuntime` leaves its tools
+out of the inventory, and a call raises `httpx.HTTPStatusError` naming the
+location.
+
 ## TensorZero gateway deployment
 
 **Development**: use Docker Compose. The project includes a compose file that boots the gateway and ClickHouse.
