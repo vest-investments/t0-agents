@@ -8,7 +8,7 @@ tool call because each proxied call ran ``client.new()`` against a
 disconnected target; here the handshake happens once per server on first
 use and every later call rides the same warm session.
 
-Design notes, verified against installed fastmcp 3.2.3 / mcp SDK 1.30.0:
+Design notes, verified against installed fastmcp 3.2.4 / mcp SDK 1.30.0:
 
 * fastmcp ``Client`` context managers are reentrant and refcounted, and the
   SDK session multiplexes concurrent requests by request id — one warm
