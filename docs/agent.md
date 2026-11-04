@@ -1,6 +1,6 @@
 # Agent
 
-The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.invoke(message)` surface that returns a `Run[T]` handle (awaitable for the final `AgentResult`, iterable for live `AgentEvent`s). Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, the TUI, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
+The `Agent` class is the declarative front door of t0-agents. It holds your configuration, your TensorZero gateway, and your tool provider in one object, then exposes a clean `.invoke(message)` surface that returns a `Run[T]` handle (awaitable for the final `AgentResult`, iterable for live `AgentEvent`s). Every higher-level feature in this library — memory, guardrails, streaming, HTTP serving, multi-agent composition, testing — plugs in through `Agent` without changing the shape of the class.
 
 > **Prefer the four-line decorator path?** Start at
 > [`docs/glow/`](glow/index.md) — this page documents the canonical
@@ -59,7 +59,6 @@ Requires Python 3.11+. The base install pulls in [`tensorzero`](https://www.tens
 | *(none)* | `Agent`, `AgentConfig`, `ToolProvider`, exceptions, `run_agent` | this page |
 | `memory-sqlite` | `SqliteMemory` for persistent `MemoryProvider` backends | [memory.md](memory.md) |
 | `serve` | FastAPI wrapper (`serve.create_app`) | [serving.md](serving.md), [streaming.md](streaming.md) |
-| `cli` | Typer + Rich terminal UI (`t0-agents run`) | [cli.md](cli.md) |
 
 ## Quickstart
 

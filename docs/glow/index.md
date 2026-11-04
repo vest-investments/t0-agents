@@ -82,5 +82,5 @@ moments the decorator is in your way.  See
 
 This is the glow ladder.  For the canonical v1.0 narratives — `Agent`,
 `Run[T]`, `Middleware`, `OutputMode[T]`, memory, guardrails, streaming,
-multi-agent, serving, the CLI, testing — see
+multi-agent, serving, testing — see
 [`../index.md`](../index.md).
