@@ -347,6 +347,43 @@ async def test_remote_elicitation_reaches_app_scoped_handler() -> None:
     assert result.data == "placed"
 
 
+def _redirecting_to(location: str) -> Callable[[Any], Any]:
+    def wrap(app: Any) -> Any:
+        async def redirect(scope: Any, receive: Any, send: Any) -> None:
+            if scope["type"] != "http":
+                await app(scope, receive, send)
+                return
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 307,
+                    "headers": [(b"location", location.encode())],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+
+        return redirect
+
+    return wrap
+
+
+async def test_cross_origin_redirect_is_not_followed() -> None:
+    """An ``MCPServer(url=)`` that redirects to another origin never connects:
+    the inventory leaves it out and a call raises ``httpx.HTTPStatusError``
+    without reaching the redirect's target."""
+    executions: list[str] = []
+    async with _ephemeral_http_server(_counting_server(executions)) as target:
+        async with _ephemeral_http_server(
+            FastMCP("redirector"), wrap_asgi=_redirecting_to(target)
+        ) as url:
+            spec = MCPServer(url=url, namespace="svc")._to_spec()
+            async with MCPRuntime([spec]) as runtime:
+                assert await runtime.list_tools() == []
+                with pytest.raises(httpx.HTTPStatusError, match="not followed"):
+                    await runtime.call_tool("svc_work", {})
+    assert executions == []
+
+
 # --- Inventory cache: TTL, invalidation, refresh ----------------------------
 
 

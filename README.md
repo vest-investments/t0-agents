@@ -133,10 +133,10 @@ optional extra.  Install from a release tag:
 
 ```bash
 # Base install (no Docker, no FastAPI, no SQLite).
-pip install "t0-agents @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
+pip install "t0-agents @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
 
 # With the extras you need:
-pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
+pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
 ```
 
 | Extra | Adds |
@@ -149,7 +149,7 @@ pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.c
 Or with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-uv add "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.0"
+uv add "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
 ```
 
 ## Documentation

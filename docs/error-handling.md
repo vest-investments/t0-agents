@@ -218,7 +218,7 @@ conversation in the process. Resolving a `tools=` filter is the exception: it
 happens once, so a server that never answered raises `T0AgentsError` there
 instead of being excluded for the App's lifetime.
 
-Two ground truths worth committing to memory (mcp SDK 1.27.0, source-verified):
+Two ground truths worth committing to memory (mcp SDK 1.30.0, source-verified):
 
 - **A dead request stream is a hang, not an error.** When layer 3 fires
   mid-request, the SDK swallows the read-timeout on the request's SSE stream
