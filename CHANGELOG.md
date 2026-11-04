@@ -4,18 +4,6 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
-
-### Removed
-
-- **`t0_agents.cli`, the `[cli]` extra and the `t0-agents` console
-  script.**  The terminal UI (`run`, `serve`, `info`, `TUIRenderer`,
-  the Rich elicitation handlers, `load_agent_factory`) leaves the
-  package; its last state is the `wip/cli-tui` branch.  Serve a glow
-  App with `create_app_from_glow` and uvicorn
-  ([Serving](docs/serving.md#glow-apps)), and run the examples as
-  Python scripts.  The `10_cli` example and `docs/cli.md` go with it.
-
 ## [2.13.3] — 2026-11-01
 
 ### Fixed
