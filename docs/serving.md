@@ -727,6 +727,10 @@ and stays below the LB's idle threshold.
 
 ### BYO middleware — auth, CORS, rate limiting
 
+Every route is unauthenticated by design: `/info` describes the agent's
+configuration and `/feedback` writes to the gateway for any caller, so
+the app must sit behind your own auth.
+
 `create_app` returns a plain `FastAPI` instance — compose any
 middleware you would add to a hand-rolled service. For an API-key
 gate:
