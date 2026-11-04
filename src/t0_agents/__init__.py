@@ -4,7 +4,7 @@ import logging
 
 from tensorzero import ToolChoice
 
-__version__ = "2.14.0"
+__version__ = "2.14.1"
 
 from t0_agents.core.agent import AGENT_TAG, Agent
 from t0_agents.core.config import AgentConfig

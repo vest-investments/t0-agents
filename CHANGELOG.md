@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.14.1] — 2026-11-03
+
+A dependency security release: every locked dependency with an open
+advisory moves to a patched version except fastmcp, and the mcp floor
+rises to 1.30.0. No public API changes.
+
+### Security
+
+- **`mcp>=1.30.0`** (was `>=1.24.0`), locked at 1.30.0 (was 1.27.0),
+  closes seven advisories, three of them high.  The HTTP transports now
+  follow a redirect only within the endpoint's origin
+  (GHSA-5h93-6whr-6q8j): an `MCPServer` URL that redirects to another
+  origin fails to connect with `httpx.HTTPStatusError` instead of being
+  followed.
+- **Patched transitive dependencies in the lock**: starlette 1.10.0,
+  python-multipart 0.0.33, authlib 1.9.3, cryptography 50.0.2, certifi
+  2026.10.23, idna 3.20, dnspython 2.9.2, pydantic-settings 2.16.2 and
+  opentelemetry-api 1.45.2.  This lock does not reach yours: upgrade
+  them in your own project with `uv lock --upgrade-package`.
+- **fastmcp stays at 3.2.4** until 3.3 and 3.4 are audited.  Its open
+  advisory, GHSA-7xgj-8392-5q4r, reaches only a FastMCP server that
+  combines a component `AuthCheck` with a transform, and t0-agents sets
+  neither ([Production](docs/production.md#fastmcp-version-compatibility)).
+
+### Notes
+
+- An MCP server on mcp 1.30 or later closes a session that has been idle
+  for 30 minutes by default.  `MCPRuntime` sees the next call's 404 as
+  code `32600`, rebuilds the client and re-sends the call once, as it
+  does after a server rolls ([Session loss](docs/error-handling.md#session-loss)).
+
 ## [2.14.0] — 2026-11-03
 
 The first public release. The repository is published under the MIT
