@@ -19,10 +19,6 @@ Run it:
 
     uv run python examples/glow/01_hello.py
 
-or straight from the CLI (no main() of your own needed):
-
-    t0-agents run examples.glow.01_hello:app --agent tutor "How do I say hello in formal Japanese?"
-
 Prefer explicit wiring?  ``App(gateway="http://localhost:3000")``,
 ``App(embedded="examples/glow/config/tensorzero.toml")``, or the classic
 ``App(t0=<your AsyncTensorZeroGateway>)`` all work the same way.

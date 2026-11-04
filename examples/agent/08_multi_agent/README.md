@@ -34,9 +34,6 @@ uv sync                                    # no extras needed — compose has ze
 # Python entrypoint:
 uv run python examples/agent/08_multi_agent/main.py
 
-# CLI factory (same thing, through t0-agents run):
-uv run t0-agents run examples.agent.08_multi_agent.agents:orchestrator_factory
-
 # Advanced variant — nested orchestrators (project_lead → report_drafter
 # → researcher + writer). Same prerequisites as main.py.
 uv run python examples/agent/08_multi_agent/advanced.py
@@ -79,7 +76,7 @@ value is whatever the sub-agent produced via `sub_agent.invoke(message)`.
 ```
 examples/agent/08_multi_agent/
 ├── README.md                   ← this file
-├── agents.py                   ← @asynccontextmanager factory for the CLI
+├── agents.py                   ← @asynccontextmanager factory main.py drives
 ├── main.py                     ← Python entrypoint (Intermediate tier)
 ├── advanced.py                 ← nested orchestrators (Advanced tier)
 ├── arxiv_server.py             ← FastMCP server with search_papers
@@ -88,14 +85,6 @@ examples/agent/08_multi_agent/
 └── config/
     └── tensorzero.toml         ← research, writing, orchestrator functions
 ```
-
-## Inspect composed agents
-
-`t0-agents info` only shows the orchestrator's config — sub-agent
-metadata is not surfaced via `info` (the field is a `list[Agent]`
-under `AgentConfig.sub_agents`, not a scalar knob).  To see the
-sub-agent tools on the orchestrator's FastMCP server, run the
-example and watch the tool calls scroll past.
 
 ## Caveats
 
