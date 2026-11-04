@@ -170,7 +170,7 @@ picks up the tension the previous one left open.  Start at
 - [Depends and tools](docs/glow/depends-and-tools.md) — value-style injection and sub-agent injection via `Depends(...)`.
 - [Typed MCP and guardrails](docs/glow/typed-mcp-and-guardrails.md) — class-based `MCPServer` and `Annotated[T, guardrail(...)]` metadata.
 - [Escape hatch](docs/glow/escape-hatch.md) — `wrapper._agent` IS the v1.0 `Agent`; lifespan + drop-down recipes.
-- [Known limitations](docs/glow/limitations.md) — what's deferred to v1.1.
+- [Known limitations](docs/glow/limitations.md) — what glow does not do yet.
 
 **Agent — the canonical, fully-typed surface**
 - [Getting Started](docs/getting-started.md) — install and run your first agent.
@@ -228,9 +228,8 @@ another project (e.g. `pip install 't0-agents==1.0.1'` or
 
 Known caveats today:
 
-- **`t0_agents.glow`** ships behind the `[glow]` extra and is marked
-  **Experimental** — its public surface may change in `1.1.x`.  The
-  full list of caveats lives in
+- **`t0_agents.glow`** ships behind the `[glow]` extra.  What it does
+  not do yet is listed in
   [`docs/glow/limitations.md`](docs/glow/limitations.md).
 - **JSON output modes do not stream.** `JsonOutput` and
   `StructuredOutput` are single-shot by design; constructing

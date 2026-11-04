@@ -8,7 +8,7 @@ The library ships **two surfaces, one engine**: [`t0_agents.glow`](glow/index.md
 
 | Module | Status | Description |
 |--------|--------|-------------|
-| `t0_agents.glow` | Experimental | FastAPI-style decorator surface (`[glow]` extra): `App`, `@app.agent`, `@app.tool`, `Depends`, `FluentRun`, class-based `MCPServer`, seven typed event selectors (`Thought`, `ToolCall`, `Text`, `ToolResult`, `TurnEnd`, `Done`, `Error`), `regex_guardrail` re-export.  Four-line "hello agent" path that compiles down to a real v1.0 `Agent`.  See the [`docs/glow/`](glow/index.md) ladder. |
+| `t0_agents.glow` | Stable | FastAPI-style decorator surface (`[glow]` extra): `App`, `@app.agent`, `@app.tool`, `Depends`, `FluentRun`, class-based `MCPServer`, seven typed event selectors (`Thought`, `ToolCall`, `Text`, `ToolResult`, `TurnEnd`, `Done`, `Error`), `regex_guardrail` re-export.  Four-line "hello agent" path that compiles down to a real v1.0 `Agent`.  See the [`docs/glow/`](glow/index.md) ladder. |
 | `t0_agents.core` | Stable | Declarative agent primitives: `Agent`, `AgentConfig`, `AgentResult`, the collaborator Protocols (`ToolProvider`, `MemoryProvider`, `Guardrail`), the `T0AgentsError` exception hierarchy, the `ElicitationForwarder` remote-channel bridge, the v1.0 three-abstraction surface (`Run[T]`, `Middleware`, `OutputMode[T]`), and the JSON-function dispatch covered in [Output modes](output-modes.md) and the legacy [Structured outputs](structured-outputs.md) reference. |
 | `t0_agents.mcp` | Stable | MCP adapter (`convert_tools`, `serialize_tool_result`, `build_tool_result`), agent loop (`run_agent`, `execute_tool_calls`, `execute_tool_calls_parallel`, `has_tool_calls`), and reference elicitation handlers (`auto_approve_handler`, `auto_decline_handler`) |
 | `t0_agents.memory` | Stable | Cross-run persistence keyed by TensorZero's episode id: the `MemoryProvider` Protocol, `MemoryRecord` dataclass, `render_memory_summary` renderer, the ephemeral `InMemoryMemory`, the SQLite-backed `SqliteMemory`, and `TensorZeroMemory` for episode-scoped reads from TZ's observability log (with the `memory_strategy="messages"` native-history path that threads conversation history through `input.messages` without stringification) |
@@ -33,7 +33,7 @@ live under [`examples/glow/`](../examples/glow/).
 5. **[Escape hatch](glow/escape-hatch.md)** — `wrapper._agent` IS the v1.0 `Agent`; lifespan / build / shutdown; drop-down recipes for middleware, custom `OutputMode`, hand-rolled event handling, and `replay()`.
 6. **[Conversations](glow/conversations.md)** — a second turn: `agent.conversation()` / `send()`, the pinned `conv.id == episode_id`, memory-strategy-aware history, `hydrate=` resume, and `app.conversations(...)` listing.
 7. **[Multi-tenant apps](glow/multi-tenant.md)** — identity per conversation over ONE long-lived App: `conversation(auth= / elicitation_handler= / memory= / tools=)`, the `(server, identity)` client pool, `elicits=True` routing, and the one-App-per-tenant migration.
-8. **[Known limitations](glow/limitations.md)** — what's deferred to v1.1 (streaming JSON, AsyncIterator tools, sync API).
+8. **[Known limitations](glow/limitations.md)** — what glow does not do yet (streaming JSON, AsyncIterator tools, sync API).
 
 ### Agent — the canonical, fully-typed surface
 

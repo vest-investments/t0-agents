@@ -1,4 +1,4 @@
-# glow examples (experimental)
+# glow examples
 
 The 8-line "hello agent" lives here — module-level `App()`, no gateway
 ceremony:
@@ -57,7 +57,6 @@ When you're done:
 docker compose -f examples/glow/docker-compose.yml --env-file .env down
 ```
 
-> **Experimental.** The `t0_agents.glow` public surface is unstable
-> until further notice; expect breaking changes between minor
-> releases. The explicit `Agent` track in
-> [`../agent/`](../agent/) is the canonical, supported surface.
+Each example compiles down to the explicit `Agent` surface that
+[`../agent/`](../agent/) uses directly; drop down to it when the
+decorator is in your way.

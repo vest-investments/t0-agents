@@ -9,7 +9,7 @@ collapses that into one protocol that any callsite can plug into.
 Five built-in modes ship: `ChatOutput` (the default, tool-loop chat),
 `JsonOutput` (single-shot JSON with retry), `StructuredOutput[M]`
 (Pydantic-validated extraction), `ToolCallOutput` (router pattern),
-`StreamingOutput` (placeholder for v1.1 streaming JSON).  Third
+`StreamingOutput` (chat streaming; JSON does not stream).  Third
 parties can ship their own — YAML extraction, Instructor-style
 retry, SQLAlchemy row materialisation — without forking the library.
 

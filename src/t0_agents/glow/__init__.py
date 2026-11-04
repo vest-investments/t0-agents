@@ -1,6 +1,6 @@
 """t0_agents.glow — the Pythonic skin over t0-agents v1.0.
 
-EXPERIMENTAL. Public surface is unstable. This sub-package adds a
+This sub-package adds a
 FastAPI-style decorator surface, type-hint-driven OutputMode inference,
 fluent invocation handles, dependency injection, native-collection
 composition, and typed MCP wiring on top of the v1.0 primitives.

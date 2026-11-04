@@ -11,7 +11,7 @@ drop ad-hoc code (a transform, a validation, a branch, a log).
 | Parallel     | fan-out + plain-Python reducer          | [`02_parallel.py`](02_parallel.py)                      |
 | Orchestrator | `AgentConfig(sub_agents=[…])` + LLM     | [`03_orchestrator.py`](03_orchestrator.py)              |
 
-For the same three patterns expressed via the experimental
+For the same three patterns expressed via the
 `@app.agent` decorator surface, see
 [`examples/glow/04_sequential.py`](../../glow/04_sequential.py),
 [`05_parallel.py`](../../glow/05_parallel.py), and
