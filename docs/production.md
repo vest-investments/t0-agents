@@ -267,6 +267,11 @@ resolve.
 releases; t0-agents does not import it, so its churn does not affect this
 library.
 
+3.2.4 carries one open advisory, GHSA-7xgj-8392-5q4r (fixed in 3.4.10): a
+FastMCP server that combines a component `AuthCheck` with a transform skips
+the check on direct calls. t0-agents sets neither, so the fix waits for the
+audited 3.4 bump; a deployment serving its own FastMCP with both should not.
+
 ## Rate limits and quotas
 
 t0-agents intentionally does **not** auto-retry on `HTTP 429` from the
