@@ -214,7 +214,8 @@ one.
 The release PR bumps `VERSION`, `pyproject.toml` and
 `src/t0_agents/__init__.py` together (`ci/checks.sh` fails if they
 differ). Merging it tags `vX.Y.Z` from `VERSION` (Cloud Build
-`t0-agents-release`); don't tag by hand.
+`t0-agents-release`), and the tag publishes that version to PyPI
+(`t0-agents-publish`); don't tag by hand.
 
 ## Documentation
 

@@ -39,7 +39,7 @@ Tests mirror the packages under `tests/test_<package>/`; shared fakes are `tests
 - Python >= 3.11 (3.11–3.13), mypy strict, ruff `E, F, I, N, UP, RUF`, line length 100.
 - Async-first; tests run with `asyncio_mode = "auto"`.
 - No new hard dependency: a third-party package goes behind an extra, imported in a `try`/`except ImportError` that names the extra.
-- Feature PRs leave `CHANGELOG.md` alone. A release is its own PR touching `CHANGELOG.md`, `VERSION`, `pyproject.toml`, `src/t0_agents/__init__.py` and `uv.lock`; merging it tags `vX.Y.Z` (CONTRIBUTING.md § Before you open a PR).
+- Feature PRs leave `CHANGELOG.md` alone. A release is its own PR touching `CHANGELOG.md`, `VERSION`, `pyproject.toml`, `src/t0_agents/__init__.py` and `uv.lock`; merging it tags `vX.Y.Z`, and the tag publishes to PyPI (CONTRIBUTING.md § Before you open a PR).
 
 ## Commit & PR Conventions
 
