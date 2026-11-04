@@ -129,14 +129,14 @@ streaming, multi-agent, HTTP serving, the test harness, and the
 You pay only for what you use.  Base = adapter + loop + `Agent` +
 `InMemoryMemory` + guardrails + streaming + composition + testing.
 Everything that pulls a heavier third-party dependency lives behind an
-optional extra.  Install from a release tag:
+optional extra.  Install from PyPI:
 
 ```bash
 # Base install (no Docker, no FastAPI, no SQLite).
-pip install "t0-agents @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
+pip install t0-agents
 
 # With the extras you need:
-pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
+pip install "t0-agents[glow,memory-sqlite,serve,pydantic]"
 ```
 
 | Extra | Adds |
@@ -149,7 +149,13 @@ pip install "t0-agents[glow,memory-sqlite,serve,pydantic] @ git+https://github.c
 Or with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-uv add "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
+uv add "t0-agents[glow]"
+```
+
+Or straight from a release tag:
+
+```bash
+pip install "t0-agents[glow] @ git+https://github.com/vest-investments/t0-agents.git@v2.14.1"
 ```
 
 ## Documentation
@@ -217,8 +223,8 @@ heavier extras live behind named installs.
 
 t0-agents is **Beta**: the API may still change between minor
 versions, and every change is recorded in [CHANGELOG.md](CHANGELOG.md).
-Pin a release tag when consuming from another project, as in
-[Install](#install).
+Pin a version (`t0-agents==X.Y.Z`) or a release tag when consuming
+from another project; see [Install](#install).
 
 Known caveats today:
 
