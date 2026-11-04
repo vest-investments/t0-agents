@@ -11,7 +11,7 @@ from t0_agents.memory import TensorZeroMemory
 
 class CustomersMCP(
     MCPServer,
-    url="https://customers.internal/mcp",
+    url="https://customers.example.com/mcp",
     namespace="customers",
     auth=service_auth,          # process-level service credential
     elicits=True,               # its tools may ask the human to confirm

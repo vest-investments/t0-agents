@@ -11,7 +11,7 @@ Two first-class capabilities land here:
 
 The unit tests pin glow's contract (which transport it builds); the
 guarded end-to-end witness proves the four identity headers actually
-reach a server over real HTTP — mirroring the M9 pilot witness.
+reach a server over real HTTP.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ async def test_remote_target_timeout_factory_pins_read_and_mints_fresh_clients()
 
 async def test_authed_mount_propagates_identity_headers() -> None:
     """The four identity headers (3 static + 1 via ``httpx.Auth``) reach a
-    server over real HTTP through glow's mount — the M9 witness, in-loop.
+    server over real HTTP through glow's mount.
 
     Skipped when the ``serve`` extra (uvicorn) is absent."""
     uvicorn = pytest.importorskip("uvicorn")
@@ -213,9 +213,9 @@ async def test_authed_mount_propagates_identity_headers() -> None:
                     url=f"http://127.0.0.1:{port}/mcp",
                     namespace="svc",
                     headers={
-                        "X-Vest-Customer-Id": "c-1",
-                        "X-Vest-Customer-Token": "tok-1",
-                        "X-Vest-Session-Source": "api",
+                        "X-Tenant-Id": "c-1",
+                        "X-Tenant-Token": "tok-1",
+                        "X-Session-Source": "api",
                     },
                     auth=_ServiceAuth("service-token"),
                 )
@@ -230,16 +230,15 @@ async def test_authed_mount_propagates_identity_headers() -> None:
         server.should_exit = True
         await serve_task
 
-    assert seen.get("x-vest-customer-id") == "c-1"
-    assert seen.get("x-vest-customer-token") == "tok-1"
-    assert seen.get("x-vest-session-source") == "api"
+    assert seen.get("x-tenant-id") == "c-1"
+    assert seen.get("x-tenant-token") == "tok-1"
+    assert seen.get("x-session-source") == "api"
     assert seen.get("x-service-auth-token") == "service-token"
 
 
 async def test_per_message_app_lifecycle_over_shared_server() -> None:
-    """vest-ai builds a fresh App per user message; consecutive lifespans
-    against one server must each mount, list, and call cleanly (the
-    compat proof for the runtime swap).
+    """A consumer may build a fresh App per user message; consecutive
+    lifespans against one server must each mount, list, and call cleanly.
 
     Skipped when the ``serve`` extra (uvicorn) is absent."""
     uvicorn = pytest.importorskip("uvicorn")
@@ -271,7 +270,7 @@ async def test_per_message_app_lifecycle_over_shared_server() -> None:
                     MCPServer(
                         url=f"http://127.0.0.1:{port}/mcp",
                         namespace="svc",
-                        headers={"X-Vest-Customer-Id": f"c-{message}"},
+                        headers={"X-Tenant-Id": f"c-{message}"},
                         auth=_ServiceAuth("service-token"),
                     )
                 ],

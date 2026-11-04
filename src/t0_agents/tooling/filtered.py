@@ -31,8 +31,8 @@ class FilteredToolProvider:
     is not in ``allow``.  ``call_tool`` raises :class:`~t0_agents.core.exceptions.T0AgentsError`
     for a name outside the set — a listing-only filter would still let a
     forged tool call reach ``inner``, so refusing here makes the filter a real
-    boundary (the "order-placement tools stay disabled" guarantee is
-    safety-critical for the vest-ai migration).  An empty ``allow`` is a
+    boundary, one a consumer can rely on to keep a dangerous tool off an
+    agent.  An empty ``allow`` is a
     genuinely toolless provider.
     """
 

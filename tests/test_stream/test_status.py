@@ -1,7 +1,7 @@
 """Vectors for :mod:`t0_agents.stream.status` — the ported status policy.
 
 Ported from the production suite that pinned this policy at its origin
-(vest-ai's StatusTranslator): originals re-emit first; ``Calling …``
+(a consumer's StatusTranslator): originals re-emit first; ``Calling …``
 never dedupes; ``Thinking…`` dedupes within a contiguous thought block
 and is suppressed after a tool call until a terminal event re-arms it;
 tool identity splits on the longest known server prefix.
@@ -28,7 +28,7 @@ from t0_agents import (
 )
 from t0_agents.stream.events import AgentEvent
 
-KNOWN_SERVERS = ("customers", "fred", "edgar", "massive", "mywallst")
+KNOWN_SERVERS = ("crm", "maps", "docs", "quotes", "portfolio")
 
 
 async def _stream(events: Sequence[AgentEvent]) -> AsyncIterator[AgentEvent]:
@@ -73,12 +73,12 @@ class TestCallingHint:
         ]
 
     async def test_calling_carries_prefixed_tool_identity(self) -> None:
-        items = await _translate([_tool_call("mywallst_get_portfolio")])
+        items = await _translate([_tool_call("portfolio_get_holdings")])
         assert _statuses(items) == [
             Status(
-                text="Calling mywallst_get_portfolio…",
-                server="mywallst",
-                tool="get_portfolio",
+                text="Calling portfolio_get_holdings…",
+                server="portfolio",
+                tool="get_holdings",
             )
         ]
 
@@ -179,11 +179,11 @@ class TestSplitToolIdentity:
     @pytest.mark.parametrize(
         ("name", "expected"),
         [
-            ("customers_place_trade", ("customers", "place_trade")),
-            ("fred_get_macro_snapshot", ("fred", "get_macro_snapshot")),
-            ("edgar_get_filing", ("edgar", "get_filing")),
-            ("massive_get_quote", ("massive", "get_quote")),
-            ("mywallst_get_portfolio", ("mywallst", "get_portfolio")),
+            ("crm_create_ticket", ("crm", "create_ticket")),
+            ("maps_get_route", ("maps", "get_route")),
+            ("docs_get_page", ("docs", "get_page")),
+            ("quotes_get_quote", ("quotes", "get_quote")),
+            ("portfolio_get_holdings", ("portfolio", "get_holdings")),
             ("place_trade", (None, "place_trade")),
             ("retrieve_user_profile", (None, "retrieve_user_profile")),
         ],
@@ -192,10 +192,10 @@ class TestSplitToolIdentity:
         assert split_tool_identity(name, KNOWN_SERVERS) == expected
 
     @pytest.mark.parametrize(
-        "servers", [("fred", "fred_api"), ("fred_api", "fred")], ids=["short-first", "long-first"]
+        "servers", [("maps", "maps_api"), ("maps_api", "maps")], ids=["short-first", "long-first"]
     )
     def test_prefers_longest_prefix(self, servers: tuple[str, ...]) -> None:
-        assert split_tool_identity("fred_api_get_x", servers) == ("fred_api", "get_x")
+        assert split_tool_identity("maps_api_get_x", servers) == ("maps_api", "get_x")
 
     def test_unknown_server_stays_none(self) -> None:
         assert split_tool_identity("bare_tool", ()) == (None, "bare_tool")

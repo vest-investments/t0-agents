@@ -18,11 +18,11 @@ checks you should run before opening a pull request.
 ```bash
 git clone https://github.com/vest-investments/t0-agents.git
 cd t0-agents
-uv sync
+uv sync --all-extras
 ```
 
-`uv sync` creates `.venv/` and installs every dep declared in
-`pyproject.toml` including the dev group (mypy, pytest, ruff).
+`uv sync --all-extras` creates `.venv/` with the dev group (mypy,
+pytest, ruff) and every extra; `mypy src/` fails without the extras.
 
 ## Test modes
 
@@ -174,6 +174,13 @@ vocabulary — scenarios, assertions, fixtures, and the embedded path.
 
 Run `bash ci/checks.sh`, the gate Cloud Build's `t0-agents-pr` runs on
 every PR. If anything fails, don't submit.
+
+A pull request from a fork builds only after a maintainer comments
+`/gcbrun` on it. The build runs the pull request's own code, so a
+maintainer reads the diff before commenting.
+
+Report a vulnerability privately, as [SECURITY.md](SECURITY.md)
+describes, never in a pull request or an issue.
 
 If you touched `pyproject.toml`'s dependency ranges, also resolve
 without the lockfile — every command above reads `uv.lock`, so a range

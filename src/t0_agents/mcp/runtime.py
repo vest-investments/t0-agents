@@ -75,7 +75,7 @@ _SESSION_TERMINATED_CODE = 32600
 
 # A server whose SDK predates that mapping rejects an unknown session id
 # with a bare 400 instead.  Not an SDK contract but an observed server
-# behaviour (mcp-customers, staging and prod), and it never reaches the
+# behaviour seen in production, and it never reaches the
 # JSON-RPC layer — the transport raises for status first, so this shape
 # arrives as `httpx.HTTPStatusError`.
 _SESSION_REJECTED_STATUS = 400
@@ -226,7 +226,7 @@ class _OverlaidSpec:
     Presents the :class:`MCPServerSpecLike` shape with ``headers`` merged
     (overlay keys win) and ``auth`` replaced when the overlay carries one;
     everything else — url, transport, namespace, prefix, timeout — comes
-    from the base, so per-server transport behaviour (M1's read-timeout
+    from the base, so per-server transport behaviour (the read-timeout
     factory included) is identical across identities.
     """
 
@@ -1247,7 +1247,7 @@ class _ConversationView:
     shared base handle), so an abandoned view costs nothing and its
     conversation's clients idle out via the pool TTL.  Implements
     ``SupportsServerAttribution`` by delegation so per-call
-    observability keeps working through the view (the M7 contract).
+    observability keeps working through the view.
     """
 
     def __init__(

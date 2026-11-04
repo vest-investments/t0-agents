@@ -522,7 +522,7 @@ class _SessionKiller:
 class _SessionRejector:
     """ASGI wrapper that answers the next N POSTs with a bare HTTP error.
 
-    At the default 400 this is the shape ``mcp-customers`` returns for an
+    At the default 400 this is the shape some servers return for an
     unknown session id — its SDK predates the spec's 404 mapping, so the
     rejection never reaches the JSON-RPC layer and arrives as an
     ``httpx.HTTPStatusError`` instead.  (The 404 sibling, which the SDK
@@ -674,7 +674,7 @@ async def test_non_session_errors_never_resend() -> None:
 async def test_session_rejection_never_reaches_the_json_rpc_layer() -> None:
     """A bare 400 dies in the transport, so the 32600 arm cannot see it.
 
-    ``mcp-customers`` rejects an unknown session id this way.  The
+    Some servers reject an unknown session id this way.  The
     transport calls ``raise_for_status`` before anything is decoded as
     JSON-RPC, so the caller gets an ``httpx.HTTPStatusError`` and never an
     ``McpError`` — which is why the recovery keys on the status rather
@@ -980,7 +980,7 @@ async def test_list_tools_serves_last_known_after_the_server_dies(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A server that answered before keeps contributing its last-known
-    tools while unreachable — the incident shape: mcp-fred served for
+    tools while unreachable — the incident shape: a server served for
     weeks, then dropped out of rotation mid-conversation."""
     clock = _Clock()
     monkeypatch.setattr("t0_agents.mcp.runtime.time", clock)
@@ -1286,7 +1286,7 @@ async def test_failed_inventory_recovery_falls_back_to_last_known(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Recovery is attempted first; only when the rebuilt client also
-    fails does M2's degradation apply — and it still never raises.
+    fails does the last-known degradation apply — and it still never raises.
     Both warnings must appear, in that order: the re-list attempt, then
     the last-known fallback."""
     clock = _Clock()

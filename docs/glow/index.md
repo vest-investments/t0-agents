@@ -1,9 +1,5 @@
 # `t0_agents.glow` — the eight-line path
 
-> **Experimental.**  Public API on the
-> [`experimental/glow`](https://github.com/vest-investments/t0-agents/tree/experimental/glow)
-> branch is unstable until merged to `main`.
-
 A Pythonic skin over the v1.0 primitives — `Agent`, `Run[T]`,
 `OutputMode[T]`.  Where the base API takes ~25 lines to wire an
 agent, glow takes eight — gateway included:
@@ -68,8 +64,8 @@ companions live under [`examples/glow/`](../../examples/glow/).
    / tools=)` over ONE long-lived App, the `(server, identity)` client
    pool, `elicits=True` routing, credential rotation, and the
    migration from one-App-per-tenant.
-8. **[Known limitations](limitations.md)** — what's deferred to
-   v1.1: streaming JSON, AsyncIterator tools, sync API.
+8. **[Known limitations](limitations.md)** — what glow does not do
+   yet: streaming JSON, AsyncIterator tools, sync API.
 
 ## Drop down to Agent anytime
 

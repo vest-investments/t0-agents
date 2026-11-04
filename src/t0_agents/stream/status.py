@@ -1,7 +1,7 @@
 """Status-hint synthesis over an :data:`AgentEvent` stream.
 
-Port of the production status policy vest-ai ran in front of its mobile
-SSE wire, as pure library functions.  The translator watches events flow
+The status policy a production consumer ran in front of its mobile SSE
+wire, as pure library functions.  The translator watches events flow
 past and interleaves opaque, user-facing :class:`Status` hints:
 
 * ``"Calling {name}…"`` for every :class:`ToolCallEvent` — never

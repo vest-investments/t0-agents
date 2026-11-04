@@ -1,8 +1,6 @@
 # Getting started with `t0_agents.glow`
 
-> **Experimental.** Public API on the
-> [`experimental/glow`](https://github.com/vest-investments/t0-agents/tree/experimental/glow)
-> branch is unstable.  Known limitations are catalogued at
+> Known limitations are catalogued at
 > [`limitations.md`](limitations.md); the escape hatch to the v1.0
 > `Agent` lives at [`escape-hatch.md`](escape-hatch.md).
 
@@ -282,6 +280,6 @@ sub-agent injection for `@app.agent` — is documented in
 - **[Escape hatch to v1.0](escape-hatch.md)** — when glow stands in your way:
   `wrapper._agent` is the v1.0 `Agent` the decorator built, plus
   `app.lifespan()` / `build()` / `shutdown()` for explicit lifecycle.
-- **[Known limitations](limitations.md)** — what's deferred to v1.1
+- **[Known limitations](limitations.md)** — what glow does not do yet
   (streaming JSON, AsyncIterator tools, sync API).
 - **[v1.0 docs](../index.md)** — the underlying primitives glow compiles to.

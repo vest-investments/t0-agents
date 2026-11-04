@@ -450,8 +450,8 @@ class FluentRun(Generic[T]):
             finally:
                 # Fire even if the consumer breaks early (GeneratorExit skips
                 # the code after the loop): once the terminal DoneEvent was
-                # tapped the turn completed and must record — the vest-ai
-                # record-in-finally pattern.  ``_fire`` is latched (fire-once).
+                # tapped the turn completed and must record.  ``_fire`` is
+                # latched (fire-once).
                 if captured is not None:
                     self._fire(captured)
 

@@ -1,6 +1,6 @@
 # Known limitations of `t0_agents.glow`
 
-> **Experimental.**  This page is the inventory of what glow does
+> This page is the inventory of what glow does
 > *not* do yet.  Most items have a deliberate deferral path (the
 > v1.0 base API still does the thing; you can drop down whenever
 > you need to).  Some are inherent constraints inherited from

@@ -248,8 +248,8 @@ suppresses nor re-exposes them.
 
 ## fastmcp version compatibility
 
-t0-agents declares `fastmcp>=3.2.3` and **locks 3.2.4** (`uv.lock`) — the
-version vest-ai runs in production, so CI exercises exactly what prod does.
+t0-agents declares `fastmcp>=3.2.3` and **locks 3.2.4** (`uv.lock`), so CI
+exercises the version production deployments run.
 The tested range is **3.2.3–3.2.4**; the two are equivalent for every
 FastMCP / MCP surface t0-agents depends on (client concurrency, transport
 factories, the elicitation and task-notification wiring, `call_tool` /

@@ -99,9 +99,9 @@ Sub-agent `<name>_ask` tools are never filtered: the allow-list applies to
 the real composed tools only, so delegation stays available.
 
 This is how a consumer keeps a dangerous tool off an agent even while its
-MCP server is mounted for others — vest-ai, for example, mounts its
-order-placement server but omits those tools from the assistant agent's
-`tools=`, so they can never be called.
+MCP server is mounted for others — an app can mount an order-placement
+server and omit those tools from its assistant agent's `tools=`, so they
+can never be called.
 
 ## Ending a turn on its tools — `terminal_tools=`
 

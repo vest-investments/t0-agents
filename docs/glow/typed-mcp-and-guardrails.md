@@ -83,11 +83,11 @@ class ServiceAuth(httpx.Auth):
         yield request
 
 customers = MCPServer(
-    url="https://mcp-customers/mcp",
+    url="https://customers.example.com/mcp",
     namespace="customers",
     headers={                          # static, sent on every request
-        "X-Vest-Customer-Id": customer_id,
-        "X-Vest-Customer-Token": customer_token,
+        "X-Customer-Id": customer_id,
+        "X-Customer-Token": customer_token,
     },
     auth=ServiceAuth(service_token),   # an httpx.Auth, applied per request
 )
@@ -117,7 +117,7 @@ a wall-clock budget for the call (that is `tool_timeout`'s job):
 ```python
 class CustomersMCP(
     MCPServer,
-    url="http://mcp-customers.mcp.svc.cluster.local/mcp/",
+    url="https://customers.example.com/mcp",
     namespace="customers",
     timeout=1800.0,   # elicit-capable server: window > its elicit wait
 ): ...

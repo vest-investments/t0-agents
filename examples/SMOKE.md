@@ -9,8 +9,7 @@ prompts.  Wall-clock budget on first try: ~25 minutes.
 
 ## When to run
 
-- Before tagging any minor (`1.x.0`) or patch (`1.0.x`) release on
-  `experimental/glow` or `main`.
+- Before tagging any release on `main`.
 - After landing any PR that touches `examples/`, `src/t0_agents/`,
   or the gateway image pin in `examples/*/docker-compose.yml`.
 
