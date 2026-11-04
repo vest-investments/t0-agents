@@ -5,8 +5,21 @@ from typing import Any
 import pytest
 from fastmcp import Client
 from fastmcp.client.elicitation import ElicitResult
+from sse_starlette.sse import AppStatus
 
 from tests.server import mcp
+
+
+@pytest.fixture(autouse=True)
+def _reset_sse_shutdown_latch() -> None:
+    """Clear sse-starlette's process-wide shutdown flag before every test.
+
+    Its watcher sets ``AppStatus.should_exit`` once it sees a uvicorn server
+    exit, and nothing resets it; from then on every SSE response closes at
+    once.  A test whose ephemeral server takes over 0.5 s to stop would
+    otherwise drop the next test's ``initialize`` response and hang it.
+    """
+    AppStatus.should_exit = False
 
 
 @pytest.fixture
