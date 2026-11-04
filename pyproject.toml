@@ -38,20 +38,9 @@ serve = [
     "pydantic>=2.0",
     "sse-starlette>=2.0",
 ]
-cli = [
-    "typer>=0.12.0",
-    "rich>=13.7.0",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "pydantic>=2.0",
-    "sse-starlette>=2.0",
-]
 glow = [
     "pydantic>=2.0",
 ]
-
-[project.scripts]
-t0-agents = "t0_agents.cli.app:main"
 
 [project.urls]
 Repository = "https://github.com/vest-investments/t0-agents"
