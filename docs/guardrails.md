@@ -817,10 +817,9 @@ process. The library ships an `ElicitationForwarder` whose `handler`
 attribute is shaped like an `ApprovalHandler`; pass
 `require_approval(handler=forwarder.handler, ...)` and the server wires
 prompts and responses across the session. See
-[Serving](serving.md) for the HTTP case,
-[Streaming](streaming.md) for the WebSocket case, and
-[CLI](cli.md) for the TUI case. All three surfaces rely on the same
-forwarder primitive.
+[Serving](serving.md) for the HTTP case and
+[Streaming](streaming.md) for the WebSocket case. Both surfaces rely on
+the same forwarder primitive.
 
 ### `parallel_tools=True`
 

@@ -121,8 +121,8 @@ the hard parts:
 t0-agents is the thin glue between them.  The `mcp/` submodule fits in
 ~100 lines of production code; everything above it — `Agent`,
 `Run[T]`, `Middleware`, `OutputMode[T]`, memory, guardrails,
-streaming, multi-agent, HTTP serving, the terminal TUI, the test
-harness, and the `glow` decorator skin — is opt-in.
+streaming, multi-agent, HTTP serving, the test harness, and the
+`glow` decorator skin — is opt-in.
 
 ## Install
 
@@ -144,9 +144,6 @@ pip install 't0-agents[memory-sqlite]'
 # Adds FastAPI + Uvicorn + Pydantic + sse-starlette for HTTP serving.
 pip install 't0-agents[serve]'
 
-# Adds Typer + Rich on top of [serve]; registers the `t0-agents` script.
-pip install 't0-agents[cli]'
-
 # Adds Pydantic for StructuredOutput[M].
 pip install 't0-agents[pydantic]'
 
@@ -158,7 +155,7 @@ Or with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
 uv add t0-agents                                   # base
-uv add 't0-agents[glow,memory-sqlite,cli,pydantic]'   # with extras
+uv add 't0-agents[glow,memory-sqlite,serve,pydantic]' # with extras
 ```
 
 ## Documentation
@@ -188,7 +185,6 @@ picks up the tension the previous one left open.  Start at
 - [Streaming](docs/streaming.md) — narrate the loop live with typed events, SSE, and WebSocket.
 - [Multi-Agent Composition](docs/multi-agent.md) — declarative `sub_agents=[...]`, the LLM-driven path.
 - [Serving](docs/serving.md) — `create_app(agent)` and the FastAPI surface.
-- [CLI](docs/cli.md) — the `t0-agents` terminal experience.
 - [Testing](docs/testing.md) — keep every layer above from regressing, including in-memory MCP mounts.
 
 **Appendices**
@@ -220,7 +216,6 @@ heavier extras live behind named installs.
 | **Policy guardrails** | `require_approval`, `max_cost`, `max_tool_calls`, `block_tools` out of the box; custom `Guardrail` Protocol for domain rules.  Every decision is captured on `AgentResult.guardrail_log` for audit. |
 | **Multi-agent composition** | Register sub-agents on `AgentConfig.sub_agents` and they become `{name}_ask` tools on the orchestrator's MCP server.  Nested orchestrators, `parent_episode_id` correlation. |
 | **HTTP serving** | `create_app(agent)` wraps any agent in a FastAPI app with `/chat`, `/feedback`, `/health`, `/info` — plus `/chat/stream` (SSE) and `/chat/ws` (WebSocket) when `streaming=True`. |
-| **Terminal CLI** | `t0-agents run` (interactive streaming TUI), `t0-agents serve` (dev HTTP server), `t0-agents info` (config introspection). |
 | **First-class testing** | `MockGateway` + `MockToolProvider` for deterministic unit tests, `glow_tools` + `ScriptedElicitation` to drive in-memory MCP mounts and `ctx.elicit` round-trips through the real FastMCP boundary, `EmbeddedGatewayHelper` for real-inference integration tests without Docker, ten `assert_*` helpers. |
 | **Observability** | Every run returns the TensorZero `episode_id`, per-turn `inference_ids`, the guardrail log, aggregated cost / usage, and a `response_source` signal. |
 

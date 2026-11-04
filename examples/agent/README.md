@@ -30,7 +30,6 @@ on top of the previous. Pick a chapter from the table below.
 | 07 | [`07_streaming`](07_streaming/)             | The live event stream — `Run.events()` over SSE and WebSocket, with elicitation piped to a browser UI. Advanced tier: `Run.events()` / `.cancel()` / `.fork()` / `.replay()` without HTTP. | yes |
 | 08 | [`08_multi_agent`](08_multi_agent/)         | `AgentConfig.sub_agents=[...]` — orchestrator + research/writer sub-agents, plus nested orchestrators. | yes |
 | 09 | [`09_serving`](09_serving/)                 | `create_app(agent)` — drop the whole stack behind `/chat`, `/feedback`, `/health`. | yes |
-| 10 | [`10_cli`](10_cli/)                         | The terminal TUI — `t0-agents run`, `serve`, `info` with a Rich renderer and elicitation-as-prompt. | yes |
 | 11 | [`11_testing`](11_testing/)                 | `MockGateway` for deterministic unit tests, `EmbeddedGatewayHelper` for real-inference integration tests without Docker. | mixed |
 
 ## Appendices

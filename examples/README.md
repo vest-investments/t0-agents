@@ -28,10 +28,9 @@ track; don't mix.
 
 The agent track also covers ground glow doesn't:
 elicitation (`04_elicitation`), memory (`05_memory`), guardrails
-(`06_guardrails`), serving / FastAPI (`09_serving`), the CLI
-(`10_cli`), testing (`11_testing`), observability / feedback
-(`13_observability`), and the MCP-submodule internals
-(`15_mcp_internals`).
+(`06_guardrails`), serving / FastAPI (`09_serving`), testing
+(`11_testing`), observability / feedback (`13_observability`), and
+the MCP-submodule internals (`15_mcp_internals`).
 
 ## How to run
 

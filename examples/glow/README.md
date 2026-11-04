@@ -29,11 +29,7 @@ export TENSORZERO_CONFIG=examples/glow/config/tensorzero.toml
 ```
 
 Then run any example with `uv run python examples/glow/<name>.py`
-(each prints a `SUCCESS:` banner), or drive one straight from the CLI:
-
-```bash
-t0-agents run examples.glow.01_hello:app --agent tutor "hi"
-```
+(each prints a `SUCCESS:` banner).
 
 ## Examples
 

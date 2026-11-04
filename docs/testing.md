@@ -1166,7 +1166,7 @@ metrics, per-episode analytics — see
 
 ## Closing the tour
 
-This chapter completes the progressive tour. Starting from a single `Agent` primitive, you have added tools (the `mcp` adapter and loop), interactive input (elicitation), persistence (memory), policy (guardrails), live narration (streaming), multi-agent orchestration (composition), HTTP transport (serving), and terminal access (CLI) — and you now have the tools to keep every layer under automated test.
+This chapter completes the progressive tour. Starting from a single `Agent` primitive, you have added tools (the `mcp` adapter and loop), interactive input (elicitation), persistence (memory), policy (guardrails), live narration (streaming), multi-agent orchestration (composition), and HTTP transport (serving) — and you now have the tools to keep every layer under automated test.
 
 For deeper reference material that spans the tour — the full public API, the exception taxonomy, episode-level observability, production deployment trade-offs, multi-server composition — see the **Appendices** on the [index](index.md):
 

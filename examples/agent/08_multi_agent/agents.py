@@ -1,10 +1,4 @@
-"""Agent factory for the multi-agent composition demo.
-
-Invoked via:
-
-.. code-block:: bash
-
-    uv run t0-agents run examples.agent.08_multi_agent.agents:orchestrator_factory
+"""Agent factory for the multi-agent composition demo, driven by ``main.py``.
 
 The factory yields an orchestrator :class:`Agent` that has been wired
 with two sub-agents (``researcher``, ``writer``).  Each sub-agent has
@@ -29,9 +23,8 @@ from tensorzero import AsyncTensorZeroGateway
 
 from t0_agents import Agent, AgentConfig
 
-# Path juggling so the example modules can be imported as top-level names
-# the same way ``examples/agent/10_cli/agent.py`` does.  Keeps the example
-# runnable both as a Python script and via the ``t0-agents run`` loader.
+# The directory name starts with a digit, so the sibling servers are
+# imported as top-level modules from the example directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from arxiv_server import mcp as arxiv_server  # type: ignore[import-not-found]
 from markdown_server import mcp as markdown_server  # type: ignore[import-not-found]

@@ -45,7 +45,6 @@ Thumbs.db
 
 # Example runtime artifacts
 *.db
-tui-audit.jsonl
 
 # Two-pass git-mv leftovers (rename ping-pong tooling)
 examples/_tmp_*/

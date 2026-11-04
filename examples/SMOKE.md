@@ -1,7 +1,7 @@
 # Release-gate smoke verification
 
 Manual checklist run by a single operator before tagging each release.
-Covers all 25 example scripts in `examples/` plus four manual UI
+Covers all 25 example scripts in `examples/` plus two manual UI
 checks.  **Not CI** — these runs consume real Groq tokens, two
 batches drive scripts whose default model is occasionally
 non-deterministic, and two scripts shell out to interactive
@@ -27,7 +27,7 @@ cp examples/glow/.env.example  examples/glow/.env
 #    bump it if validating a gateway upgrade.
 
 # 3. Install the project with the extras the smoke uses:
-uv sync --extra cli --extra memory-sqlite --extra pydantic
+uv sync --extra serve --extra memory-sqlite --extra pydantic
 
 # 4. Confirm Docker is reachable (the smoke uses docker compose v2):
 docker version
@@ -43,9 +43,9 @@ go.  Re-run any flaky row **once** before declaring it red — see
 [Known integration flakies](#known-integration-flakies) for the two
 documented sensitivities and the model-swap escape hatch.
 
-The four manual UI checks (`10_cli` REPL ×2, `09_serving` HTTP +
-curl, `07_streaming` SSE) live in their own section because they
-need a human at the keyboard.
+The two manual UI checks (`09_serving` HTTP + curl, `07_streaming`
+SSE) live in their own section because they need a human at the
+keyboard.
 
 ---
 
@@ -286,37 +286,10 @@ docker compose -f examples/glow/docker-compose.yml down
 
 ## Manual UI verification
 
-Four flows that need a human at the keyboard.  The first two are
-the Typer + Rich TUI; the last two are HTTP servers exercised
-with `curl` or a browser.
+Two flows that need a human at the keyboard: HTTP servers
+exercised with `curl` or a browser.
 
-### M.1 — `10_cli/agent.py` REPL
-
-1. Bring up the `01_first_agent` compose if it is down.
-2. Run: `uv run t0-agents run examples.agent.10_cli.agent:assistant`.
-3. Type `What is 2 + 3?` and press Enter.
-4. Type `Ctrl-D` (EOF) to exit cleanly.
-
-Outcome: a cyan panel titled `tui-assistant` shows the tool call
-(`🔧 add(...)`) then its result (`✓ add(...)`) then a final
-answer mentioning `5`.  No traceback on exit.
-
-### M.2 — `10_cli/advanced.py` REPL with audit log
-
-1. Run: `uv run t0-agents run
-   examples.agent.10_cli.advanced:assistant_with_audit`.
-2. Type a reminder-style prompt (e.g. `Remind me tomorrow at 9 to
-   water the plants.`) and press Enter.
-3. When the Rich elicit dialog appears, accept defaults (Enter
-   through each field).
-4. Type `Ctrl-D` to exit.
-5. Inspect the audit log: `cat tui-audit.jsonl`.
-
-Outcome: at least two JSON lines in `tui-audit.jsonl` with
-matching timestamps — one `"kind": "elicit_request"` and one
-`"kind": "elicit_response"`.
-
-### M.3 — `09_serving` FastAPI + curl smoke
+### M.1 — `09_serving` FastAPI + curl smoke
 
 1. Bring up the `09_serving` compose:
    `docker compose --env-file examples/agent/.env -f
@@ -336,7 +309,7 @@ call may return `404` if the demo metric is not declared in
 `tensorzero.toml` — see the comment in `client.sh`; that is
 acceptable.
 
-### M.4 — `07_streaming` SSE
+### M.2 — `07_streaming` SSE
 
 1. Bring up the `07_streaming` compose:
    `docker compose --env-file examples/agent/.env -f
@@ -526,10 +499,8 @@ before declaring red.
 
 | ✓ | Row | What | Where |
 |---|---|---|---|
-| ☐ | M.1 | `10_cli/agent.py` REPL | 01_first_agent compose |
-| ☐ | M.2 | `10_cli/advanced.py` REPL + audit | 01_first_agent compose |
-| ☐ | M.3 | `09_serving` FastAPI + curl | 09_serving compose |
-| ☐ | M.4 | `07_streaming` SSE | 07_streaming compose |
+| ☐ | M.1 | `09_serving` FastAPI + curl | 09_serving compose |
+| ☐ | M.2 | `07_streaming` SSE | 07_streaming compose |
 
 ### Known flakies — acknowledged
 

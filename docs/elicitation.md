@@ -321,8 +321,8 @@ from t0_agents.mcp import auto_approve_handler, auto_decline_handler
 Both are for testing only. Production code should implement a real handler --
 either a CLI prompt (Intermediate example below), a stateful multi-turn handler
 (Advanced example below), or a remote channel using the forwarder described in
-[Agent](agent.md). The [CLI](cli.md) and [Serving](serving.md) docs show how
-the forwarder is wired into an interactive terminal or a remote HTTP session.
+[Agent](agent.md). The [Serving](serving.md) docs show how the forwarder is
+wired into a remote HTTP session.
 
 ---
 

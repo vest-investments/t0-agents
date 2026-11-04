@@ -1515,15 +1515,6 @@ wheels = [
 ]
 
 [[package]]
-name = "shellingham"
-version = "1.5.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b27b655beb4b4e9c62313a4e8da8c676e142cc210d58e/shellingham-1.5.4.tar.gz", hash = "sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de", size = 10310, upload-time = "2023-10-24T04:13:40.426Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
-]
-
-[[package]]
 name = "sse-starlette"
 version = "3.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1560,14 +1551,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-cli = [
-    { name = "fastapi" },
-    { name = "pydantic" },
-    { name = "rich" },
-    { name = "sse-starlette" },
-    { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
-]
 glow = [
     { name = "pydantic" },
 ]
@@ -1596,23 +1579,17 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'memory-sqlite'", specifier = ">=0.20.0" },
-    { name = "fastapi", marker = "extra == 'cli'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115.0" },
     { name = "fastmcp", specifier = ">=3.2.3,<4" },
     { name = "mcp", specifier = ">=1.24.0,<2" },
-    { name = "pydantic", marker = "extra == 'cli'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'glow'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.0" },
     { name = "pydantic", marker = "extra == 'serve'", specifier = ">=2.0" },
-    { name = "rich", marker = "extra == 'cli'", specifier = ">=13.7.0" },
-    { name = "sse-starlette", marker = "extra == 'cli'", specifier = ">=2.0" },
     { name = "sse-starlette", marker = "extra == 'serve'", specifier = ">=2.0" },
     { name = "tensorzero", specifier = ">=2026.6.0" },
-    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.12.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'cli'", specifier = ">=0.32.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.32.0" },
 ]
-provides-extras = ["memory-sqlite", "pydantic", "serve", "cli", "glow"]
+provides-extras = ["memory-sqlite", "pydantic", "serve", "glow"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1641,21 +1618,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/df/d66c5832c4cd77f2d700691072c5ea84c1539b5e7b7867e972de981b426d/tensorzero-2026.6.0-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:4539c846b68b62957fc76ba64df154b1c00d0a5d206e1b7b2a8ee2dc8a7b8b2a", size = 41556362, upload-time = "2026-06-04T15:53:56.763Z" },
     { url = "https://files.pythonhosted.org/packages/b1/82/3e26232f7bcd9b0a16a6090b5227cde743b8aeaebe0750bb68c4eb9e9f26/tensorzero-2026.6.0-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:50f8c6bd6ecf321d2cc94596d47d8e749fbf9e08ae0baa75ee024eb72605f9f4", size = 42497066, upload-time = "2026-06-04T15:54:00.434Z" },
     { url = "https://files.pythonhosted.org/packages/4a/20/b4b0194315095193a92f4930469248e2e184c96ec4b06070333aa2fa3bea/tensorzero-2026.6.0-cp310-abi3-win_amd64.whl", hash = "sha256:832b46d04de255a9ef0ca5f5db3e33d75c6bc31fa33cd15efccb0e81ada8d2d1", size = 37423961, upload-time = "2026-06-04T15:54:08.055Z" },
-]
-
-[[package]]
-name = "typer"
-version = "0.24.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "annotated-doc" },
-    { name = "click" },
-    { name = "rich" },
-    { name = "shellingham" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/24/cb09efec5cc954f7f9b930bf8279447d24618bb6758d4f6adf2574c41780/typer-0.24.1.tar.gz", hash = "sha256:e39b4732d65fbdcde189ae76cf7cd48aeae72919dea1fdfc16593be016256b45", size = 118613, upload-time = "2026-02-21T16:54:40.609Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/91/48db081e7a63bb37284f9fbcefda7c44c277b18b0e13fbc36ea2335b71e6/typer-0.24.1-py3-none-any.whl", hash = "sha256:112c1f0ce578bfb4cab9ffdabc68f031416ebcc216536611ba21f04e9aa84c9e", size = 56085, upload-time = "2026-02-21T16:54:41.616Z" },
 ]
 
 [[package]]
