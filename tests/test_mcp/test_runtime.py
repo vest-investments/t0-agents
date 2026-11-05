@@ -856,11 +856,16 @@ class _WedgeableClient:
         self.hang_enter = hang_enter
         self.enter_error = enter_error
         self.enter_calls = 0
+        self.enter_cancelled = False
 
     async def __aenter__(self) -> _WedgeableClient:
         self.enter_calls += 1
         if self.hang_enter:
-            await asyncio.Event().wait()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.enter_cancelled = True
+                raise
         if self.enter_error is not None:
             raise self.enter_error
         return self
@@ -914,6 +919,31 @@ async def test_connect_remints_after_a_cancelled_enter() -> None:
     await asyncio.wait_for(handle.connect(), timeout=1.0)
     assert handle._connected
     assert wedged.enter_calls == 1
+
+
+async def test_connect_bounds_a_handshake_that_never_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no caller deadline, a dropped ``initialize`` response must
+    time out, release the lock and remint, so a queued caller connects
+    on the fresh client instead of waiting forever behind it."""
+    monkeypatch.setattr("t0_agents.mcp.runtime._CONNECT_TIMEOUT_SECONDS", 0.1)
+    wedged = _WedgeableClient(hang_enter=True)
+    plan = _MintPlan(wedged, _WedgeableClient())
+    handle = _planned_handle(plan)
+
+    first = asyncio.create_task(handle.connect())
+    await asyncio.sleep(0)
+    queued = asyncio.create_task(handle.connect())
+
+    with pytest.raises(TimeoutError):
+        await first
+    await asyncio.wait_for(queued, timeout=1.0)
+
+    assert handle._connected
+    assert handle.client is plan.minted[1]
+    assert wedged.enter_calls == 1
+    assert wedged.enter_cancelled
 
 
 async def test_connect_remints_after_a_failed_enter() -> None:
