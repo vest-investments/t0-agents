@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.14.2] — 2026-11-05
+
+### Fixed
+
+- **An MCP server's handshake gives up after 30 s.** A tool call's
+  `timeout` did not cover the first connect to a server, and is `None`
+  for a call that waits on a human. A handshake whose `initialize`
+  response never arrived, as when an SSE server closes its streams
+  during a rolling deploy, held that server's lock forever, and every
+  later call to the server queued behind it. The handshake now raises
+  `TimeoutError` at 30 s, and the next call starts on a fresh client
+  ([Multi-server](docs/multi-server.md)).
+- **The PyPI project page links into the repository.** Its relative
+  links and the header image resolved against pypi.org and broke; the
+  published description now points them at GitHub.
+
 ## [2.14.1] — 2026-11-03
 
 A dependency security release: every locked dependency with an open
