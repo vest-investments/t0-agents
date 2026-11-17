@@ -1124,7 +1124,10 @@ class TestLoadTranscript:
         history = await _make_memory(_t0_with([rounds[2]])).load_history(ep)
 
         assert history is not None
-        assert [sorted(m) for m in history] == [["content", "role"]] * len(history)
+        roles = ["user", "assistant", "user", "assistant", "user", "assistant"]
+        assert [(m["role"], sorted(m)) for m in history] == [
+            (role, ["content", "role"]) for role in roles
+        ]
 
     async def test_a_parallel_batch_of_results_stays_one_message(self) -> None:
         """Two calls answered in one round come back as the one ``user``
