@@ -309,11 +309,13 @@ class _Outcome:
         self,
         result: ToolResult,
         *,
+        structured: dict[str, Any] | None = None,
         duration_ms: float | None = 12.5,
         is_error: bool = False,
         server: str | None = "calc",
     ) -> None:
         self.result = result
+        self.structured = structured
         self.duration_ms = duration_ms
         self.is_error = is_error
         self.server = server
@@ -386,6 +388,31 @@ async def test_complete_tool_round_stamps_none_when_the_turn_had_no_inference_id
         TurnState(messages=[]), outcomes=[_Outcome(_ADD)], inference_id=None, on_tool_round=hook
     )
     assert [c.inference_id for c in seen[0]] == [None]
+
+
+async def test_complete_tool_round_reads_status_and_error_code_from_structured_content() -> None:
+    seen: list[tuple[ToolCallUsage, ...]] = []
+
+    async def hook(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+        seen.append(tool_calls)
+
+    await complete_tool_round(
+        TurnState(messages=[]),
+        outcomes=[
+            _Outcome(_ADD, structured={"status": "error", "error_code": "rate_limited"}),
+            _Outcome(_ADD, structured={"status": "ok", "data": {"sum": 3}}),
+            _Outcome(_ADD),
+            _Outcome(_ADD, structured={"status": 200, "error_code": ["rate_limited"]}),
+        ],
+        inference_id="inf-1",
+        on_tool_round=hook,
+    )
+    assert [(c.status, c.error_code, c.is_error) for c in seen[0]] == [
+        ("error", "rate_limited", False),
+        ("ok", None, False),
+        (None, None, False),
+        (None, None, False),
+    ]
 
 
 # ---------------------------------------------------------------------------
