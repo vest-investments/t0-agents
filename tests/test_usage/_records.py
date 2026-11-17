@@ -62,6 +62,8 @@ def record(run_id: str = "run-1", *, episode_id: str = "ep-1") -> RunUsageRecord
                 server="calc",
                 duration_ms=12.5,
                 is_error=False,
+                status="error",
+                error_code="rate_limited",
             ),
             ToolCallUsage(
                 inference_id=f"{run_id}-inf-1",

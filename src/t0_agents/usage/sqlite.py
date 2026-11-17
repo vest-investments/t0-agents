@@ -63,8 +63,12 @@ CREATE TABLE IF NOT EXISTS usage_tool_calls (
     server TEXT,
     duration_ms REAL,
     is_error INTEGER NOT NULL,
+    status TEXT,
+    error_code TEXT,
     PRIMARY KEY (run_id, ordinal)
 )"""
+
+_TOOL_CALL_COLUMNS_SINCE_CREATE = ("status", "error_code")
 
 _CREATE_TOOL_CALLS_INDEX = """\
 CREATE INDEX IF NOT EXISTS idx_usage_tool_calls_inference
@@ -87,8 +91,9 @@ INSERT OR IGNORE INTO usage_inferences (
 
 _INSERT_TOOL_CALL = """\
 INSERT OR IGNORE INTO usage_tool_calls (
-    run_id, ordinal, inference_id, tool_call_id, name, server, duration_ms, is_error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
+    run_id, ordinal, inference_id, tool_call_id, name, server, duration_ms, is_error,
+    status, error_code
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 
 class SqliteUsageLedger:
@@ -97,8 +102,9 @@ class SqliteUsageLedger:
     Each :meth:`record` opens its own connection and commits the three tables
     in one transaction.  ``usage_tool_calls`` is keyed by ``(run_id, ordinal)``
     rather than by ``inference_id``, which SQLite would not deduplicate when
-    ``NULL``; a file created before the table existed gains it on the next
-    :meth:`record`.  Inserts are ``INSERT OR IGNORE`` on the primary keys,
+    ``NULL``; a file created before the table, or before its ``status`` and
+    ``error_code`` columns, gains them on the next :meth:`record`, once even
+    under concurrent first records.  Inserts are ``INSERT OR IGNORE`` on the primary keys,
     which is how the protocol's idempotency on ``run_id`` is met.  There is
     no read side — query the file with any SQLite client.  ``db_path`` must
     name a file: ``":memory:"`` and ``""`` are connection-scoped databases
@@ -118,11 +124,17 @@ class SqliteUsageLedger:
     async def _ensure_tables(self, db: aiosqlite.Connection) -> None:
         if self._tables_ready:
             return
+        await db.execute("BEGIN IMMEDIATE")
         await db.execute(_CREATE_RUNS)
         await db.execute(_CREATE_INFERENCES)
         await db.execute(_CREATE_INDEX)
         await db.execute(_CREATE_TOOL_CALLS)
         await db.execute(_CREATE_TOOL_CALLS_INDEX)
+        cursor = await db.execute("PRAGMA table_info(usage_tool_calls)")
+        present = {row[1] for row in await cursor.fetchall()}
+        for column in _TOOL_CALL_COLUMNS_SINCE_CREATE:
+            if column not in present:
+                await db.execute(f"ALTER TABLE usage_tool_calls ADD COLUMN {column} TEXT")
         await db.commit()
         self._tables_ready = True
 
@@ -182,6 +194,8 @@ class SqliteUsageLedger:
                         call.server,
                         call.duration_ms,
                         int(call.is_error),
+                        call.status,
+                        call.error_code,
                     )
                     for ordinal, call in enumerate(run.tool_calls)
                 ],
