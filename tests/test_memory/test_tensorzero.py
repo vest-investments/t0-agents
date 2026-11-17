@@ -942,6 +942,47 @@ def _texts(transcript: list[Any]) -> list[str]:
     return [b.text for m in transcript for b in m["content"] if isinstance(b, Text)]
 
 
+def _weather_episode(ep: str) -> tuple[StoredInferenceChat, ...]:
+    """A tool round, the answer it fed, then a second turn — three rounds."""
+    ask = _user_text_msg("what's the weather?")
+    planning = _round(
+        ep,
+        1,
+        input_messages=[ask],
+        output=[
+            ContentBlockChatOutputText(text="Let me check."),
+            _stored_call("c1", "lookup", {"city": "Tokyo"}),
+        ],
+    )
+    carried = [
+        ask,
+        _assistant_msg(
+            StoredInputMessageContentText(text="Let me check."),
+            StoredInputMessageContentToolCall(
+                id="c1", name="lookup", arguments='{"city": "Tokyo"}'
+            ),
+        ),
+        _tool_result_msg("c1", "lookup", "Sunny"),
+    ]
+    answer = _round(
+        ep,
+        2,
+        input_messages=carried,
+        output=[ContentBlockChatOutputText(text="Sunny in Tokyo.")],
+    )
+    thanks = _round(
+        ep,
+        3,
+        input_messages=[
+            *carried,
+            _assistant_text_msg("Sunny in Tokyo."),
+            _user_text_msg("thanks"),
+        ],
+        output=[ContentBlockChatOutputText(text="Any time.")],
+    )
+    return planning, answer, thanks
+
+
 class TestLoadTranscript:
     async def test_a_terminal_ended_episode_keeps_its_render_call_for_a_reader(
         self,
@@ -1029,42 +1070,7 @@ class TestLoadTranscript:
         derive it again.
         """
         ep = str(uuid4())
-        ask = _user_text_msg("what's the weather?")
-        planning = _round(
-            ep,
-            1,
-            input_messages=[ask],
-            output=[
-                ContentBlockChatOutputText(text="Let me check."),
-                _stored_call("c1", "lookup", {"city": "Tokyo"}),
-            ],
-        )
-        carried = [
-            ask,
-            _assistant_msg(
-                StoredInputMessageContentText(text="Let me check."),
-                StoredInputMessageContentToolCall(
-                    id="c1", name="lookup", arguments='{"city": "Tokyo"}'
-                ),
-            ),
-            _tool_result_msg("c1", "lookup", "Sunny"),
-        ]
-        answer = _round(
-            ep,
-            2,
-            input_messages=carried,
-            output=[ContentBlockChatOutputText(text="Sunny in Tokyo.")],
-        )
-        thanks = _round(
-            ep,
-            3,
-            input_messages=[
-                *carried,
-                _assistant_text_msg("Sunny in Tokyo."),
-                _user_text_msg("thanks"),
-            ],
-            output=[ContentBlockChatOutputText(text="Any time.")],
-        )
+        planning, answer, thanks = _weather_episode(ep)
 
         transcript = await _make_memory(_t0_with([thanks, answer, planning])).load_transcript(ep)
 
@@ -1087,6 +1093,38 @@ class TestLoadTranscript:
             "thanks",
             "Any time.",
         ]
+
+    async def test_each_reply_names_the_inference_whose_output_it_is(self) -> None:
+        """Rounds arrive newest first; every ``assistant`` message still
+        names its own round, and the ``user`` messages — a round's input,
+        not its product — name none.
+        """
+        ep = str(uuid4())
+        rounds = _weather_episode(ep)
+
+        transcript = await _make_memory(_t0_with(list(reversed(rounds)))).load_transcript(ep)
+
+        assert transcript is not None
+        assert [(m["role"], m.get("inference_id")) for m in transcript] == [
+            ("user", None),
+            ("assistant", str(rounds[0].inference_id)),
+            ("user", None),
+            ("assistant", str(rounds[1].inference_id)),
+            ("user", None),
+            ("assistant", str(rounds[2].inference_id)),
+        ]
+
+    async def test_the_model_history_carries_no_inference_id(self) -> None:
+        """``load_history`` is replayed to the gateway as ``input.messages``:
+        its messages stay exactly ``role`` and ``content``.
+        """
+        ep = str(uuid4())
+        rounds = _weather_episode(ep)
+
+        history = await _make_memory(_t0_with([rounds[2]])).load_history(ep)
+
+        assert history is not None
+        assert [sorted(m) for m in history] == [["content", "role"]] * len(history)
 
     async def test_a_parallel_batch_of_results_stays_one_message(self) -> None:
         """Two calls answered in one round come back as the one ``user``
