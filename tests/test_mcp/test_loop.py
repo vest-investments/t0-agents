@@ -1333,6 +1333,45 @@ class TestOnToolRound:
         ]
         assert all(c.duration_ms is not None for r in rounds for c in r)
 
+    async def test_an_envelope_error_is_reported_with_is_error_false(self) -> None:
+        t0 = FakeT0([
+            FakeChatResponse(
+                content=[
+                    _tool_call(call_id="a"),
+                    _tool_call(
+                        name="greet", raw_name="greet", call_id="b", arguments={"name": "x"}
+                    ),
+                ]
+            ),
+            FakeChatResponse(content=[Text(text="done")]),
+        ])
+        client = FakeMCPClient(
+            tools=[_mcp_tool("add"), _mcp_tool("greet")],
+            call_results={
+                "add": _make_result(
+                    structured_content={"status": "error", "error_code": "rate_limited"}
+                ),
+                "greet": _make_result(data="hi"),
+            },
+        )
+        rounds: list[tuple[ToolCallUsage, ...]] = []
+
+        async def on_tool_round(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+            rounds.append(tool_calls)
+
+        await run_agent(
+            cast(AsyncTensorZeroGateway, t0),
+            cast(Client[Any], client),
+            "do both",
+            "agent",
+            on_tool_round=on_tool_round,
+        )
+
+        assert [(c.name, c.status, c.error_code, c.is_error) for r in rounds for c in r] == [
+            ("add", "error", "rate_limited", False),
+            ("greet", None, None, False),
+        ]
+
     async def test_without_the_hook_the_transcript_is_unchanged(self) -> None:
         def _t0() -> FakeT0:
             return FakeT0([
