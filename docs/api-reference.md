@@ -786,6 +786,8 @@ call; never carries arguments or results.
 | `server` | `str \| None` | The mounted server the provider attributed via `server_for`; `None` when it could not. |
 | `duration_ms` | `float \| None` | Wall-clock of `call_tool`; `None` on the pre-dispatch error branches (hallucinated name, unparseable arguments). |
 | `is_error` | `bool` | The dispatch error branch or `CallToolResult.is_error`. |
+| `status` | `str \| None` | The string at the top-level `"status"` key of the result's structured content, e.g. an envelope's `"error"` while `is_error` is `False`; `None` when the result has no structured content, no such key, or a non-string value. *(v2.15)* |
+| `error_code` | `str \| None` | The same, read from the top-level `"error_code"` key. *(v2.15)* |
 
 See [Token usage → Persisting usage](usage.md#persisting-usage--usageledger).
 
