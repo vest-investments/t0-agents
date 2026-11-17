@@ -472,7 +472,13 @@ class ToolCallUsage:
     ``server`` is the mounted server the provider attributed, ``None``
     when it could not.  ``duration_ms`` is ``None`` on the pre-dispatch
     error branches (hallucinated name, invalid arguments) that never
-    reach the tool.  Arguments and results are deliberately absent.
+    reach the tool.  ``status`` and ``error_code`` are the top-level
+    string values of those keys in the result's structured content, so a
+    tool that reports its own failure in an envelope
+    (``{"status": "error", "error_code": ...}``) is countable while
+    ``is_error`` stays ``False``; each is ``None`` when the result carried
+    no structured content, no such key, or a non-string value.  Arguments
+    and results are deliberately absent.
     """
 
     inference_id: str | None
@@ -481,6 +487,8 @@ class ToolCallUsage:
     server: str | None
     duration_ms: float | None
     is_error: bool
+    status: str | None = None
+    error_code: str | None = None
 
 
 #: Key under which a delegated sub-agent's billing usage rides home on the
