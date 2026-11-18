@@ -461,12 +461,17 @@ async def _fallback(frames: Iterable[WireFrame]) -> list[WireFrame]:
 
 
 async def _fallback_policy(
-    frames: Iterable[WireFrame], *, thought_fallback: Literal["emit", "suppress"]
+    frames: Iterable[WireFrame],
+    *,
+    thought_fallback: Literal["emit", "suppress"],
+    retry_text: str = EMPTY_TURN_RETRY_TEXT,
 ) -> list[WireFrame]:
     return [
         f
         async for f in with_text_fallback(
-            _stream_frames(frames), thought_fallback=thought_fallback
+            _stream_frames(frames),
+            thought_fallback=thought_fallback,
+            retry_text=retry_text,
         )
     ]
 
@@ -704,6 +709,26 @@ class TestWithTextFallback:
         assert out[:2] == [
             TextDeltaFrame(block_id="inf-9", delta=EMPTY_TURN_RETRY_TEXT),
             TextEndFrame(block_id="inf-9"),
+        ]
+
+    @pytest.mark.parametrize(
+        "done",
+        [
+            _done(text="  ", ids=("inf-9",)),
+            _done(text="private reasoning", ids=("inf-9",), source="thought"),
+        ],
+        ids=["blank_run", "suppressed_thought"],
+    )
+    async def test_a_consumer_retry_text_replaces_the_default(
+        self, done: DoneFrame
+    ) -> None:
+        out = await _fallback_policy(
+            [done], thought_fallback="suppress", retry_text="Tente de novo."
+        )
+        assert out == [
+            TextDeltaFrame(block_id="inf-9", delta="Tente de novo."),
+            TextEndFrame(block_id="inf-9"),
+            done,
         ]
 
     async def test_suppress_never_touches_text_that_already_streamed(self) -> None:
