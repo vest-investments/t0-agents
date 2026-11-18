@@ -14,9 +14,10 @@ already a required dependency.  Three reads are supported:
   used by the recommended ``memory_strategy="messages"`` so the
   conversation is threaded through ``input.messages`` without ever
   being stringified into a summary.
-- :meth:`TensorZeroMemory.load_transcript` — TZ-native ``list[Message]``
-  for a reader rather than the model: every round's ``output`` with its
-  tool calls, one assistant message per round.
+- :meth:`TensorZeroMemory.load_transcript` — :class:`TranscriptMessage`
+  list for a reader rather than the model: every round's ``output`` with
+  its tool calls, one assistant message per round, each naming the
+  inference that produced it.
 
 ``save`` is a no-op: TZ wrote the inference at the moment the call
 was made, so persisting again would only duplicate the row.
@@ -37,7 +38,7 @@ import datetime as dt
 import json
 import logging
 from collections.abc import Iterable, Mapping
-from typing import Any, cast
+from typing import Any, NotRequired, cast
 
 from tensorzero import (
     AsyncTensorZeroGateway,
@@ -67,6 +68,17 @@ from t0_agents.core.conversation import ConversationSummary
 from t0_agents.memory.base import MemoryRecord
 
 logger = logging.getLogger(__name__)
+
+
+class TranscriptMessage(Message):
+    """A :class:`~tensorzero.Message` from :meth:`TensorZeroMemory.load_transcript`.
+
+    ``inference_id`` is set on every ``assistant`` message — the inference
+    whose ``output`` it is — and never on a ``user`` message.
+    """
+
+    inference_id: NotRequired[str]
+
 
 #: Display caps for :meth:`TensorZeroMemory.list_conversations` summaries.
 _TITLE_MAX_CHARS = 60
@@ -355,7 +367,7 @@ class TensorZeroMemory:
         episode_id: str,
         *,
         window: int = DEFAULT_LIST_WINDOW,
-    ) -> list[Message] | None:
+    ) -> list[TranscriptMessage] | None:
         """Return the episode as a reader saw it: one assistant message per round.
 
         :meth:`load_history` rebuilds what the *model* may be shown again;
@@ -370,6 +382,8 @@ class TensorZeroMemory:
         results and reply in order.  A consumer that shows only text skips
         the results as it skips any non-text block; one that rendered
         something from a result — a citation row — reads it back here.
+        Each assistant message names its round in ``inference_id``, so a
+        consumer can join what it recorded about that inference.
 
         Every ``ToolCall`` the assistant issued is kept, answered or not.
         A turn ended by its own tools (``terminal_tools``) leaves a call
@@ -405,17 +419,25 @@ class TensorZeroMemory:
         if not rounds:
             return None
 
-        transcript: list[Message] = []
+        transcript: list[TranscriptMessage] = []
         skipped_kinds: set[str] = set()
         for inf in rounds:
             tail = _round_input_tail(inf.input)
             if tail is not None:
                 converted = _to_native_message(tail, skipped_kinds)
                 if converted is not None:
-                    transcript.append(converted)
+                    transcript.append(
+                        TranscriptMessage(role=converted["role"], content=converted["content"])
+                    )
             reply = _output_to_content_blocks(inf.output)
             if reply:
-                transcript.append(Message(role="assistant", content=reply))
+                transcript.append(
+                    TranscriptMessage(
+                        role="assistant",
+                        content=reply,
+                        inference_id=str(inf.inference_id),
+                    )
+                )
         _warn_skipped_kinds("load_transcript", skipped_kinds)
         return transcript
 

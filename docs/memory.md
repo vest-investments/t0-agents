@@ -486,7 +486,7 @@ class TensorZeroMemory:
     ) -> list[Message] | None: ...
     async def load_transcript(
         self, episode_id: str, *, window: int = DEFAULT_LIST_WINDOW,
-    ) -> list[Message] | None: ...
+    ) -> list[TranscriptMessage] | None: ...
 ```
 
 | Parameter | Behaviour |
@@ -516,7 +516,8 @@ OpenAI-compatible provider rejects an assistant tool call followed
 directly by a user message.
 
 `load_transcript` reads the same episode for a reader instead of the
-model — every round's `output`, tool calls kept — see
+model — every round's `output`, tool calls kept, each naming its
+inference — see
 [Two readers](#two-readers-load_history-and-load_transcript).
 
 `save` is a no-op: TZ wrote the row at inference time. `search`
@@ -807,7 +808,7 @@ the private `_build_filters` method if you want full control).
 |---|---|
 | `load(episode_id)` | Issues `list_inferences(limit=load_limit, order_by=DESC)` and returns one `MemoryRecord` per chat inference that emitted text. JSON-output and tool-call-only inferences are skipped. Reversed to oldest-first to match `InMemoryMemory` / `SqliteMemory`. `MemoryRecord.turns` is always `1` and `MemoryRecord.inference_ids` is a single-element list — this backend exposes one record per inference, not per agent run. |
 | `load_history(episode_id)` | Used by `memory_strategy="messages"`. Issues `list_inferences(limit=1)` and reuses the most recent inference's `input.messages` as the cumulative history (TZ accumulates within an episode), then appends the assistant turn from `output`. Returns `None` for empty episodes — a fresh session, not an error. A gateway failure propagates and ends the turn (`MemoryHistoryUnavailableError`). |
-| `load_transcript(episode_id, *, window=200)` | Not used by any memory strategy — a reader's view of the episode. Issues `list_inferences(limit=window)` and emits, per chat round oldest-first, the user message the round's input ends on — the text that opened the turn, or the previous round's tool results as the gateway stored them — and the round's `output` as an assistant message with its tool calls kept. Returns `None` for empty episodes. A gateway failure propagates. |
+| `load_transcript(episode_id, *, window=200)` | Not used by any memory strategy — a reader's view of the episode. Issues `list_inferences(limit=window)` and emits, per chat round oldest-first, the user message the round's input ends on — the text that opened the turn, or the previous round's tool results as the gateway stored them — and the round's `output` as an assistant message with its tool calls kept and that round's `inference_id`. Returns `None` for empty episodes. A gateway failure propagates. |
 | `save(record)` | No-op. The gateway already persisted the row at inference time; calling `save` again would duplicate the observability entry. |
 | `search(query, *, limit=5)` | Returns `[]` by default. Pass `experimental_search=True` to the constructor to opt in; the query is forwarded to TZ's `search_query_experimental` field. The gateway flags that endpoint as experimental and warns it may cause full-table scans, so it is not appropriate for low-latency request paths. |
 
@@ -825,6 +826,7 @@ than one method with a switch:
 | Tool results | replayed | emitted as the `user` message the gateway stored them in, before the reply they produced — what a UI derived a row from |
 | `Thought` blocks | dropped | dropped |
 | Shape | the exact message list the model last saw | the user text that opened each turn, then each round's results and its `assistant` message |
+| Inference id | none — the messages are replayed as `input.messages` | on every `assistant` message (`TranscriptMessage.inference_id`), never on a `user` one |
 | Cost | one row | `window` rows, each carrying its cumulative `input` |
 
 The case that needs both: an agent with `terminal_tools` ends a turn on
