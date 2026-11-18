@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.15.0] — 2026-11-18
+
+### Added
+
+- **`ToolCallUsage.status` and `.error_code`.**  A tool that reports
+  its own failure in a result envelope (`{"status": "error",
+  "error_code": ...}`) returns normally, so `is_error` stays `False`.
+  The two fields carry the top-level strings of those keys in the
+  result's structured content, and are `None` when there is none.  They
+  are appended with defaults, so positional constructors still work
+  ([Usage](docs/usage.md)).
+- **`SqliteUsageLedger` stores `status` and `error_code`.**  A ledger
+  file from an earlier version gains the two columns on its next
+  `record`.
+- **`load_transcript` names each reply's inference.**  It returns
+  `list[TranscriptMessage]`: every `assistant` message carries the
+  `inference_id` of the round that produced it, so a consumer can join
+  what it recorded per inference to a reloaded conversation.
+  `load_history` is unchanged.  `list` is invariant, so a caller that
+  passes the result to a `list[Message]` parameter needs
+  `Sequence[Message]` there ([Memory](docs/memory.md)).
+- **`with_text_fallback(..., retry_text=...)`.**  A consumer states the
+  text the never-blank belt synthesises, on both the empty-run and the
+  suppressed-thought paths.  The default stays `EMPTY_TURN_RETRY_TEXT`
+  ([Wire contract](docs/wire.md)).
+
 ## [2.14.2] — 2026-11-05
 
 ### Fixed
