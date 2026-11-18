@@ -87,9 +87,9 @@ plus the ``type`` discriminator and any future ones."""
 _TRUNC_INDICATOR: Final[str] = "…"
 
 EMPTY_TURN_RETRY_TEXT: Final[str] = "I couldn't complete that — please try again."
-"""Belt text :func:`with_text_fallback` synthesises when a run produced
-neither streamed text nor a final response — the wire never ends a
-successful run blank. Part of the frozen public contract."""
+"""Default belt text :func:`with_text_fallback` synthesises when a run
+produced neither streamed text nor a final response — the wire never
+ends a successful run blank. Part of the frozen public contract."""
 
 FALLBACK_BLOCK_ID: Final[str] = "thought-fallback"
 """Block id for synthesised fallback text (and the public ``done``
@@ -328,6 +328,7 @@ async def with_text_fallback(
     frames: AsyncIterator[WireFrame],
     *,
     thought_fallback: Literal["emit", "suppress"] = "emit",
+    retry_text: str = EMPTY_TURN_RETRY_TEXT,
 ) -> AsyncIterator[WireFrame]:
     """Guarantee every successful run ends with visible text.
 
@@ -339,10 +340,11 @@ async def with_text_fallback(
     :class:`TextDeltaFrame` streamed this run, a
     ``TextDeltaFrame`` + :class:`TextEndFrame` pair is synthesised
     before it — from :attr:`DoneFrame.response_text` when non-blank
-    (reasoning fallback), else from :data:`EMPTY_TURN_RETRY_TEXT`
-    (never-blank belt). The synthesised block id is the last inference
-    id, or :data:`FALLBACK_BLOCK_ID` when there is none — matching the
-    public ``done`` payload id.
+    (reasoning fallback), else from ``retry_text`` (never-blank belt,
+    :data:`EMPTY_TURN_RETRY_TEXT` unless the consumer states its own).
+    The synthesised block id is the last inference id, or
+    :data:`FALLBACK_BLOCK_ID` when there is none — matching the public
+    ``done`` payload id.
 
     ``thought_fallback`` decides what a *thought-sourced* answer is
     worth on the public wire, because two provider classes arrive here
@@ -352,12 +354,12 @@ async def with_text_fallback(
     for backwards compatibility and because those providers are the
     common case. Providers that stream unsummarised chain-of-thought
     (DeepSeek's reasoning models) put private reasoning in the same
-    slot, and ``"suppress"`` substitutes :data:`EMPTY_TURN_RETRY_TEXT`
-    so it never becomes assistant text. The stage does not sniff the
-    provider — the consumer knows its variant and states the policy.
-    Neither policy touches the :class:`DoneFrame` itself, so a consumer
-    reading ``response_source`` can still recognise a thought-only turn
-    and re-drive it.
+    slot, and ``"suppress"`` substitutes ``retry_text`` so it never
+    becomes assistant text. The stage does not sniff the provider —
+    the consumer knows its variant and states the policy. Neither
+    policy touches the :class:`DoneFrame` itself, so a consumer reading
+    ``response_source`` can still recognise a thought-only turn and
+    re-drive it.
 
     ``saw_text`` re-arms at every run boundary so each run on a
     long-lived stream gets its own fallback decision: after a
@@ -388,7 +390,7 @@ async def with_text_fallback(
                 if not saw_text:
                     msg_id = ids[-1] if ids else FALLBACK_BLOCK_ID
                     suppressed = source == "thought" and thought_fallback == "suppress"
-                    body = text if text.strip() and not suppressed else EMPTY_TURN_RETRY_TEXT
+                    body = text if text.strip() and not suppressed else retry_text
                     yield TextDeltaFrame(block_id=msg_id, delta=body)
                     yield TextEndFrame(block_id=msg_id)
                 saw_text = False

@@ -128,11 +128,12 @@ async for name, data in public_allowlist(frames):
   once per contiguous reasoning block, suppressed after any tool call;
   the terminal `DoneFrame`/`ErrorFrame` re-arms, a recoverable error
   frame only ends the current thought block.
-- **`with_text_fallback(frames, *, thought_fallback="emit")`** — the
-  reasoning fallback + never-blank belt: when a `DoneFrame` arrives and
-  no non-blank `TextDeltaFrame` streamed this run, synthesises a
-  `TextDeltaFrame` + `TextEndFrame` pair before it — from
-  `response_text` when non-blank, else from `EMPTY_TURN_RETRY_TEXT`.
+- **`with_text_fallback(frames, *, thought_fallback="emit", retry_text=EMPTY_TURN_RETRY_TEXT)`**
+  — the reasoning fallback + never-blank belt: when a `DoneFrame`
+  arrives and no non-blank `TextDeltaFrame` streamed this run,
+  synthesises a `TextDeltaFrame` + `TextEndFrame` pair before it — from
+  `response_text` when non-blank, else from `retry_text`, the
+  consumer's own copy of the retry message.
   Block id: last inference id, else `FALLBACK_BLOCK_ID`. The tracked
   state re-arms at run boundaries (`DoneFrame`, *terminal*
   `ErrorFrame` — recognised by `detail["exc_class"]` — and
