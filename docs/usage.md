@@ -307,7 +307,7 @@ Each `RunUsageRecord` carries:
 | `run_id` | A UUIDv7 the library mints per run — the idempotency key your store deduplicates on. |
 | `episode_id`, `function_name`, `tags` | The episode the run belonged to, the configured function (`None` for `model=`-routed agents), and the tags the gateway received — the merged map, including the library's `t0_agents.agent` auto-tag. |
 | `inferences` | One `InferenceUsage` per inference, in order: the gateway's `inference_id` and `episode_id`, `variant_name`, the lossless per-inference `Usage`, the names of the tool calls it emitted, its `finish_reason`, and an aware-UTC timestamp. |
-| `tool_calls` | One `ToolCallUsage` per dispatched tool call, flat and in dispatch order: the model's `tool_call_id`, the `name` as the model wrote it, the `server` the provider attributed, `duration_ms`, `is_error`, and the `inference_id` that emitted it. |
+| `tool_calls` | One `ToolCallUsage` per dispatched tool call, flat and in dispatch order: the model's `tool_call_id`, the `name` as the model wrote it, the `server` the provider attributed, `duration_ms`, `is_error`, the `status` and `error_code` its structured result carried at top level, and the `inference_id` that emitted it. |
 | `usage` | The run's `RunUsage` — the same sum `run.usage()` reports, minus delegated sub-agents (see below). |
 | `turns`, `outcome`, `error_class` | The turn count and how the run ended: `"completed"`, `"failed"` (with the exception's class name) or `"cancelled"`. |
 | `started_at`, `finished_at` | Aware-UTC timestamps around the whole run. |
@@ -329,7 +329,11 @@ The contract, from the ledger's side:
   usage chunk adds no inference row; its run row simply carries none.
 - **Tool calls are identity and outcome, never payload.**  Arguments and
   results are not on the record — read them from ClickHouse or your own
-  tool logs.  `duration_ms` is `None` and `is_error` is `True` for a call
+  tool logs.  A tool that reports its own failure in a result envelope
+  (`{"status": "error", "error_code": ...}`) returns normally, so
+  `is_error` stays `False`; count those by `status` and `error_code`,
+  which are `None` for a result without structured content.
+  `duration_ms` is `None` and `is_error` is `True` for a call
   that never reached the tool (a hallucinated name, unparseable
   arguments); the hallucinated name also has no `server`, since the
   probe needs a name the provider knows.  A `T0AgentsFatalError` raised
@@ -350,7 +354,8 @@ any chain, records its single inference the same way.
 Two reference backends ship under `t0_agents.usage`: `InMemoryUsageLedger`
 (records as a tuple behind `.runs`) and `SqliteUsageLedger(db_path)`
 (tables `usage_runs` / `usage_inferences` / `usage_tool_calls`, behind the
-`memory-sqlite` extra).  For history that predates a ledger, or to reconcile one, query
+`memory-sqlite` extra; a file from an earlier version gains the newer
+tables and columns on its next `record`).  For history that predates a ledger, or to reconcile one, query
 ClickHouse directly — the [history recipe](#historical-billing-clickhouse)
 below — which is eventual-consistent, not a live signal.
 

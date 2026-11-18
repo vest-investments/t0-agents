@@ -304,13 +304,20 @@ class ToolRoundOutcome(Protocol):
     ``mcp.loop._ToolOutcome`` satisfies it structurally; the engine never
     imports ``mcp/``.  ``result`` is the T0 ``ToolResult`` fed back to the
     model; the rest is the per-call observability that becomes a
-    :class:`~t0_agents.core.types.ToolCallUsage`.
+    :class:`~t0_agents.core.types.ToolCallUsage`, ``structured`` being the
+    raw structured content its ``status`` and ``error_code`` are read from.
     """
 
     result: ToolResult
+    structured: dict[str, Any] | None
     duration_ms: float | None
     is_error: bool
     server: str | None
+
+
+def _structured_str(structured: dict[str, Any] | None, key: str) -> str | None:
+    value = None if structured is None else structured.get(key)
+    return value if isinstance(value, str) else None
 
 
 async def complete_tool_round(
@@ -344,6 +351,8 @@ async def complete_tool_round(
                 server=outcome.server,
                 duration_ms=outcome.duration_ms,
                 is_error=outcome.is_error,
+                status=_structured_str(outcome.structured, "status"),
+                error_code=_structured_str(outcome.structured, "error_code"),
             )
             for outcome in outcomes
         )

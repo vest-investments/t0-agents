@@ -1163,6 +1163,59 @@ async def test_default_leaves_the_render_round_running() -> None:
     assert done.result.turns == 2
 
 
+async def test_streaming_loop_reports_an_envelope_error_with_is_error_false() -> None:
+    fake_t0 = FakeT0(
+        responses=[
+            [
+                chat_chunk(
+                    [
+                        tool_call_chunk(
+                            raw_name="add", raw_arguments='{"a":1,"b":2}', block_id="a"
+                        ),
+                        tool_call_chunk(
+                            raw_name="greet", raw_arguments='{"name":"x"}', block_id="b"
+                        ),
+                    ]
+                ),
+                final_chunk(),
+            ],
+            [chat_chunk([text_chunk("done", block_id="t1")]), final_chunk()],
+        ],
+    )
+    schema = {"type": "object", "properties": {}}
+    fake_client = FakeMCPClient(
+        tools=[
+            MCPTool(name="add", description="add", inputSchema=schema),
+            MCPTool(name="greet", description="greet", inputSchema=schema),
+        ],
+        call_results={
+            "add": _tool_result(
+                "rate limited",
+                structured_content={"status": "error", "error_code": "rate_limited"},
+            ),
+            "greet": _tool_result("hi"),
+        },
+    )
+    rounds: list[tuple[ToolCallUsage, ...]] = []
+
+    async def on_tool_round(tool_calls: tuple[ToolCallUsage, ...]) -> None:
+        rounds.append(tool_calls)
+
+    async for _ in StreamingAgentLoop().stream(
+        cast(AsyncTensorZeroGateway, fake_t0),
+        cast(Any, fake_client),
+        "do both",
+        "agent",
+        on_tool_round=on_tool_round,
+    ):
+        pass
+
+    assert [(c.name, c.status, c.error_code, c.is_error) for r in rounds for c in r] == [
+        ("add", "error", "rate_limited", False),
+        ("greet", None, None, False),
+    ]
+
+
 async def test_streaming_loop_reports_each_round_under_its_inference() -> None:
     class _AttributingMCP(FakeMCPClient):
         def server_for(self, name: str) -> str | None:

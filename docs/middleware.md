@@ -260,8 +260,9 @@ Present iff `AgentConfig.usage_ledger` is set (`usage_ledger=` on
 with the run's totals, turn count and outcome (`completed` / `failed` /
 `cancelled`; the exception or cancellation still propagates).  Each
 dispatched tool round arrives through `ctx.chain_on_tool_round` as one
-`ToolCallUsage` per call — name, id, server, duration, error flag, and
-the inference that emitted it; never arguments or results.  Unlike
+`ToolCallUsage` per call — name, id, server, duration, error flag, the
+structured result's `status` and `error_code`, and the inference that
+emitted it; never arguments or results.  Unlike
 `MemoryMiddleware`, a run that produced no result is recorded too.
 
 The write is best-effort by contract: `asyncio.wait_for` with a 2-second
